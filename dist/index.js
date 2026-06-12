@@ -1002,11 +1002,6 @@ const _plugin = definePluginEntry({
     },
 });
 // Embed ClawHub plugin metadata directly on the export for static analyzers
-export const __openclaw = {
-    compat: { pluginApi: "0.1.0" },
-    build: { openclawVersion: ">=2026.5.17" },
-};
-
 export default Object.assign(_plugin, {
     __openclaw: {
         compat: { pluginApi: "0.1.0" },
