@@ -4,51 +4,53 @@
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
 
-**12 tools + 8 lifecycle hooks for AI project orchestration in OpenClaw.** Model routing, automated session logging, project context injection, architecture decision records, and background maintenance — all running inside OpenClaw with no separate process.
-
-Companion skill package provides a dashboard web UI (PM2 sidecar, port 8766), a structured coding workflow, and operational scripts.
+**12 tools + 8 lifecycle hooks for AI project orchestration in OpenClaw.** Model routing, automated session logging, project context injection, ADR tracking, and background maintenance — all inside OpenClaw with no separate process.
 
 ---
 
-## Quick Install
+## Installation for AI Agents
 
-> **If you're an AI agent:** Clone this repo, read `SETUP.md`, and execute every step. The file contains the complete install procedure.
->
-> **If you're a human:** Give your AI agent this URL and say: **"Install and set up Genor's Orchestrator."**
+> **Copy-paste to any AI agent:** *"Install Genor's Orchestrator from https://github.com/GenorTG/genor-orchestrator-plugin.git"*
 
-```bash
-# Full setup in one command (agent-friendly):
-git clone --recurse-submodules https://github.com/GenorTG/genor-orchestrator-plugin.git
-cd genor-orchestrator-plugin
-# Follow the steps in SETUP.md
+The agent should:
+1. `git clone --recurse-submodules` the repo
+2. Read `SETUP.md`
+3. Execute the 7-step procedure
+
+That's it. The plugin auto-creates data dirs, schedules nightly model sync, and runs maintenance on a timer. The PM2 dashboard starts separately.
+
+---
+
+## What you get
+
+**12 tools** — set_context, clear_context, get_status, get_config, get_models, check_models, auto_populate, log_session, log_decision, get_logs, sync_project, get_project_docs
+
+**8 hooks** — session_start/end, subagent_spawned/ended, before_model_resolve, before_prompt_build, agent_end, gateway_stop
+
+**Dashboard** — PM2 sidecar on port 8766: model CRUD, routing config, session viewer
+
+**Auto-maintenance** — nightly model sync, log rotation, recovery doc generation, session normalization
+
+**Data survives wipes** — all on filesystem at orchestrator-data/
+
+---
+
+## Quick reference
+
+```typescript
+orchestrator_set_context(project="my-project", task="fix-bug")   // start a session
+orchestrator_log_decision(project, title, context, decision)    // log an ADR
+orchestrator_get_status()                                       // overview
+orchestrator_check_models(project="my-project")                 // check routing
 ```
 
-> **Already on ClawHub?** `openclaw plugins install genor-orchestrator-plugin` — but you'll also need the companion skill repo for the dashboard and scripts.
+Dashboard: http://localhost:8766
 
 ---
 
-## What You Get
+## Companion
 
-| When you need to... | You use... |
-|---------------------|-----------|
-| Start a project session | `orchestrator_set_context(project="my-project", task="fix-bug")` |
-| Check routing before spawning | `orchestrator_check_models(project="my-project")` |
-| Record a design decision | `orchestrator_log_decision(project, title, context, decision)` |
-| Sync project files to orchestrator | `orchestrator_sync_project(project="my-project")` |
-| View everything at a glance | `http://localhost:8766` (dashboard) |
-| Edit model tiers or routing | Dashboard → Models / Config tabs |
-| Populate models from OpenClaw config | `orchestrator_auto_populate` |
-| Query orchestration history | `orchestrator_get_logs` |
-
-The hooks automate everything else: session auto-logging, model routing enforcement, project context injection, background data maintenance.
-
-**Data on filesystem survives OpenClaw session wipes.** Full manual at [SETUP.md](./SETUP.md).
-
----
-
-## One-Line Agent Instruction
-
-> **"Install and set up Genor's Orchestrator. The repo is at https://github.com/GenorTG/genor-orchestrator-plugin.git. Clone with --recurse-submodules, read SETUP.md, follow every step, and verify everything works."**
+[Genor's Orchestration Skill](https://github.com/GenorTG/genor-orchestrator-skill) — dashboard web UI, coding workflow docs, and operational scripts. Installed automatically when you `clawhub install ./skill/` during setup.
 
 ---
 
