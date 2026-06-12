@@ -1,0 +1,61 @@
+{
+    "id": "genor-orchestrator",
+    "name": "Genor's Orchestrator",
+    "description": "OpenClaw plugin for AI project orchestration: model routing, session logging, project context automation, and lifecycle hooks.",
+    "version": "0.2.0",
+    "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "orchestratorDataDir": {
+                "type": "string",
+                "description": "Override for orchestrator-data directory. Defaults to workspace-root/orchestrator-data/ or ORCHESTRATOR_DATA_DIR env."
+            },
+            "logLevel": {
+                "type": "string",
+                "enum": [
+                    "debug",
+                    "info",
+                    "warn",
+                    "error"
+                ],
+                "description": "Logging level. (default: info)"
+            },
+            "logRetentionDays": {
+                "type": "number",
+                "description": "Days to retain orchestration log entries. (default: 30)"
+            },
+            "maintenanceIntervalMs": {
+                "type": "number",
+                "description": "Background maintenance interval in ms. (default: 1800000 = 30min)"
+            }
+        }
+    },
+    "activation": {
+        "onStartup": true
+    },
+    "contracts": {
+        "tools": [
+            "orchestrator_set_context",
+            "orchestrator_clear_context",
+            "orchestrator_get_status",
+            "orchestrator_get_config",
+            "orchestrator_get_models",
+            "orchestrator_check_models",
+            "orchestrator_auto_populate",
+            "orchestrator_log_session",
+            "orchestrator_log_decision",
+            "orchestrator_get_logs",
+            "orchestrator_sync_project",
+            "orchestrator_get_project_docs"
+        ]
+    },
+    "openclaw": {
+        "compat": {
+            "pluginApi": "0.1.0"
+        },
+        "build": {
+            "openclawVersion": ">=2026.5.17"
+        }
+    }
+}
