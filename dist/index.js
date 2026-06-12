@@ -343,7 +343,12 @@ class MaintenanceService {
         this.logger = logger;
     }
     start(intervalMs = 30 * 60_000) {
-        setTimeout(() => this.tick(), 60_000);
+        if (this.timer) {
+            clearInterval(this.timer);
+            clearTimeout(this.timer._firstTick);
+        }
+        const firstTick = setTimeout(() => this.tick(), 60_000);
+        firstTick._firstTick = true;
         this.timer = setInterval(() => this.tick(), intervalMs);
         this.logger.info("maintenance", `Started (every ${Math.round(intervalMs / 60000)}min)`);
     }
@@ -1042,6 +1047,9 @@ const _plugin = definePluginEntry({
         // ═══════════════════════════════════════════════════════════
         //  BACKGROUND MAINTENANCE
         // ═══════════════════════════════════════════════════════════
+        // Stop old service first to prevent duplicate timers on plugin reload
+        if (maintenanceSvc)
+            maintenanceSvc.stop();
         maintenanceSvc = new MaintenanceService(dataDir, logger);
         const maintInterval = cfg.maintenanceIntervalMs || 30 * 60_000;
         maintenanceSvc.start(maintInterval);
