@@ -211,7 +211,7 @@ function getProjectLocation(project, dataDir) {
 }
 function buildProjectToc(location) {
     try {
-        const result = execSync(`find "${location}" -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -100`, { encoding: "utf-8", timeout: 5000 });
+        const result = execSync(`find "${location}" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -maxdepth 4 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -300`, { encoding: "utf-8", timeout: 5000 });
         return result.trim().split("\n").filter(Boolean);
     }
     catch {
@@ -228,6 +228,8 @@ function syncProjectToOrchestrator(project, dataDir, logger) {
     const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
     const toc = buildProjectToc(loc);
     const keyFiles = toc.filter(f => !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
+        f.endsWith("package-lock.json") || f.endsWith(".ts") || f.endsWith(".tsx") ||
+        f.endsWith(".py") || f.endsWith(".css") || f.endsWith(".html") ||
         f.includes("tsconfig") || f.includes("next.config") ||
         f.includes("tailwind") || f.endsWith(".env.example")));
     let context = `# ${project}\n\n## Location\n\`${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
@@ -237,7 +239,8 @@ function syncProjectToOrchestrator(project, dataDir, logger) {
             context += `\n## Package\n- Name: ${pkg.name || "N/A"}\n- Version: ${pkg.version || "N/A"}\n`;
     }
     catch { }
-    context += `\n## File Index (${toc.length} files)\n\n${keyFiles.map(f => `- ${path.relative(loc, f)}`).join("\n")}\n`;
+    const tocDisplay = toc.filter(f => !f.includes("node_modules") && !f.includes("/."));
+    context += `\n## File Index (${tocDisplay.length} files)\n\n${tocDisplay.map(f => `- ${path.relative(loc, f)}`).join("\n")}\n`;
     fs.writeFileSync(path.join(pd, "CONTEXT.md"), context, "utf-8");
     let tocMd = `# ${project} \u2014 File Index\n\n**Location:** \`${loc}\`\n\n### Key Files (${keyFiles.length})\n\n`;
     for (const f of keyFiles) {
@@ -609,13 +612,24 @@ function checkModels(dataDir, project, logger) {
     return { project: project || null, free_only_mode: cfg.free_only_mode || false, disabled_models: d, filters_applied: filters, total_available: all, eligible_count: eligible.length, eligible_models: eligible.map(m => ({ id: m.id, provider: m.provider, name: m.name, tier: m.tier, speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready, cost_type: m.cost?.type || "unknown" })) };
 }
 function autoPopulate(dataDir, logger) {
-    const sd = path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator");
-    const script = path.join(sd, "scripts", "auto-populate-models.py");
-    if (!fs.existsSync(script))
-        return { error: `Script not found: ${script}`, skill_dir: sd };
+    const dd = getDashboardDir();
+    const candidates = [
+        path.join(dd, "..", "scripts", "auto-populate-models.py"),
+        path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator", "scripts", "auto-populate-models.py"),
+        path.join(os.homedir(), ".openclaw/extensions/genor-orchestrator", "scripts", "auto-populate-models.py"),
+    ];
+    let script = "";
+    for (const c of candidates) {
+        if (fs.existsSync(c)) {
+            script = c;
+            break;
+        }
+    }
+    if (!script)
+        return { error: "Script not found. Checked: " + candidates.join(", "), skill_dir: dd };
     try {
         logger.debug("populate", "Running...");
-        const r = execSync(`python3 "${script}" 2>&1`, { cwd: sd, encoding: "utf-8", timeout: 120_000 });
+        const r = execSync(`python3 "${script}" 2>&1`, { cwd: path.dirname(script), encoding: "utf-8", timeout: 120_000 });
         const md = readJSON(path.join(dataDir, "models.json"));
         const t = md?.models?.length || 0;
         logger.info("populate", `Done: ${t} models`);
@@ -745,6 +759,7 @@ const _plugin = definePluginEntry({
             const cronCmd = `python3 "${path.join(getDashboardDir(), "..", "scripts", "auto-populate-models.py")}" 2>&1 >> "${path.join(dataDir, "logs", "auto-populate.log")}"`;
             const existing = execSync("crontab -l 2>/dev/null || true", { encoding: "utf-8", timeout: 5000 });
             if (!existing.includes("auto-populate-models.py")) {
+                execSync(`(crontab -l 2>/dev/null; echo "0 3 * * * ${cronCmd} # genor-orchestrator auto-populate") | crontab -`, { timeout: 5000 });
                 execSync(`(crontab -l 2>/dev/null; echo "0 3 * * * ${cronCmd}") | crontab -`, { timeout: 5000 });
                 logger.info("boot", "Scheduled nightly model population (3 AM)");
             }
