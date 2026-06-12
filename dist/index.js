@@ -347,6 +347,21 @@ class MaintenanceService {
     tick() {
         try {
             const projDirPath = path.join(this.dataDir, "projects");
+            // Enforce log rotation on every tick
+            this.logger.cleanup();
+            // Cleanup stale auto-populate logs (>90 days)
+            const popLog = path.join(this.dataDir, "logs", "auto-populate.log");
+            if (fs.existsSync(popLog)) {
+                try {
+                    const stat = fs.statSync(popLog);
+                    if (Date.now() - stat.mtimeMs > 90 * 24 * 60 * 60_000) {
+                        fs.truncateSync(popLog, 0);
+                        this.logger.debug("maintenance", "Rotated auto-populate.log");
+                    }
+                }
+                catch { /* */ }
+            }
+            // Process projects
             if (!fs.existsSync(projDirPath))
                 return;
             const projects = fs.readdirSync(projDirPath).filter(f => fs.statSync(path.join(projDirPath, f)).isDirectory());
@@ -362,8 +377,7 @@ class MaintenanceService {
                     this.logger.warn("maintenance", `Error processing ${p}: ${err.message}`);
                 }
             }
-            this.logger.cleanup();
-            this.logger.debug("maintenance", `Tick: ${projects.length} projects`);
+            this.logger.debug("maintenance", `Tick: ${projects.length} projects processed`);
         }
         catch (err) {
             this.logger.warn("maintenance", `Tick error: ${err.message}`);
@@ -718,6 +732,26 @@ const _plugin = definePluginEntry({
         const logLevel = cfg.logLevel || "info";
         const logRetention = cfg.logRetentionDays || 30;
         const logger = new OrchestratorLogger(dataDir, logLevel, logRetention);
+        // Auto-create required data directories on every startup
+        for (const sub of ["logs", "sessions", "adrs", "projects"]) {
+            const p = path.join(dataDir, sub);
+            if (!fs.existsSync(p)) {
+                fs.mkdirSync(p, { recursive: true });
+                logger.info("boot", `Created dir: ${sub}`);
+            }
+        }
+        // Auto-schedule nightly model population if not already scheduled
+        try {
+            const cronCmd = `python3 "${path.join(getDashboardDir(), "..", "scripts", "auto-populate-models.py")}" 2>&1 >> "${path.join(dataDir, "logs", "auto-populate.log")}"`;
+            const existing = execSync("crontab -l 2>/dev/null || true", { encoding: "utf-8", timeout: 5000 });
+            if (!existing.includes("auto-populate-models.py")) {
+                execSync(`(crontab -l 2>/dev/null; echo "0 3 * * * ${cronCmd}") | crontab -`, { timeout: 5000 });
+                logger.info("boot", "Scheduled nightly model population (3 AM)");
+            }
+        }
+        catch (_c) {
+            logger.debug("boot", "Cron scheduling skipped (no crontab access)");
+        }
         logger.info("plugin", "Plugin loaded", { dataDir, logLevel, logRetention });
         // ═══════════════════════════════════════════════════════════
         //  HOOKS — Plugin-driven automation
