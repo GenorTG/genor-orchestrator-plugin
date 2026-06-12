@@ -57,5 +57,15 @@
         "build": {
             "openclawVersion": ">=2026.5.17"
         }
-    }
+    },
+    "__openclaw_meta": {
+        "compat": {
+            "pluginApi": "0.1.0"
+        },
+        "build": {
+            "openclawVersion": ">=2026.5.17"
+        }
+    },
+    "pluginApi": "0.1.0",
+    "minOpenClawVersion": ">=2026.5.17"
 }

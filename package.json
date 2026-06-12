@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-plugin-genor-orchestrator",
+  "name": "genor-orchestrator-plugin",
   "version": "0.2.0",
   "type": "module",
   "private": true,
@@ -30,6 +30,12 @@
     "extensions": [
       "./dist/index.js"
     ],
-    "pluginApi": "0.1.0"
+    "pluginApi": "0.1.0",
+    "compat": {
+      "pluginApi": "0.1.0"
+    },
+    "build": {
+      "openclawVersion": ">=2026.5.17"
+    }
   }
 }

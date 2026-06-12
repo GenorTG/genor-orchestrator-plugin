@@ -1001,7 +1001,15 @@ const _plugin = definePluginEntry({
         logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active`);
     },
 });
-// Plugin metadata for ClawHub registry
-// @openclaw-plugin-api 0.1.0
-// @openclaw-min-version >=2026.5.17
-export default _plugin;
+// Embed ClawHub plugin metadata directly on the export for static analyzers
+export const __openclaw = {
+    compat: { pluginApi: "0.1.0" },
+    build: { openclawVersion: ">=2026.5.17" },
+};
+
+export default Object.assign(_plugin, {
+    __openclaw: {
+        compat: { pluginApi: "0.1.0" },
+        build: { openclawVersion: ">=2026.5.17" },
+    },
+});

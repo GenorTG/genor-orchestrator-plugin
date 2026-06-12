@@ -1,0 +1,3 @@
+[submodule "skill"]
+	path = skill
+	url = https://github.com/GenorTG/genor-orchestrator-skill.git
