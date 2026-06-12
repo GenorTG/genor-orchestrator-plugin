@@ -211,7 +211,7 @@ function getProjectLocation(project, dataDir) {
 }
 function buildProjectToc(location) {
     try {
-        const result = execSync(`find "${location}" -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -100`, { encoding: "utf-8", timeout: 5000 });
+        const result = execSync(`find "${location}" -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -100`, { encoding: "utf-8", timeout: 5000 });
         return result.trim().split("\n").filter(Boolean);
     }
     catch {
@@ -227,9 +227,9 @@ function syncProjectToOrchestrator(project, dataDir, logger) {
     }
     const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
     const toc = buildProjectToc(loc);
-    const keyFiles = toc.filter(f => f.endsWith(".md") || f.endsWith("package.json") ||
+    const keyFiles = toc.filter(f => !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
         f.includes("tsconfig") || f.includes("next.config") ||
-        f.includes("tailwind") || f.endsWith(".env.example"));
+        f.includes("tailwind") || f.endsWith(".env.example")));
     let context = `# ${project}\n\n## Location\n\`${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
     try {
         const pkg = readJSON(path.join(loc, "package.json"));
