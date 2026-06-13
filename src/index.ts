@@ -289,9 +289,10 @@ class SessionTracker {
 
 const LIVE_AGENTS_FILE = "live-agents.json";
 
-function writeLiveAgents(reason: string, tracker: SessionTracker): void {
+function writeLiveAgents(reason: string, tracker: SessionTracker, _logger?: OrchestratorLogger): void {
   try {
     const dataDir = getDataDir();
+    _logger?.debug("live-agents", `Writing ${reason} — project=${tracker.currentProject} action=${tracker.currentAction}`);
     const agents: any[] = [];
 
     // Main agent
@@ -342,7 +343,13 @@ function writeLiveAgents(reason: string, tracker: SessionTracker): void {
       };
       writeJSON(stateFile, state);
     }
-  } catch { /* writing agent state never crashes */ }
+  } catch (e: any) {
+    try {
+      if (typeof e?.message === 'string') {
+        fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} writeLiveAgents(${reason}): ${e.message}\n`, 'utf-8');
+      }
+    } catch {}
+  }
 }
 
 const sessionTracker = new SessionTracker();

@@ -236,9 +236,10 @@ class SessionTracker {
 //  LIVE AGENTS FILE — written on every state change, polled by dashboard SSE
 // ═══════════════════════════════════════════════════════════════
 const LIVE_AGENTS_FILE = "live-agents.json";
-function writeLiveAgents(reason, tracker) {
+function writeLiveAgents(reason, tracker, _logger) {
     try {
         const dataDir = getDataDir();
+        _logger?.debug("live-agents", `Writing ${reason} — project=${tracker.currentProject} action=${tracker.currentAction}`);
         const agents = [];
         // Main agent
         const main = tracker.toLiveState();
@@ -286,7 +287,14 @@ function writeLiveAgents(reason, tracker) {
             writeJSON(stateFile, state);
         }
     }
-    catch { /* writing agent state never crashes */ }
+    catch (e) {
+        try {
+            if (typeof e?.message === 'string') {
+                fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} writeLiveAgents(${reason}): ${e.message}\n`, 'utf-8');
+            }
+        }
+        catch { }
+    }
 }
 const sessionTracker = new SessionTracker();
 // ═══════════════════════════════════════════════════════════════
