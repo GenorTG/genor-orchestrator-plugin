@@ -1,4 +1,4 @@
-declare const _default: Record<string, any> & {
+declare const pluginExport: Record<string, any> & {
     __openclaw: {
         compat: {
             pluginApi: string;
@@ -8,4 +8,4 @@ declare const _default: Record<string, any> & {
         };
     };
 };
-export default _default;
+export default pluginExport;

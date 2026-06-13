@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -337,7 +338,7 @@ function syncProjectToOrchestrator(project, dataDir, logger) {
     const tocDisplay = toc.filter(f => !f.includes("node_modules") && !f.includes("/."));
     context += `\n## File Index (${tocDisplay.length} files)\n\n${tocDisplay.map(f => `- ${path.relative(loc, f)}`).join("\n")}\n`;
     fs.writeFileSync(path.join(pd, "CONTEXT.md"), context, "utf-8");
-    let tocMd = `# ${project} \u2014 File Index\n\n**Location:** \`${loc}\`\n\n### Key Files (${keyFiles.length})\n\n`;
+    let tocMd = `# ${project} — File Index\n\n**Location:** \`${loc}\`\n\n### Key Files (${keyFiles.length})\n\n`;
     for (const f of keyFiles) {
         tocMd += `- \`${path.relative(loc, f)}\`\n`;
     }
@@ -389,7 +390,7 @@ function generateRecoveryDoc(project, dataDir, logger) {
     }
     const openTasks = backlog.filter(t => t.status === "todo" || t.status === "in_progress");
     const sessions = readRecentSessions(project, dataDir, 10);
-    let md = `# \u26a1 Recovery Doc: ${project}\n\n*Generated: ${new Date().toISOString()}*\n\nThis is a self-contained project state. If resuming after session loss,\nread this to catch up on context, decisions, and open work.\n\n## 1. Location\n\n${loc || "Not configured"}\n\n## 2. Context (first KB)\n\n${context.slice(0, 1000)}\n\n## 3. Open Backlog\n\n`;
+    let md = `# ⚡ Recovery Doc: ${project}\n\n*Generated: ${new Date().toISOString()}*\n\nThis is a self-contained project state. If resuming after session loss,\nread this to catch up on context, decisions, and open work.\n\n## 1. Location\n\n${loc || "Not configured"}\n\n## 2. Context (first KB)\n\n${context.slice(0, 1000)}\n\n## 3. Open Backlog\n\n`;
     if (openTasks.length === 0) {
         md += `No open tasks.\n`;
     }
@@ -806,7 +807,7 @@ function setContext(dataDir, project, task, logger) {
         context_doc: ctx,
     };
 }
-function clearContext(_dataDir, logger) {
+function clearContextFn(dataDir, logger) {
     const prev = sessionTracker.currentProject;
     sessionTracker.clearContext();
     if (prev) {
@@ -824,7 +825,7 @@ function syncProject(dataDir, project, logger) {
     syncProjectToOrchestrator(project, dataDir, logger);
     return { ok: true, project, location: loc };
 }
-function getProjectDocs(dataDir, project, logger) {
+function getProjectDocsFn(dataDir, project, logger) {
     const pd = projDir(project, dataDir);
     const docs = [];
     if (fs.existsSync(pd)) {
@@ -1031,7 +1032,7 @@ const _plugin = definePluginEntry({
             description: "Clear active project context. Disables auto-routing and auto-logging.",
             parameters: Type.Object({}),
             async execute(_id, _params) {
-                return txt(clearContext(dataDir, logger));
+                return txt(clearContextFn(dataDir, logger));
             },
         });
         api.registerTool({
@@ -1159,7 +1160,7 @@ const _plugin = definePluginEntry({
                 project: Type.String({ description: "Project name." }),
             }),
             async execute(_id, params) {
-                return txt(getProjectDocs(dataDir, params.project, logger));
+                return txt(getProjectDocsFn(dataDir, params.project, logger));
             },
         });
         // ═══════════════════════════════════════════════════════════
@@ -1177,9 +1178,43 @@ const _plugin = definePluginEntry({
     },
 });
 // Embed ClawHub plugin metadata directly on the export for static analyzers
-export default Object.assign(_plugin, {
+const pluginExport = Object.assign(_plugin, {
     __openclaw: {
         compat: { pluginApi: "0.1.0" },
         build: { openclawVersion: ">=2026.5.17" },
     },
 });
+// Attach defineToolPlugin metadata symbol so the validator passes
+Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
+    value: {
+        id: "genor-orchestrator",
+        name: "Genor's Orchestrator",
+        description: "Model routing, session logging, project management, dashboard, hooks, and context injection.",
+        activation: { onStartup: true },
+        configSchema: {
+            type: "object",
+            properties: {
+                orchestratorDataDir: { type: "string", description: "Override data directory path" },
+                logLevel: { type: "string", description: "Log level: debug, info, warn, error. (default: info)" },
+                logRetentionDays: { type: "number", description: "Log retention in days. (default: 30)" },
+                maintenanceIntervalMs: { type: "number", description: "Background maintenance interval in ms. (default: 1800000 = 30min)" },
+            },
+        },
+        tools: [
+            "orchestrator_set_context",
+            "orchestrator_clear_context",
+            "orchestrator_get_status",
+            "orchestrator_get_config",
+            "orchestrator_get_models",
+            "orchestrator_check_models",
+            "orchestrator_auto_populate",
+            "orchestrator_log_session",
+            "orchestrator_log_decision",
+            "orchestrator_get_logs",
+            "orchestrator_sync_project",
+            "orchestrator_get_project_docs",
+        ],
+    },
+    enumerable: false,
+});
+export default pluginExport;
