@@ -165,11 +165,24 @@ class SessionTracker {
     sessionStartTimestamp = Date.now();
     sessionKey = null;
     subagentDepth = 0;
+    /** Last action the agent was observed doing — shown live in dashboard */
+    currentAction = null;
+    /** Files the agent has touched this session */
+    touchedFiles = [];
     trackModel(model) { this.currentModel = model; }
+    /** Record what the agent is doing right now — pushes to live-agents.json */
+    trackAction(action, file) {
+        this.currentAction = action;
+        if (file && !this.touchedFiles.includes(file)) {
+            this.touchedFiles.push(file);
+        }
+    }
     start(key, reason) {
         this.sessionKey = key;
         this.sessionStartTimestamp = Date.now();
         this.subagentDepth = 0;
+        this.currentAction = null;
+        this.touchedFiles = [];
         if (reason === "new" || reason === "reset") {
             this.currentProject = null;
             this.currentTask = null;
@@ -188,18 +201,92 @@ class SessionTracker {
             model: this.currentModel || "auto",
         };
     }
+    /** Build the live-agents.json state snapshot */
+    toLiveState() {
+        return {
+            agent: this.currentAgent,
+            project: this.currentProject,
+            task: this.currentTask,
+            model: this.currentModel,
+            subagent_depth: this.subagentDepth,
+            action: this.currentAction,
+            touched_files: this.touchedFiles.slice(-20), // keep last 20
+            timestamp: new Date().toISOString(),
+            session_key: this.sessionKey,
+            uptime_ms: Date.now() - this.sessionStartTimestamp,
+        };
+    }
     setContext(dataDir, project, task) {
         this.currentProject = project;
         this.currentTask = task;
+        this.currentAction = "Setting context";
         const loc = getProjectLocation(project, dataDir);
         const toc = loc ? buildProjectToc(loc) : [];
+        writeLiveAgents("context", this);
         return { project, task, location: loc || "not configured", toc_file_count: toc.length };
     }
     clearContext() {
         this.currentProject = null;
         this.currentTask = null;
         this.currentModel = null;
+        this.currentAction = null;
     }
+}
+// ═══════════════════════════════════════════════════════════════
+//  LIVE AGENTS FILE — written on every state change, polled by dashboard SSE
+// ═══════════════════════════════════════════════════════════════
+const LIVE_AGENTS_FILE = "live-agents.json";
+function writeLiveAgents(reason, tracker) {
+    try {
+        const dataDir = getDataDir();
+        const agents = [];
+        // Main agent
+        const main = tracker.toLiveState();
+        main.reason = reason;
+        if (main.project || main.agent) {
+            agents.push(main);
+        }
+        // Sub-agents are derived from depth — the dashboard also reads from
+        // per-project sessions.json for full tree visibility
+        for (let i = 0; i < tracker.subagentDepth; i++) {
+            agents.push({
+                agent: `${tracker.currentAgent}::sub-${i + 1}`,
+                project: tracker.currentProject,
+                task: tracker.currentTask,
+                model: tracker.currentModel,
+                subagent_depth: 0,
+                action: "working",
+                touched_files: [],
+                timestamp: new Date().toISOString(),
+                session_key: null,
+                uptime_ms: 0,
+                parent_depth: i + 1,
+            });
+        }
+        const filePath = path.join(dataDir, LIVE_AGENTS_FILE);
+        writeJSON(filePath, {
+            agents,
+            agent_count: agents.length,
+            active_count: agents.filter(a => a.project).length,
+            last_updated: new Date().toISOString(),
+            reason,
+        });
+        // Also update state.json for backward compat
+        const stateFile = path.join(dataDir, "state.json");
+        if (tracker.currentProject) {
+            const state = {
+                project: tracker.currentProject,
+                task: tracker.currentTask,
+                model: tracker.currentModel,
+                agent: tracker.currentAgent,
+                timestamp: new Date().toISOString(),
+                subagent_depth: tracker.subagentDepth,
+                action: tracker.currentAction,
+            };
+            writeJSON(stateFile, state);
+        }
+    }
+    catch { /* writing agent state never crashes */ }
 }
 const sessionTracker = new SessionTracker();
 // ═══════════════════════════════════════════════════════════════
@@ -714,14 +801,18 @@ function setContext(dataDir, project, task, logger) {
 function clearContext(_dataDir, logger) {
     const prev = sessionTracker.currentProject;
     sessionTracker.clearContext();
-    if (prev)
+    if (prev) {
         logger.info("context", `Context cleared: ${prev}`);
+        writeLiveAgents("clear_context", sessionTracker);
+    }
     return { ok: true, previous_project: prev };
 }
 function syncProject(dataDir, project, logger) {
     const loc = getProjectLocation(project, dataDir);
     if (!loc || !fs.existsSync(loc))
         return { error: `No valid location for ${project}`, project };
+    sessionTracker.trackAction(`syncing_project: ${project}`);
+    writeLiveAgents("sync_project", sessionTracker);
     syncProjectToOrchestrator(project, dataDir, logger);
     return { ok: true, project, location: loc };
 }
@@ -779,6 +870,7 @@ const _plugin = definePluginEntry({
         api.on("session_start", async (event) => {
             try {
                 sessionTracker.start(event.sessionKey || "unknown", event.reason || "new");
+                writeLiveAgents("session_start", sessionTracker);
                 logger.debug("hooks", `session_start: ${event.reason}`);
             }
             catch (err) {
@@ -787,6 +879,7 @@ const _plugin = definePluginEntry({
         });
         api.on("session_end", async (event) => {
             try {
+                writeLiveAgents("session_end", sessionTracker);
                 const info = sessionTracker.end();
                 if (info) {
                     logSession(dataDir, {
@@ -799,6 +892,9 @@ const _plugin = definePluginEntry({
                         notes: `Auto-logged via session_end (${event.reason || "unknown"})`,
                     }, logger);
                     generateRecoveryDoc(info.project, dataDir, logger);
+                    // Final write with action="session_complete" so dashboard shows status
+                    sessionTracker.currentAction = "session_complete";
+                    writeLiveAgents("session_complete", sessionTracker);
                     logger.info("hooks", `Session auto-logged: ${info.project}/${info.task} (${info.duration})`);
                 }
                 logger.debug("hooks", `session_end: ${event.reason}`);
@@ -813,17 +909,23 @@ const _plugin = definePluginEntry({
                 if (sessionTracker.currentProject) {
                     logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject}`);
                 }
+                writeLiveAgents("subagent_spawned", sessionTracker);
             }
             catch { /* */ }
         });
         api.on("subagent_ended", async (_event) => {
             try {
                 sessionTracker.subagentDepth = Math.max(0, sessionTracker.subagentDepth - 1);
+                if (sessionTracker.currentProject) {
+                    writeLiveAgents("subagent_ended", sessionTracker);
+                }
             }
             catch { /* */ }
         });
-        api.on("before_model_resolve", async (_event) => {
+        api.on("before_model_resolve", async (event) => {
             try {
+                sessionTracker.trackAction("resolving_model");
+                writeLiveAgents("before_model_resolve", sessionTracker);
                 if (!sessionTracker.currentProject)
                     return;
                 const md = readJSON(path.join(dataDir, "models.json"));
@@ -861,15 +963,17 @@ const _plugin = definePluginEntry({
                         return { modelOverride: best.id };
                     }
                 }
-                if (_event?.resolvedModel)
-                    sessionTracker.trackModel(_event.resolvedModel);
+                if (event?.resolvedModel)
+                    sessionTracker.trackModel(event.resolvedModel);
             }
             catch (err) {
                 logger.error("hooks", `before_model_resolve error: ${err.message}`);
             }
         });
-        api.on("before_prompt_build", async (_event) => {
+        api.on("before_prompt_build", async (event) => {
             try {
+                sessionTracker.trackAction("building_prompt");
+                writeLiveAgents("before_prompt_build", sessionTracker);
                 if (!sessionTracker.currentProject)
                     return;
                 const loc = getProjectLocation(sessionTracker.currentProject, dataDir);
@@ -883,8 +987,10 @@ const _plugin = definePluginEntry({
             }
             catch { /* */ }
         });
-        api.on("agent_end", async (_event) => {
+        api.on("agent_end", async (event) => {
             try {
+                sessionTracker.trackAction("agent_stopped");
+                writeLiveAgents("agent_end", sessionTracker);
                 logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
             }
             catch { /* */ }
@@ -989,6 +1095,8 @@ const _plugin = definePluginEntry({
                 checked: Type.Optional(Type.Boolean({ description: "Reviewed flag." })),
             }),
             async execute(_toolCallId, params, _signal) {
+                sessionTracker.trackAction(`log: ${params.task}`);
+                writeLiveAgents("tool_log_session", sessionTracker);
                 return txt(logSession(dataDir, params, logger));
             },
         });
@@ -1030,6 +1138,8 @@ const _plugin = definePluginEntry({
                 project: Type.String({ description: "Project name to sync." }),
             }),
             async execute(_id, params) {
+                sessionTracker.trackAction(`sync: ${params.project}`);
+                writeLiveAgents("tool_sync_project", sessionTracker);
                 return txt(syncProject(dataDir, params.project, logger));
             },
         });

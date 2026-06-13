@@ -1,8 +1,8 @@
 {
     "id": "genor-orchestrator",
     "name": "Genor's Orchestrator",
-    "description": "OpenClaw plugin for AI project orchestration: model routing, session logging, project context automation, and lifecycle hooks.",
-    "version": "0.4.1",
+    "description": "Model routing, session logging, project management, context injection, hooks-based automation. Dashboard is a separate PM2 sidecar.",
+    "version": "0.2.0",
     "configSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -57,15 +57,5 @@
         "build": {
             "openclawVersion": ">=2026.5.17"
         }
-    },
-    "__openclaw_meta": {
-        "compat": {
-            "pluginApi": "0.1.0"
-        },
-        "build": {
-            "openclawVersion": ">=2026.5.17"
-        }
-    },
-    "pluginApi": "0.1.0",
-    "minOpenClawVersion": ">=2026.5.17"
+    }
 }
