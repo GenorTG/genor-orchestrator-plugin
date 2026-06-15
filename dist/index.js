@@ -154,6 +154,105 @@ class OrchestratorLogger {
             clearInterval(this.cleanupTimer);
     }
 }
+const WORKFLOW_ORDER = ["analyze", "plan", "document", "work", "log", "finish"];
+class WorkflowTracker {
+    enabled = false;
+    currentPhase = "analyze";
+    phaseHistory = [];
+    currentPhaseStartedAt = Date.now();
+    qaRetries = 0;
+    qaMaxRetries = 3;
+    qaResults = [];
+    isQARunning = false;
+    autoCommit = false;
+    skipPhases = [];
+    reset(projectWorkflowConfig) {
+        this.enabled = projectWorkflowConfig?.enabled ?? false;
+        this.currentPhase = "analyze";
+        this.phaseHistory = [];
+        this.currentPhaseStartedAt = Date.now();
+        this.qaRetries = 0;
+        this.qaResults = [];
+        this.isQARunning = false;
+        this.autoCommit = projectWorkflowConfig?.auto_commit ?? false;
+        this.skipPhases = (projectWorkflowConfig?.skip_phases ?? []).filter((p) => WORKFLOW_ORDER.includes(p));
+        this.qaMaxRetries = projectWorkflowConfig?.qa_retries ?? 3;
+        this.enterPhase("analyze");
+    }
+    enterPhase(phase) {
+        this.currentPhase = phase;
+        this.currentPhaseStartedAt = Date.now();
+        const existing = this.phaseHistory.find(p => p.phase === phase);
+        if (existing) {
+            existing.enteredAt = new Date().toISOString();
+            existing.completedAt = undefined;
+        }
+        else {
+            this.phaseHistory.push({ phase, enteredAt: new Date().toISOString() });
+        }
+    }
+    completePhase(phase, skipped) {
+        const entry = this.phaseHistory.find(p => p.phase === phase);
+        if (entry) {
+            entry.completedAt = new Date().toISOString();
+            entry.skipped = skipped ?? false;
+        }
+    }
+    nextPhase() {
+        const idx = WORKFLOW_ORDER.indexOf(this.currentPhase);
+        if (idx < 0 || idx >= WORKFLOW_ORDER.length - 1)
+            return null;
+        // Skip configured phases
+        for (let i = idx + 1; i < WORKFLOW_ORDER.length; i++) {
+            if (!this.skipPhases.includes(WORKFLOW_ORDER[i])) {
+                return WORKFLOW_ORDER[i];
+            }
+        }
+        return null;
+    }
+    advance() {
+        this.completePhase(this.currentPhase);
+        const next = this.nextPhase();
+        if (next)
+            this.enterPhase(next);
+        return next;
+    }
+    canTransitionTo(target) {
+        if (!this.enabled)
+            return true;
+        const currentIdx = WORKFLOW_ORDER.indexOf(this.currentPhase);
+        const targetIdx = WORKFLOW_ORDER.indexOf(target);
+        if (currentIdx < 0 || targetIdx < 0)
+            return true;
+        // Allow transitions forward or to same phase (re-entry ok)
+        return targetIdx >= currentIdx;
+    }
+    getPhaseElapsed() {
+        const elapsed = Date.now() - this.currentPhaseStartedAt;
+        const mins = Math.floor(elapsed / 60000);
+        const secs = Math.floor((elapsed % 60000) / 1000);
+        return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+    }
+    getProgress() {
+        const completed = this.phaseHistory.filter(p => p.completedAt).length;
+        const total = WORKFLOW_ORDER.filter(p => !this.skipPhases.includes(p)).length;
+        return `${completed}/${total}`;
+    }
+    toJSON() {
+        return {
+            enabled: this.enabled,
+            current_phase: this.currentPhase,
+            phase_history: this.phaseHistory,
+            phase_elapsed: this.getPhaseElapsed(),
+            progress: this.getProgress(),
+            qa_retries: this.qaRetries,
+            qa_max_retries: this.qaMaxRetries,
+            is_qa_running: this.isQARunning,
+            auto_commit: this.autoCommit,
+            skip_phases: this.skipPhases,
+        };
+    }
+}
 class SessionTracker {
     currentProject = null;
     currentTask = null;
@@ -173,6 +272,7 @@ class SessionTracker {
     lastError = null;
     lastActivityTimestamp = Date.now();
     errorCount = 0;
+    workflow = new WorkflowTracker();
     trackModel(model, provider, tier) {
         this.currentModel = model;
         if (provider)
@@ -271,17 +371,20 @@ class SessionTracker {
             last_activity_at: new Date(this.lastActivityTimestamp).toISOString(),
             timestamp: new Date().toISOString(),
             session_key: this.sessionKey,
+            workflow: this.workflow.toJSON(),
             uptime_ms: elapsed,
             elapsed: this.formatElapsed(elapsed),
             session_started_at: new Date(this.sessionStartTimestamp).toISOString(),
             reason,
         };
     }
-    setContext(project, task) {
+    setContext(project, task, workflowConfig) {
         this.currentProject = project;
         this.currentTask = task;
         this.trackAction("Setting context");
         this.agentStatus = "working";
+        // Reset workflow tracker with project config
+        this.workflow.reset(workflowConfig);
     }
     clearContext() {
         const prev = this.currentProject;
@@ -292,6 +395,7 @@ class SessionTracker {
         this.currentModelTier = 0;
         this.currentAction = null;
         this.currentFile = null;
+        this.workflow.reset({ enabled: false });
         this.agentStatus = "idle";
         this.lastError = null;
         if (prev)
@@ -1071,7 +1175,10 @@ function getLogs(dataDir, opts, logger) {
 }
 function setContext(dataDir, project, task, logger) {
     projDir(project, dataDir);
-    sessionTracker.setContext(project, task);
+    // Read per-project workflow config from dashboard-config.json
+    const cfg = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
+    const projCfg = cfg.projects?.[project] || {};
+    sessionTracker.setContext(project, task, projCfg.workflow);
     writeLiveAgents("context", sessionTracker);
     const loc = getProjectLocation(project, dataDir);
     const toc = loc ? buildProjectToc(loc) : [];
@@ -1085,13 +1192,14 @@ function setContext(dataDir, project, task, logger) {
         duration: "",
         session_key: sessionTracker.sessionKey || "",
         goal: task,
-        notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"}`,
+        notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"} | Workflow: ${projCfg.workflow?.enabled ? "ON" : "OFF"}`,
     }, logger);
     logger.info("context", `Context set: ${project}/${task} [session=${sessionTracker.sessionKey}]`);
     return {
         ok: true, project, task, location: loc || "not configured",
         location_configured: loc !== undefined && loc !== null,
         toc_file_count: toc.length,
+        workflow_enabled: sessionTracker.workflow.enabled,
     };
 }
 function clearContextFn(dataDir, logger) {
@@ -1134,6 +1242,7 @@ const TOOL_NAMES = [
     "orchestrator_get_config", "orchestrator_get_models", "orchestrator_check_models",
     "orchestrator_auto_populate", "orchestrator_log_session", "orchestrator_log_decision",
     "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
+    "orchestrator_advance_phase",
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -1199,6 +1308,46 @@ const _plugin = definePluginEntry({
                 writeLiveAgents("session_end", sessionTracker, logger);
                 const info = sessionTracker.end();
                 if (info) {
+                    // Check if workflow enforcement needs auto-commit
+                    if (sessionTracker.workflow.enabled && sessionTracker.workflow.autoCommit && info.project) {
+                        try {
+                            const loc = getProjectLocation(info.project, dataDir);
+                            if (loc && fs.existsSync(path.join(loc, ".git"))) {
+                                const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+                                const changed = statusRaw.trim().split("\n").filter(Boolean);
+                                if (changed.length > 0) {
+                                    // Bump patch version
+                                    let version = "0.0.0";
+                                    const pj = path.join(loc, "package.json");
+                                    if (fs.existsSync(pj)) {
+                                        try {
+                                            version = JSON.parse(fs.readFileSync(pj, "utf-8")).version || "0.0.0";
+                                        }
+                                        catch { }
+                                    }
+                                    const parts = version.split(".").map(Number);
+                                    parts[2] = (parts[2] || 0) + 1;
+                                    const newVersion = parts.join(".");
+                                    if (fs.existsSync(pj)) {
+                                        const pkg = JSON.parse(fs.readFileSync(pj, "utf-8"));
+                                        pkg.version = newVersion;
+                                        fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+                                    }
+                                    execSync("git add -A", { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                                    execSync(`git commit -m "v${newVersion}: session ${info.task} [auto-commit]"`, { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                                    try {
+                                        execSync("git tag v${newVersion}", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+                                        execSync("git push --tags 2>&1", { cwd: loc, encoding: "utf-8", timeout: 15000 });
+                                    }
+                                    catch { }
+                                    logger.info("hooks", `Auto-committed v${newVersion} for ${info.project}`);
+                                }
+                            }
+                        }
+                        catch (e) {
+                            logger.warn("hooks", `Auto-commit failed: ${e.message}`);
+                        }
+                    }
                     logSession(dataDir, {
                         project: info.project, task: info.task, model: info.model,
                         agent: sessionTracker.currentAgent || "system",
@@ -1206,7 +1355,7 @@ const _plugin = definePluginEntry({
                         duration: info.duration,
                         session_key: sessionTracker.sessionKey || "",
                         goal: info.task,
-                        notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason}`,
+                        notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason} | Workflow: ${sessionTracker.workflow.enabled ? sessionTracker.workflow.currentPhase : "OFF"}`,
                     }, logger);
                     generateRecoveryDoc(info.project, dataDir, logger);
                     sessionTracker.currentAction = "session_complete";
@@ -1463,6 +1612,39 @@ const _plugin = definePluginEntry({
             }),
             async execute(_id, params) {
                 return txt(getProjectDocsFn(dataDir, params.project, logger));
+            },
+        });
+        api.registerTool({
+            name: "orchestrator_advance_phase",
+            label: "Advance Workflow Phase",
+            description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish). Use this after completing each step of the coding workflow.",
+            parameters: Type.Object({
+                phase: Type.Optional(Type.String({ description: "Target phase to transition to. Omit to auto-advance to next phase." })),
+                skip: Type.Optional(Type.Boolean({ description: "Mark current phase as skipped." })),
+            }),
+            async execute(_id, params) {
+                const wf = sessionTracker.workflow;
+                if (!wf.enabled) {
+                    return txt({ ok: false, error: "Workflow enforcement is not enabled for this project. Set workflow.enabled in dashboard-config.json" });
+                }
+                if (params.phase) {
+                    // Check transition is valid
+                    if (!wf.canTransitionTo(params.phase.toLowerCase())) {
+                        return txt({ ok: false, error: `Cannot transition to '${params.phase}' from current phase '${wf.currentPhase}'. Workflow must go forward: ${["analyze", "plan", "document", "work", "log", "finish"].join(" → ")}` });
+                    }
+                    wf.completePhase(wf.currentPhase, params.skip);
+                    wf.enterPhase(params.phase.toLowerCase());
+                }
+                else {
+                    const next = wf.advance();
+                    if (!next) {
+                        return txt({ ok: true, warning: "Already at last phase. No more phases to advance.", phase: wf.currentPhase, progress: wf.getProgress() });
+                    }
+                }
+                sessionTracker.trackAction(`workflow: ${wf.currentPhase}`);
+                writeLiveAgents("workflow_advance", sessionTracker, logger);
+                logger.info("workflow", `Phase advanced: ${wf.currentPhase} (${wf.getProgress()})`);
+                return txt({ ok: true, phase: wf.currentPhase, progress: wf.getProgress(), elapsed: wf.getPhaseElapsed(), phase_history: wf.phaseHistory });
             },
         });
         // ═══════════════════════════════════════════════════════════
