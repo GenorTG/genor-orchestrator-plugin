@@ -154,36 +154,78 @@ class OrchestratorLogger {
             clearInterval(this.cleanupTimer);
     }
 }
-// ═══════════════════════════════════════════════════════════════
-//  SESSION TRACKER
-// ═══════════════════════════════════════════════════════════════
 class SessionTracker {
     currentProject = null;
     currentTask = null;
     currentModel = null;
+    currentModelProvider = null;
+    currentModelTier = 0;
     currentAgent = "Amy";
     sessionStartTimestamp = Date.now();
     sessionKey = null;
     subagentDepth = 0;
     currentAction = null;
+    currentFile = null;
+    agentStatus = "idle";
     touchedFiles = [];
-    trackModel(model) { this.currentModel = model; }
+    actionHistory = [];
+    tokenUsage = { input: 0, output: 0, total: 0 };
+    lastError = null;
+    lastActivityTimestamp = Date.now();
+    errorCount = 0;
+    trackModel(model, provider, tier) {
+        this.currentModel = model;
+        if (provider)
+            this.currentModelProvider = provider;
+        if (tier !== undefined)
+            this.currentModelTier = tier;
+    }
     trackAction(action, file) {
         this.currentAction = action;
+        this.lastActivityTimestamp = Date.now();
+        if (file)
+            this.currentFile = file;
         if (file && !this.touchedFiles.includes(file)) {
             this.touchedFiles.push(file);
         }
+        this.actionHistory.push({ action, file, ts: new Date().toISOString() });
+        if (this.actionHistory.length > 100)
+            this.actionHistory = this.actionHistory.slice(-100);
+    }
+    trackTokenUsage(input, output) {
+        this.tokenUsage.input += input;
+        this.tokenUsage.output += output;
+        this.tokenUsage.total += input + output;
+        this.lastActivityTimestamp = Date.now();
+    }
+    trackError(error) {
+        this.lastError = error;
+        this.agentStatus = "blocked";
+        this.errorCount++;
+        this.lastActivityTimestamp = Date.now();
+    }
+    setStatus(status) {
+        this.agentStatus = status;
     }
     start(key, reason) {
         this.sessionKey = key;
         this.sessionStartTimestamp = Date.now();
         this.subagentDepth = 0;
         this.currentAction = null;
+        this.currentFile = null;
         this.touchedFiles = [];
+        this.actionHistory = [];
+        this.agentStatus = "working";
+        this.lastError = null;
+        this.errorCount = 0;
+        this.lastActivityTimestamp = Date.now();
         if (reason === "new" || reason === "reset") {
             this.currentProject = null;
             this.currentTask = null;
             this.currentModel = null;
+            this.currentModelProvider = null;
+            this.currentModelTier = 0;
+            this.tokenUsage = { input: 0, output: 0, total: 0 };
         }
     }
     end() {
@@ -191,6 +233,7 @@ class SessionTracker {
             return null;
         const ms = Date.now() - this.sessionStartTimestamp;
         const dur = ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}min`;
+        this.agentStatus = "complete";
         return {
             project: this.currentProject,
             task: this.currentTask || "auto-task",
@@ -198,31 +241,61 @@ class SessionTracker {
             model: this.currentModel || "auto",
         };
     }
+    formatElapsed(ms) {
+        if (ms < 1000)
+            return "0s";
+        if (ms < 60000)
+            return `${Math.round(ms / 1000)}s`;
+        const m = Math.floor(ms / 60000);
+        const s = Math.round((ms % 60000) / 1000);
+        return `${m}m ${s}s`;
+    }
     toLiveState(reason) {
+        const elapsed = Date.now() - this.sessionStartTimestamp;
         return {
             agent: this.currentAgent,
             project: this.currentProject,
             task: this.currentTask,
             model: this.currentModel,
+            model_provider: this.currentModelProvider,
+            model_tier: this.currentModelTier,
             subagent_depth: this.subagentDepth,
             action: this.currentAction,
+            current_file: this.currentFile,
+            agent_status: this.agentStatus,
             touched_files: this.touchedFiles.slice(-20),
+            action_history: this.actionHistory.slice(-20),
+            token_usage: this.tokenUsage,
+            last_error: this.lastError,
+            error_count: this.errorCount,
+            last_activity_at: new Date(this.lastActivityTimestamp).toISOString(),
             timestamp: new Date().toISOString(),
             session_key: this.sessionKey,
-            uptime_ms: Date.now() - this.sessionStartTimestamp,
+            uptime_ms: elapsed,
+            elapsed: this.formatElapsed(elapsed),
+            session_started_at: new Date(this.sessionStartTimestamp).toISOString(),
             reason,
         };
     }
     setContext(project, task) {
         this.currentProject = project;
         this.currentTask = task;
-        this.currentAction = "Setting context";
+        this.trackAction("Setting context");
+        this.agentStatus = "working";
     }
     clearContext() {
+        const prev = this.currentProject;
         this.currentProject = null;
         this.currentTask = null;
         this.currentModel = null;
+        this.currentModelProvider = null;
+        this.currentModelTier = 0;
         this.currentAction = null;
+        this.currentFile = null;
+        this.agentStatus = "idle";
+        this.lastError = null;
+        if (prev)
+            this.trackAction("Clearing context");
     }
 }
 // ═══════════════════════════════════════════════════════════════
@@ -244,12 +317,21 @@ function writeLiveAgents(reason, tracker, logger) {
                 project: tracker.currentProject,
                 task: tracker.currentTask,
                 model: tracker.currentModel,
+                model_provider: tracker.currentModelProvider,
+                model_tier: tracker.currentModelTier,
                 subagent_depth: 0,
                 action: "working",
+                current_file: null,
+                agent_status: "working",
                 touched_files: [],
+                action_history: [],
+                token_usage: { input: 0, output: 0, total: 0 },
+                last_error: null,
                 timestamp: new Date().toISOString(),
                 session_key: null,
                 uptime_ms: 0,
+                elapsed: "—",
+                session_started_at: new Date(tracker.sessionStartTimestamp).toISOString(),
                 parent_depth: i + 1,
             });
         }
@@ -411,14 +493,97 @@ function readRecentSessions(project, dataDir, n) {
         return [];
     }
 }
-// ═══════════════════════════════════════════════════════════════
-//  BACKGROUND MAINTENANCE SERVICE
-// ═══════════════════════════════════════════════════════════════
+function controlDir(dataDir) {
+    return path.join(dataDir, "control");
+}
+function writeActionResult(dataDir, actionId, ok, result, error) {
+    try {
+        const cd = controlDir(dataDir);
+        if (!fs.existsSync(cd))
+            fs.mkdirSync(cd, { recursive: true });
+        fs.writeFileSync(path.join(cd, `${actionId}.result.json`), JSON.stringify({
+            id: actionId,
+            ok,
+            result,
+            error,
+            processed_at: new Date().toISOString(),
+        }, null, 2));
+    }
+    catch { /* silent */ }
+}
+function processSetContext(dataDir, params, logger) {
+    const project = params.project;
+    const task = params.task;
+    if (!project)
+        throw new Error("Missing project");
+    sessionTracker.setContext(project, task || "");
+    writeLiveAgents("control_set_context", sessionTracker, logger);
+    return { project, task, ok: true };
+}
+function processClearContext(dataDir, _params, logger) {
+    const prev = sessionTracker.currentProject;
+    sessionTracker.clearContext();
+    writeLiveAgents("control_clear_context", sessionTracker, logger);
+    return { previous_project: prev, ok: true };
+}
+function processUpdateRouting(dataDir, params, logger) {
+    const cfg = readJSON(path.join(dataDir, "dashboard-config.json")) || {
+        free_only_mode: false, disabled_models: [], projects: {}
+    };
+    if (typeof params.free_only_mode === "boolean")
+        cfg.free_only_mode = params.free_only_mode;
+    if (Array.isArray(params.disabled_models))
+        cfg.disabled_models = params.disabled_models;
+    if (typeof params.project === "string" && params.project_allowlist) {
+        cfg.projects = cfg.projects || {};
+        cfg.projects[params.project] = cfg.projects[params.project] || {};
+        cfg.projects[params.project].model_allowlist = params.project_allowlist;
+    }
+    if (typeof params.project === "string" && typeof params.project_free_only === "boolean") {
+        cfg.projects = cfg.projects || {};
+        cfg.projects[params.project] = cfg.projects[params.project] || {};
+        cfg.projects[params.project].free_only = params.project_free_only;
+    }
+    writeJSON(path.join(dataDir, "dashboard-config.json"), cfg);
+    logger.info("control", `Routing updated: free_only=${cfg.free_only_mode}`);
+    return { ok: true, config: cfg };
+}
+function processControlAction(dataDir, action, logger) {
+    try {
+        logger.info("control", `Processing action ${action.id}: ${action.action}`);
+        let result;
+        switch (action.action) {
+            case "set_context":
+                result = processSetContext(dataDir, action.params, logger);
+                break;
+            case "clear_context":
+                result = processClearContext(dataDir, action.params, logger);
+                break;
+            case "update_routing":
+                result = processUpdateRouting(dataDir, action.params, logger);
+                break;
+            case "spawn_agent":
+                result = { message: "Spawn request received", action: action.params };
+                break;
+            case "stop_agent":
+                result = { message: "Stop request received", action: action.params };
+                break;
+            default:
+                throw new Error(`Unknown action: ${action.action}`);
+        }
+        writeActionResult(dataDir, action.id, true, result, null);
+    }
+    catch (err) {
+        logger.warn("control", `Action ${action.id} failed: ${err.message}`);
+        writeActionResult(dataDir, action.id, false, null, err.message);
+    }
+}
 class MaintenanceService {
     timer = null;
     started = false;
     dataDir;
     logger;
+    safeguardLog = [];
     constructor(dataDir, logger) {
         this.dataDir = dataDir;
         this.logger = logger;
@@ -427,7 +592,8 @@ class MaintenanceService {
         if (this.started)
             return;
         this.started = true;
-        setTimeout(() => this.tick(), 60_000);
+        // First tick sooner for safeguards
+        setTimeout(() => this.tick(), 15_000);
         this.timer = setInterval(() => this.tick(), intervalMs);
         this.logger.info("maintenance", `Started (every ${Math.round(intervalMs / 60000)}min)`);
     }
@@ -442,6 +608,11 @@ class MaintenanceService {
                     this.logger.debug("maintenance", "Rotated auto-populate.log");
                 }
             }
+            // Process control actions (dashboard → plugin commands)
+            this.processControlActions();
+            // Check agent health (safeguards)
+            this.detectStaleAgents();
+            // Process projects
             const projDirPath = path.join(this.dataDir, "projects");
             if (!fs.existsSync(projDirPath))
                 return;
@@ -458,10 +629,142 @@ class MaintenanceService {
                     this.logger.warn("maintenance", `Error processing ${p}: ${err.message}`);
                 }
             }
-            this.logger.debug("maintenance", `Tick: ${projects.length} projects processed`);
+            this.logger.debug("maintenance", `Tick: ${projects.length} projects processed, control actions checked`);
         }
         catch (err) {
             this.logger.warn("maintenance", `Tick error: ${err.message}`);
+        }
+    }
+    processControlActions() {
+        try {
+            const cd = controlDir(this.dataDir);
+            if (!fs.existsSync(cd))
+                return;
+            const files = fs.readdirSync(cd)
+                .filter(f => f.endsWith(".action.json"))
+                .sort()
+                .slice(0, 5); // Max 5 per tick
+            for (const f of files) {
+                const fp = path.join(cd, f);
+                try {
+                    const raw = fs.readFileSync(fp, "utf-8");
+                    const action = JSON.parse(raw);
+                    if (!action.id || !action.action) {
+                        this.logger.warn("control", `Invalid action file: ${f}`);
+                        fs.unlinkSync(fp);
+                        continue;
+                    }
+                    // Check TTL
+                    if (action.ttl_seconds && action.created_at) {
+                        const age = Date.now() - new Date(action.created_at).getTime();
+                        if (age > action.ttl_seconds * 1000) {
+                            writeActionResult(this.dataDir, action.id, false, null, "Action timed out");
+                            fs.unlinkSync(fp);
+                            continue;
+                        }
+                    }
+                    processControlAction(this.dataDir, action, this.logger);
+                    fs.unlinkSync(fp);
+                }
+                catch (err) {
+                    this.logger.warn("control", `Error processing ${f}: ${err.message}`);
+                    // Remove malformed actions to avoid re-processing
+                    try {
+                        fs.unlinkSync(fp);
+                    }
+                    catch { /* */ }
+                }
+            }
+        }
+        catch (err) {
+            this.logger.warn("control", `processControlActions error: ${err.message}`);
+        }
+    }
+    detectStaleAgents() {
+        try {
+            const laPath = path.join(this.dataDir, "live-agents.json");
+            if (!fs.existsSync(laPath))
+                return;
+            const cfg = readJSON(path.join(this.dataDir, "dashboard-config.json")) || {};
+            const safeguards = cfg.safeguards || {};
+            if (safeguards.enabled === false)
+                return;
+            const idleTimeout = safeguards.idle_timeout_ms || 10 * 60 * 1000; // 10 min
+            const stuckTimeout = safeguards.stuck_timeout_ms || 30 * 60 * 1000; // 30 min
+            const maxErrors = safeguards.max_errors_before_escalation || 3;
+            const now = Date.now();
+            const live = JSON.parse(fs.readFileSync(laPath, "utf-8"));
+            const agents = live.agents || [];
+            let recoveryNeeded = false;
+            for (const a of agents) {
+                if (!a.project)
+                    continue; // Skip agents without active project
+                const status = a.agent_status || "";
+                const lastActivity = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0;
+                const lastUpdate = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const elapsedSinceActivity = lastActivity ? now - lastActivity : 0;
+                const elapsedSinceUpdate = lastUpdate ? now - lastUpdate : 0;
+                const elapsedHuman = a.elapsed || "?";
+                const errorCount = a.error_count || 0;
+                const agentName = a.agent || "?";
+                // Check 1: Agent is idle with active project for too long
+                if (status === "idle" && elapsedSinceActivity > idleTimeout) {
+                    this.logger.warn("safeguard", `Agent ${agentName} idle for ${Math.round(elapsedSinceActivity / 1000)}s (project: ${a.project})`);
+                    this.safeguardLog.push(`[${new Date().toISOString()}] IDLE: ${agentName} idle ${Math.round(elapsedSinceActivity / 60000)}m on ${a.project}`);
+                    if (safeguards.auto_recover !== false && a.project) {
+                        // Auto-recover: write a set_context action for the same project
+                        const actionId = `recover_${agentName}_${Date.now()}`;
+                        const action = {
+                            id: actionId,
+                            action: "set_context",
+                            params: { project: a.project, task: a.task || "auto-recovery" },
+                            created_at: new Date().toISOString(),
+                            ttl_seconds: 30,
+                        };
+                        try {
+                            const cd = controlDir(this.dataDir);
+                            if (!fs.existsSync(cd))
+                                fs.mkdirSync(cd, { recursive: true });
+                            fs.writeFileSync(path.join(cd, `${actionId}.action.json`), JSON.stringify(action, null, 2));
+                            this.logger.info("safeguard", `Auto-recovery triggered for ${agentName} on ${a.project}`);
+                            this.safeguardLog.push(`[${new Date().toISOString()}] RECOVER: ${agentName} → set_context ${a.project}`);
+                            recoveryNeeded = true;
+                        }
+                        catch (err) {
+                            this.logger.warn("safeguard", `Auto-recovery write failed: ${err.message}`);
+                        }
+                    }
+                }
+                // Check 2: Agent hasn't updated in too long despite having project context
+                if (status !== "idle" && status !== "complete" && status !== "shutdown" && elapsedSinceUpdate > stuckTimeout) {
+                    this.logger.warn("safeguard", `Agent ${agentName} stuck (no update ${Math.round(elapsedSinceUpdate / 60000)}m, status: ${status})`);
+                    this.safeguardLog.push(`[${new Date().toISOString()}] STUCK: ${agentName} no update ${Math.round(elapsedSinceUpdate / 60000)}m (${status})`);
+                }
+                // Check 3: Error storm
+                if (errorCount >= maxErrors) {
+                    this.logger.warn("safeguard", `Agent ${agentName} hit ${errorCount} errors — escalation needed`);
+                    this.safeguardLog.push(`[${new Date().toISOString()}] ESCALATE: ${agentName} ${errorCount} errors`);
+                }
+            }
+            // Write safeguard log if anything was detected
+            if (this.safeguardLog.length > 0) {
+                const logPath = path.join(this.dataDir, "safeguard-log.md");
+                const existing = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "# Safeguard Recovery Log\n\n| Timestamp | Event | Details |\n|-----------|-------|---------|\n";
+                const lines = this.safeguardLog.map(s => {
+                    const parts = s.match(/\[(.*?)\] (\w+): (.*)/);
+                    if (parts)
+                        return `| ${parts[1]} | ${parts[2]} | ${parts[3]} |`;
+                    return `| ${new Date().toISOString()} | INFO | ${s} |`;
+                });
+                fs.writeFileSync(logPath, existing + lines.join("\n") + "\n");
+                this.safeguardLog = [];
+            }
+            if (recoveryNeeded) {
+                this.logger.info("safeguard", "Recovery actions written — next tick will process them");
+            }
+        }
+        catch (err) {
+            this.logger.warn("safeguard", `detectStaleAgents error: ${err.message}`);
         }
     }
     stop() {
@@ -677,9 +980,33 @@ function logSession(dataDir, opts, logger) {
         fs.writeFileSync(slp, "# Session Log\n\n| Date | Project | Task | Model | Agent | Status | Duration | QA | Checked | Notes |\n|------|---------|------|-------|-------|--------|----------|----|---------|-------|\n", "utf-8");
     }
     fs.appendFileSync(slp, `| ${date} | ${opts.project} | ${opts.task} | ${opts.model} | ${opts.agent} | ${opts.status} | ${opts.duration || ""} | ${opts.qa ? "true" : "false"} | ${opts.checked ? "true" : "false"} | ${opts.notes || ""} |\n`, "utf-8");
+    // Write rich session detail file
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const df = path.join(dataDir, "sessions", `${ts}-${sp}-${st}.md`);
-    fs.writeFileSync(df, `# Session: ${opts.project} / ${opts.task}\n\n**Date:** ${date}\n**Agent:** ${opts.agent}\n**Model:** ${opts.model}\n**Status:** ${opts.status}\n**Duration:** ${opts.duration || "N/A"}\n**QA:** ${opts.qa ? "true" : "false"} | **Checked:** ${opts.checked ? "true" : "false"}\n\n## Notes\n\n${opts.notes || "None"}\n`, "utf-8");
+    const sessionDir = path.join(dataDir, "sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const logDir2 = path.join(dataDir, "logs");
+    fs.mkdirSync(logDir2, { recursive: true });
+    const df = path.join(sessionDir, `${ts}-${sp}-${st}.md`);
+    fs.writeFileSync(df, [
+        `# Session: ${opts.project} / ${opts.task}`,
+        ``,
+        `**Date:** ${date}`,
+        `**Agent:** ${opts.agent}`,
+        `**Model:** ${opts.model}`,
+        `**Status:** ${opts.status}`,
+        `**Goal:** ${opts.goal || opts.task || "N/A"}`,
+        `**Session Key:** ${opts.session_key || "N/A"}`,
+        `**Duration:** ${opts.duration || "N/A"}`,
+        `**QA:** ${opts.qa ? "true" : "false"} | **Checked:** ${opts.checked ? "true" : "false"}`,
+        ``,
+        `## Notes`,
+        ``,
+        `${opts.notes || "None"}`,
+        ``,
+        `---`,
+        `*Auto-logged by Genor's Orchestrator plugin v0.4.3*`,
+    ].join("\n"), "utf-8");
+    // Append to project sessions.json (per-project session log)
     const pd = path.join(dataDir, "projects", sp);
     fs.mkdirSync(pd, { recursive: true });
     const psf = path.join(pd, "sessions.json");
@@ -694,7 +1021,21 @@ function logSession(dataDir, opts, logger) {
         }
         catch { /* */ }
     }
-    ps.push({ date, project: opts.project, task: opts.task, model: opts.model, agent: opts.agent, status: opts.status, duration: opts.duration || "", qa: opts.qa || false, checked: opts.checked || false, notes: opts.notes || "", logged_at: new Date().toISOString() });
+    ps.push({
+        date,
+        project: opts.project,
+        task: opts.task,
+        goal: opts.goal || opts.task,
+        model: opts.model,
+        agent: opts.agent,
+        session_key: opts.session_key || "",
+        status: opts.status,
+        duration: opts.duration || "",
+        qa: opts.qa || false,
+        checked: opts.checked || false,
+        notes: opts.notes || "",
+        logged_at: new Date().toISOString(),
+    });
     writeJSON(psf, { sessions: ps });
     logger.logSession(opts.project, opts.task, opts.model, opts.agent, opts.status);
     return { success: true, date, project: opts.project, task: opts.task, session_file: path.basename(df), total_project_sessions: ps.length };
@@ -734,7 +1075,19 @@ function setContext(dataDir, project, task, logger) {
     writeLiveAgents("context", sessionTracker);
     const loc = getProjectLocation(project, dataDir);
     const toc = loc ? buildProjectToc(loc) : [];
-    logger.info("context", `Context set: ${project}/${task}`);
+    // Auto-log a detailed session entry with goal tracking
+    logSession(dataDir, {
+        project,
+        task,
+        model: sessionTracker.currentModel || "pending",
+        agent: sessionTracker.currentAgent || sessionTracker.sessionKey || "system",
+        status: "running",
+        duration: "",
+        session_key: sessionTracker.sessionKey || "",
+        goal: task,
+        notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"}`,
+    }, logger);
+    logger.info("context", `Context set: ${project}/${task} [session=${sessionTracker.sessionKey}]`);
     return {
         ok: true, project, task, location: loc || "not configured",
         location_configured: loc !== undefined && loc !== null,
@@ -821,9 +1174,19 @@ const _plugin = definePluginEntry({
         // ═══════════════════════════════════════════════════════════
         api.on("session_start", async (event) => {
             try {
-                sessionTracker.start(event.sessionKey || "unknown", event.reason || "new");
+                const sk = (event.sessionKey || "").toString();
+                // Filter out background/dreaming/cron/subagent/acp sessions — their
+                // session keys would overwrite the interactive session key and cause
+                // mismatched session_key in auto-logged entries.
+                const isBackground = sk.includes("dreaming") || sk.includes(":cron:") || sk.includes(":subagent:") || sk.includes(":acp:");
+                if (isBackground) {
+                    logger.debug("hooks", `session_start (skipped background): ${sk}`);
+                    return;
+                }
+                sessionTracker.start(sk || "unknown", event.reason || "new");
+                sessionTracker.trackAction("session_started");
                 writeLiveAgents("session_start", sessionTracker, logger);
-                logger.debug("hooks", `session_start: ${event.reason}`);
+                logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);
             }
             catch (err) {
                 logger.error("hooks", `session_start error: ${err.message}`);
@@ -831,15 +1194,19 @@ const _plugin = definePluginEntry({
         });
         api.on("session_end", async (event) => {
             try {
+                sessionTracker.setStatus("complete");
+                sessionTracker.trackAction("session_ending");
                 writeLiveAgents("session_end", sessionTracker, logger);
                 const info = sessionTracker.end();
                 if (info) {
                     logSession(dataDir, {
                         project: info.project, task: info.task, model: info.model,
-                        agent: sessionTracker.currentAgent,
-                        status: event.reason === "shutdown" ? "interrupted" : "complete",
+                        agent: sessionTracker.currentAgent || "system",
+                        status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "complete",
                         duration: info.duration,
-                        notes: `Auto-logged via session_end (${event.reason || "unknown"})`,
+                        session_key: sessionTracker.sessionKey || "",
+                        goal: info.task,
+                        notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason}`,
                     }, logger);
                     generateRecoveryDoc(info.project, dataDir, logger);
                     sessionTracker.currentAction = "session_complete";
@@ -854,6 +1221,7 @@ const _plugin = definePluginEntry({
         });
         api.on("subagent_spawned", async () => {
             sessionTracker.subagentDepth++;
+            sessionTracker.setStatus("working");
             if (sessionTracker.currentProject) {
                 logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject}`);
             }
@@ -867,6 +1235,7 @@ const _plugin = definePluginEntry({
         });
         api.on("before_model_resolve", async (event) => {
             try {
+                sessionTracker.setStatus("resolving");
                 sessionTracker.trackAction("resolving_model");
                 writeLiveAgents("before_model_resolve", sessionTracker, logger);
                 if (!sessionTracker.currentProject)
@@ -901,13 +1270,15 @@ const _plugin = definePluginEntry({
                         .filter(m => m.agent_ready && m.status === "active")
                         .sort((a, b) => (b.tier || 0) - (a.tier || 0))[0];
                     if (best) {
-                        sessionTracker.trackModel(best.id);
+                        sessionTracker.trackModel(best.id, best.provider, best.tier);
                         logger.debug("routing", `Auto-routed to ${best.id} for ${sessionTracker.currentProject}`);
                         return { modelOverride: best.id };
                     }
                 }
-                if (event?.resolvedModel)
-                    sessionTracker.trackModel(event.resolvedModel);
+                if (event?.resolvedModel) {
+                    const resolvedInfo = allModels.find((m) => m.id === event.resolvedModel);
+                    sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider, resolvedInfo?.tier);
+                }
             }
             catch (err) {
                 logger.error("hooks", `before_model_resolve error: ${err.message}`);
@@ -915,6 +1286,7 @@ const _plugin = definePluginEntry({
         });
         api.on("before_prompt_build", async () => {
             try {
+                sessionTracker.setStatus("prompting");
                 sessionTracker.trackAction("building_prompt");
                 writeLiveAgents("before_prompt_build", sessionTracker, logger);
                 if (!sessionTracker.currentProject)
@@ -931,11 +1303,13 @@ const _plugin = definePluginEntry({
             catch { /* */ }
         });
         api.on("agent_end", async () => {
+            sessionTracker.setStatus("stopped");
             sessionTracker.trackAction("agent_stopped");
             writeLiveAgents("agent_end", sessionTracker, logger);
             logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
         });
         api.on("gateway_stop", async () => {
+            sessionTracker.setStatus("shutdown");
             maintenanceSvc?.stop();
             logger.stop();
         });
@@ -1098,6 +1472,93 @@ const _plugin = definePluginEntry({
             maintenanceSvc.stop();
         maintenanceSvc = new MaintenanceService(dataDir, logger);
         maintenanceSvc.start(cfg.maintenanceIntervalMs || 30 * 60_000);
+        const hostname = execSync("hostname", { encoding: "utf-8", timeout: 3000 }).trim();
+        const dashPort = cfg.dashboardPort || 8767;
+        let tailscaleHost = "";
+        try {
+            tailscaleHost = execSync("tailscale status 2>/dev/null | head -1 | awk '{print $2}'", { encoding: "utf-8", timeout: 3000 }).trim();
+        }
+        catch { /* tailscale not available */ }
+        if (!tailscaleHost)
+            tailscaleHost = hostname;
+        // Shared: quick counts
+        let modelCount = 0, sessionCount = 0;
+        try {
+            const mf = path.join(dataDir, "models.json");
+            if (fs.existsSync(mf))
+                modelCount = JSON.parse(fs.readFileSync(mf, "utf-8")).models?.length || 0;
+            const sf = path.join(dataDir, "session_log.md");
+            if (fs.existsSync(sf))
+                sessionCount = fs.readFileSync(sf, "utf-8").split("\n").filter(l => l.startsWith("|") && !l.includes("Date") && !l.includes("---")).length;
+        }
+        catch { /* */ }
+        //  SLASH COMMANDS
+        //  Individually registered for Discord autocomplete:
+        //    /genor — command reference
+        //    /genor-dashboard — dashboard URL
+        //    /genor-status — quick status
+        //    /genor-help — command reference
+        api.registerCommand({
+            name: "genor",
+            description: "Genor's Orchestrator \u2014 available commands",
+            requireAuth: false,
+            handler: () => ({
+                text: [
+                    "**\U0001f3e0 Genor's Orchestrator \u2014 Commands**",
+                    "",
+                    "**/genor** \u2014 This help",
+                    "**/genor-dashboard** \u2014 Dashboard URL",
+                    "**/genor-status** \u2014 Quick status overview",
+                    "**/genor-help** \u2014 This help",
+                    "",
+                    "Dashboard: http://${tailscaleHost}:${dashPort}",
+                ].join("\n"),
+                continueAgent: false,
+            }),
+        });
+        api.registerCommand({
+            name: "genor-dashboard",
+            description: "Show the Genor's Orchestrator Dashboard URL",
+            requireAuth: false,
+            handler: () => ({
+                text: `**\U0001f3e0 Genor's Orchestrator Dashboard**\n\n**URL:** http://${tailscaleHost}:${dashPort}\n**Port:** ${dashPort}\n**Data:** ${dataDir}`,
+                continueAgent: false,
+            }),
+        });
+        api.registerCommand({
+            name: "genor-status",
+            description: "Quick status overview of the orchestrator",
+            requireAuth: false,
+            handler: () => ({
+                text: [
+                    "**\U0001f4ca Genor's Orchestrator \u2014 Status**",
+                    "**Dashboard:** http://${tailscaleHost}:${dashPort}",
+                    "**Host:** ${hostname} (Tailscale: ${tailscaleHost})",
+                    "**Port:** ${dashPort}",
+                    "**Models:** ${modelCount}  **Sessions:** ${sessionCount}",
+                    "**Data:** ${dataDir}",
+                ].join("\n"),
+                continueAgent: false,
+            }),
+        });
+        api.registerCommand({
+            name: "genor-help",
+            description: "Genor's Orchestrator command reference",
+            requireAuth: false,
+            handler: () => ({
+                text: [
+                    "**\U0001f3e0 Genor's Orchestrator \u2014 Commands**",
+                    "",
+                    "**/genor** \u2014 This help",
+                    "**/genor-dashboard** \u2014 Dashboard URL",
+                    "**/genor-status** \u2014 Quick status overview",
+                    "**/genor-help** \u2014 This help",
+                    "",
+                    "Dashboard: http://${tailscaleHost}:${dashPort}",
+                ].join("\n"),
+                continueAgent: false,
+            }),
+        });
         logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active`);
     },
 });
@@ -1122,6 +1583,7 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
                 orchestratorDataDir: { type: "string", description: "Override data directory path" },
                 logLevel: { type: "string", description: "Log level: debug, info, warn, error. (default: info)" },
                 logRetentionDays: { type: "number", description: "Log retention in days. (default: 30)" },
+                dashboardPort: { type: "number", description: "Dashboard web UI port (default: 8766)" },
                 maintenanceIntervalMs: { type: "number", description: "Background maintenance interval in ms. (default: 1800000 = 30min)" },
             },
         },

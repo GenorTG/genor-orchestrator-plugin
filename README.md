@@ -37,6 +37,8 @@ clawhub package install genor-orchestrator-plugin
 
 **Live agent tracking** — Real-time agent state written to `live-agents.json` on every hook event, consumed by dashboard SSE for live monitoring
 
+**Session key filtering** — The plugin filters out background/dreaming/cron/subagent sessions from session tracking, ensuring auto-logged session entries always carry the correct interactive session key
+
 **Dashboard** — PM2 sidecar on port 8766: model CRUD, routing config, session viewer, live agent tree
 
 **Auto-maintenance** — nightly model sync, log rotation, recovery doc generation, session normalization
