@@ -1695,7 +1695,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.",
       parameters: Type.Object({
         project: Type.String({ description: "Project name (e.g., kfinance, kotw)." }),
-        task: Type.String({ description: "Task description (e.g., fix-dashboard-js-syntax)." }),
+        task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, restart PM2 process.'" }),
       }),
       async execute(_id: string, params: any) {
         return txt(setContext(dataDir, params.project, params.task, logger));
@@ -1776,11 +1776,11 @@ const _plugin: Record<string, any> = definePluginEntry({
       description: "Log a completed session. Normally handled automatically by hooks; use for manual logging or retroactive entries.",
       parameters: Type.Object({
         project: Type.String({ description: "Project name." }),
-        task: Type.String({ description: "Task description." }),
+        task: Type.String({ description: "Task description — the same concise bullet list used when setting context." }),
         model: Type.String({ description: "Model ID used." }),
         agent: Type.String({ description: "Agent name." }),
         status: Type.String({ description: "Status: complete, blocked, in_progress, failed." }),
-        notes: Type.Optional(Type.String({ description: "Session notes." })),
+        notes: Type.Optional(Type.String({ description: "Write a structured summary of what was done, in this format:\n• **Completed:** bullet list of what was accomplished\n• **Decisions:** key choices made and why\n• **Blockers:** anything that stopped progress (+ why)\n• **Next:** what should be done next" })),
         duration: Type.Optional(Type.String({ description: "Duration (e.g., 30min)." })),
         qa: Type.Optional(Type.Boolean({ description: "QA checked flag." })),
         checked: Type.Optional(Type.Boolean({ description: "Reviewed flag." })),
@@ -1799,10 +1799,10 @@ const _plugin: Record<string, any> = definePluginEntry({
       parameters: Type.Object({
         project: Type.String({ description: "Project name." }),
         title: Type.String({ description: "Decision title." }),
-        context: Type.String({ description: "Why this decision was made." }),
-        decision: Type.String({ description: "What was decided." }),
-        alternatives: Type.Optional(Type.String({ description: "Alternatives considered." })),
-        consequences: Type.Optional(Type.String({ description: "Impact." })),
+        context: Type.String({ description: "Why this decision was made. Describe the problem, constraints, and trade-offs. Write in 2-3 clear sentences." }),
+        decision: Type.String({ description: "What was decided. State the chosen approach clearly: 'We chose X over Y because Z.'" }),
+        alternatives: Type.Optional(Type.String({ description: "What else was considered. List briefly: 'Option A (pros/cons), Option B (pros/cons).'" })),
+        consequences: Type.Optional(Type.String({ description: "Impact of this decision. Format:\n• **Good:** benefits this unlocks\n• **Risks:** things to watch for\n• **Requires:** follow-up work or migrations needed" })),
       }),
       async execute(_id: string, params: any) {
         return txt(logDecision(dataDir, params, logger));
