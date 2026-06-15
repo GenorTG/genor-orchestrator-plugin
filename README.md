@@ -49,6 +49,7 @@ clawhub package install genor-orchestrator-plugin
 
 ## Quick reference
 
+### Tools
 ```typescript
 orchestrator_set_context(project="my-project", task="fix-bug")   // start a session
 orchestrator_log_decision(project, title, context, decision)    // log an ADR
@@ -56,23 +57,31 @@ orchestrator_get_status()                                        // overview
 orchestrator_check_models(project="my-project")                  // check routing
 ```
 
+### Slash Commands
+| Command | Description |
+|---------|-------------|
+| `/genor-help` | List all available commands |
+| `/genor-dashboard` | Show dashboard URL |
+| `/genor-status` | Quick orchestrator overview |
+| `/genor-git-commit` | Auto-commit current project with version bump |
+
 Dashboard: `http://localhost:8766`
 
 ---
 
-## Alpha Details
-
-This is **v0.4.3** — we're iterating fast:
+## Changelog
 
 | Version | Highlights |
 |---------|-----------|
+| **v0.5.0** | **Slash commands restructured** — monolithic `/genor` removed, replaced with `/genor-COMMAND` pattern. Added `/genor-git-commit` (auto-commit + version bump). Versioning workflow in SKILL.md. Session key filter for background sessions. |
+| v0.4.4 | Session key fix — filter background/dreaming/cron/subagent sessions from `session_start` hook |
 | v0.4.3 | ToolPluginMetadata compat (OpenClaw 2026.6.6), live agent tracking, function name cleanup, double-cron fix, dead code removal |
 | v0.4.2 | SessionTracker with live agents file, error logging to `/tmp/live-agents-errors.log` |
 | v0.4.1 | 12 tools verified working, `plugins.load.paths` fix, gateway restart, dashboard v4 SSE |
 | v0.4.0 | Phase 1 complete: tool audit, 9 bugs fixed |
 | v0.3.x | Initial dashboard, server refactors |
 
-**Current state:** All 12 tools operational. Hooks running. Live agent SSE streaming. Dashboard with 7 tabs. Production-safe for daily use.
+**Current state:** All 12 tools + 4 slash commands operational. Hooks running. Live agent SSE streaming. Dashboard with 7 tabs. Production-safe for daily use.
 
 ---
 
