@@ -895,17 +895,26 @@ async function pollLiveAgents() {
       $('tbModels').textContent = m.total || 0;
       $('tbGateway').textContent = Array.isArray(s) ? s.length : (s.count || 0);
     }
-    // Simulate activity event from the live-agents data
+    // Activity event: only push when something MEANINGFUL changed.
+    // Skip events where all agents have null project + same actions as last time.
     const newTs = data.last_updated || new Date().toISOString();
-    // Dedup: skip if the same timestamp as the most recent event
+    const newAgents = data.agents || [];
     const lastEv = (DS.activity || [])[0];
-    if (lastEv && lastEv.ts === newTs && lastEv.reason === (data.reason || 'poll')) {
-      // No change — skip pushing a duplicate
-    } else {
+    
+    // Compute a fingerprint of the current agent state for comparison
+    const fp = newAgents.map(a => (a.project||'') + '|' + (a.action||'') + '|' + (a.agent||'')).sort().join(',');
+    const lastFp = lastEv ? (lastEv._fp || '') : '';
+    
+    // Only push if fingerprint changed, or if there's a real reason (not just poll)
+    const reason = data.reason || 'poll';
+    const meaningfulChange = (reason !== 'poll' && reason !== 'before_prompt_build') || (fp && fp !== lastFp);
+    
+    if (meaningfulChange) {
       const ev = [{
         ts: newTs,
-        reason: data.reason || 'poll',
-        agents: data.agents || [],
+        reason,
+        _fp: fp,
+        agents: newAgents,
         agent_count: data.agent_count || 0,
         active_count: data.active_count || 0,
       }];
@@ -2465,6 +2474,19 @@ async function loadAgentPhase() {
       const elapsed = a.elapsed || '—';
       const action = a.action || '—';
       
+      const hasProject = a.project && a.project !== '—';
+      if (!hasProject && agents.length === 1) {
+        // Show compact card for general chat (no active project)
+        html += '<div class="sg-phase-card">' +
+          '<div class="sg-phase-top"><strong style="color:var(--text-bright)">' + esc(name) + '</strong>' +
+          '<span class="status-badge ' + agentStatusClass(status) + '">' + esc(status) + '</span></div>' +
+          '<div class="sg-phase-info">' +
+          '<div class="sg-phase-row"><span class="label">Active Project</span><span class="value" style="color:var(--text-dim)">None (general chat)</span></div>' +
+          '<div class="sg-phase-row"><span class="label">Action</span><span class="value">' + esc(action) + '</span></div>' +
+          '<div class="sg-phase-row"><span class="label">Elapsed</span><span class="value">' + esc(elapsed) + '</span></div>' +
+          '</div></div>';
+        continue;
+      }
       html += '<div class="sg-phase-card">' +
         '<div class="sg-phase-top"><strong style="color:var(--text-bright)">' + esc(name) + '</strong>' +
         '<span class="status-badge ' + agentStatusClass(status) + '">' + esc(status) + '</span></div>' +

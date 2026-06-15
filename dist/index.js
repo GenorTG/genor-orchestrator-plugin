@@ -1523,11 +1523,7 @@ const _plugin = definePluginEntry({
             try {
                 sessionTracker.setStatus("prompting");
                 sessionTracker.trackAction("building_prompt");
-                // Only write live agents if we have a project context, otherwise the event
-                // is just noise with null fields (project, task, model, token_usage all 0).
-                if (sessionTracker.currentProject) {
-                    writeLiveAgents("before_prompt_build", sessionTracker, logger);
-                }
+                writeLiveAgents("before_prompt_build", sessionTracker, logger);
                 if (!sessionTracker.currentProject)
                     return;
                 const loc = getProjectLocation(sessionTracker.currentProject, dataDir);
