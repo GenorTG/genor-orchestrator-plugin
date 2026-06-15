@@ -327,14 +327,14 @@ class SessionTracker {
         this.lastError = null;
         this.errorCount = 0;
         this.lastActivityTimestamp = Date.now();
-        if (reason === "new" || reason === "reset") {
-            this.currentProject = null;
-            this.currentTask = null;
-            this.currentModel = null;
-            this.currentModelProvider = null;
-            this.currentModelTier = 0;
-            this.tokenUsage = { input: 0, output: 0, total: 0 };
-        }
+        // Always reset project context on session start — never carry over
+        // stale project/task/model from a previous session.
+        this.currentProject = null;
+        this.currentTask = null;
+        this.currentModel = null;
+        this.currentModelProvider = null;
+        this.currentModelTier = 0;
+        this.tokenUsage = { input: 0, output: 0, total: 0 };
     }
     end() {
         if (!this.currentProject)
