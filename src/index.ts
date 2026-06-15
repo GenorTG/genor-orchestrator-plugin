@@ -1389,18 +1389,21 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
   const loc = getProjectLocation(project, dataDir);
   const toc = loc ? buildProjectToc(loc) : [];
   
-  // Auto-log a detailed session entry with goal tracking
-  logSession(dataDir, {
-    project,
-    task,
-    model: sessionTracker.currentModel || "pending",
-    agent: sessionTracker.currentAgent || sessionTracker.sessionKey || "system",
-    status: "running",
-    duration: "",
-    session_key: sessionTracker.sessionKey || "",
-    goal: task,
-    notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"} | Workflow: ${projCfg.workflow?.enabled ? "ON" : "OFF"}`,
-  }, logger);
+  // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
+  const sessionModel = sessionTracker.currentModel;
+  if (sessionModel && sessionModel !== "pending") {
+    logSession(dataDir, {
+      project,
+      task,
+      model: sessionModel,
+      agent: sessionTracker.currentAgent || sessionTracker.sessionKey || "system",
+      status: "running",
+      duration: "",
+      session_key: sessionTracker.sessionKey || "",
+      goal: task,
+      notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"} | Workflow: ${projCfg.workflow?.enabled ? "ON" : "OFF"}`,
+    }, logger);
+  }
   
   logger.info("context", `Context set: ${project}/${task} [session=${sessionTracker.sessionKey}]`);
   return {

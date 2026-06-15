@@ -87,7 +87,7 @@ Dashboard: `http://localhost:8766`
 
 ## Companion
 
-[Genor's Orchestration Skill](https://github.com/GenorTG/genor-orchestrator-skill) — dashboard web UI, coding workflow docs, and operational scripts. Installed via:
+[Genor's Orchestration Skill](https://github.com/GenorTG/genor-orchestrator-plugin) — dashboard web UI, coding workflow docs, and operational scripts. Installed via:
 
 ```bash
 clawhub install genor-orchestrator
