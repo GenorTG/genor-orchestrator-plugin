@@ -288,7 +288,15 @@ class SessionTracker {
         if (file && !this.touchedFiles.includes(file)) {
             this.touchedFiles.push(file);
         }
-        this.actionHistory.push({ action, file, ts: new Date().toISOString() });
+        // Dedup: skip consecutive identical actions (e.g., repeated "building_prompt")
+        const last = this.actionHistory[this.actionHistory.length - 1];
+        if (last && last.action === action && last.file === file) {
+            // Just update timestamp on the existing entry
+            last.ts = new Date().toISOString();
+        }
+        else {
+            this.actionHistory.push({ action, file, ts: new Date().toISOString() });
+        }
         if (this.actionHistory.length > 100)
             this.actionHistory = this.actionHistory.slice(-100);
     }
@@ -1515,7 +1523,11 @@ const _plugin = definePluginEntry({
             try {
                 sessionTracker.setStatus("prompting");
                 sessionTracker.trackAction("building_prompt");
-                writeLiveAgents("before_prompt_build", sessionTracker, logger);
+                // Only write live agents if we have a project context, otherwise the event
+                // is just noise with null fields (project, task, model, token_usage all 0).
+                if (sessionTracker.currentProject) {
+                    writeLiveAgents("before_prompt_build", sessionTracker, logger);
+                }
                 if (!sessionTracker.currentProject)
                     return;
                 const loc = getProjectLocation(sessionTracker.currentProject, dataDir);

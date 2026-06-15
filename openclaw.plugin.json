@@ -2,7 +2,7 @@
     "id": "genor-orchestrator",
     "name": "Genor's Orchestrator",
     "description": "Model routing, session logging, live agent tracking, project context automation, ADR tracking, hooks, background maintenance. Dashboard is a separate PM2 sidecar.",
-    "version": "0.4.3",
+    "version": "0.5.7",
     "configSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -55,7 +55,9 @@
             "orchestrator_log_decision",
             "orchestrator_get_logs",
             "orchestrator_sync_project",
-            "orchestrator_get_project_docs"
+            "orchestrator_get_project_docs",
+            "orchestrator_advance_phase",
+            "orchestrator_get_routing"
         ]
     },
     "openclaw": {
