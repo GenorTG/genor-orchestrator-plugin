@@ -446,6 +446,11 @@ class SessionTracker {
   lastActivityTimestamp: number = Date.now();
   errorCount: number = 0;
   workflow: WorkflowTracker = new WorkflowTracker();
+  // Per-session project contexts — keyed by sessionKey.
+  // A session only gets project context injected if it explicitly
+  // registered via orchestrator_set_context. This prevents project
+  // context from bleeding between unrelated sessions.
+  private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
 
   trackModel(model: string, provider?: string, tier?: number): void {
     this.currentModel = model;
@@ -568,6 +573,13 @@ class SessionTracker {
     this.agentStatus = "working";
     // Reset workflow tracker with project config
     this.workflow.reset(workflowConfig);
+    // Store per-session so before_prompt_build can scope injection
+    if (this.sessionKey) {
+      this.sessionContexts.set(this.sessionKey, {
+        project, task, model: this.currentModel, modelProvider: this.currentModelProvider,
+        modelTier: this.currentModelTier, timestamp: Date.now(), workflowConfig
+      });
+    }
   }
 
   clearContext(): void {
@@ -582,7 +594,21 @@ class SessionTracker {
     this.workflow.reset({ enabled: false });
     this.agentStatus = "idle";
     this.lastError = null;
+    // Remove per-session context for this session
+    if (this.sessionKey) this.sessionContexts.delete(this.sessionKey);
     if (prev) this.trackAction("Clearing context");
+  }
+
+  /** Get project context for a specific session key. */
+  getSessionContext(sessionKey: string): { project: string; task: string | null; model: string | null } | null {
+    const ctx = this.sessionContexts.get(sessionKey);
+    if (!ctx) return null;
+    return { project: ctx.project, task: ctx.task, model: ctx.model };
+  }
+
+  /** Clean up session context for a given key. Call on session_end. */
+  removeSessionContext(sessionKey: string): void {
+    this.sessionContexts.delete(sessionKey);
   }
 }
 
@@ -1533,6 +1559,9 @@ const _plugin: Record<string, any> = definePluginEntry({
         sessionTracker.setStatus("complete");
         sessionTracker.trackAction("session_ending");
         writeLiveAgents("session_end", sessionTracker, logger);
+        // Clean up per-session project context
+        const sk_end = (event.sessionKey || "").toString();
+        if (sk_end) sessionTracker.removeSessionContext(sk_end);
         const info = sessionTracker.end();
         if (info) {
           // Check if workflow enforcement needs auto-commit
@@ -1656,24 +1685,26 @@ const _plugin: Record<string, any> = definePluginEntry({
       } catch (err: any) { logger.error("hooks", `before_model_resolve error: ${err.message}`); }
     });
 
-    api.on("before_prompt_build", async () => {
+    api.on("before_prompt_build", async (event, hookCtx) => {
       try {
         sessionTracker.setStatus("prompting");
         sessionTracker.trackAction("building_prompt");
         writeLiveAgents("before_prompt_build", sessionTracker, logger);
-        if (!sessionTracker.currentProject) return;
-        const loc = getProjectLocation(sessionTracker.currentProject, dataDir);
-        let ctx = `⚡ Project: ${sessionTracker.currentProject}`;
-        if (sessionTracker.currentTask) ctx += ` | Task: ${sessionTracker.currentTask}`;
+        // Scope project context injection to the session that registered it.
+        const sk = hookCtx?.sessionKey || sessionTracker.sessionKey;
+        const pc = sk ? sessionTracker.getSessionContext(sk) : null;
+        if (!pc) return;
+        const loc = getProjectLocation(pc.project, dataDir);
+        let ctx = `⚡ Project: ${pc.project}`;
+        if (pc.task) ctx += ` | Task: ${pc.task}`;
         ctx += `\nLocation: ${loc || "not set"}`;
         ctx += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
-        ctx += ` | Data: orchestrator-data/projects/${sessionTracker.currentProject}/`;
+        ctx += ` | Data: orchestrator-data/projects/${pc.project}/`;
         return { prependContext: ctx };
       } catch { /* */ }
     });
 
     api.on("agent_end", async () => {
-      sessionTracker.setStatus("stopped");
       sessionTracker.trackAction("agent_stopped");
       writeLiveAgents("agent_end", sessionTracker, logger);
       logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
