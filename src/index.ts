@@ -451,6 +451,11 @@ class SessionTracker {
   // registered via orchestrator_set_context. This prevents project
   // context from bleeding between unrelated sessions.
   private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
+  // Explicitly registered sessions — only these get orchestrator tracking.
+  // A session must call orchestrator_register before using any orchestrator
+  // features. This ensures no chat/logging session accidentally gets project
+  // context injected into its prompts.
+  private registeredSessions: Set<string> = new Set();
 
   trackModel(model: string, provider?: string, tier?: number): void {
     this.currentModel = model;
@@ -609,6 +614,31 @@ class SessionTracker {
   /** Clean up session context for a given key. Call on session_end. */
   removeSessionContext(sessionKey: string): void {
     this.sessionContexts.delete(sessionKey);
+  }
+
+  /** Register a session for orchestrator tracking. Returns true if newly registered. */
+  registerSession(sessionKey: string): boolean {
+    if (this.registeredSessions.has(sessionKey)) return false;
+    this.registeredSessions.add(sessionKey);
+    return true;
+  }
+
+  /** Unregister a session from orchestrator tracking. */
+  unregisterSession(sessionKey: string): boolean {
+    if (!this.registeredSessions.has(sessionKey)) return false;
+    this.registeredSessions.delete(sessionKey);
+    this.sessionContexts.delete(sessionKey);
+    return true;
+  }
+
+  /** Check if a session is registered for orchestrator tracking. */
+  isSessionRegistered(sessionKey: string): boolean {
+    return this.registeredSessions.has(sessionKey);
+  }
+
+  /** Get list of all registered session keys. */
+  getRegisteredSessions(): string[] {
+    return Array.from(this.registeredSessions);
   }
 }
 
@@ -1561,7 +1591,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         writeLiveAgents("session_end", sessionTracker, logger);
         // Clean up per-session project context
         const sk_end = (event.sessionKey || "").toString();
-        if (sk_end) sessionTracker.removeSessionContext(sk_end);
+        if (sk_end) sessionTracker.unregisterSession(sk_end);
         const info = sessionTracker.end();
         if (info) {
           // Check if workflow enforcement needs auto-commit
@@ -1692,7 +1722,11 @@ const _plugin: Record<string, any> = definePluginEntry({
         writeLiveAgents("before_prompt_build", sessionTracker, logger);
         // Scope project context injection to the session that registered it.
         const sk = hookCtx?.sessionKey || sessionTracker.sessionKey;
-        const pc = sk ? sessionTracker.getSessionContext(sk) : null;
+        // ONLY inject project context for explicitly registered sessions.
+        // A session must call orchestrator_register() to opt in — no
+        // chat/logging session ever gets context unless it registered.
+        if (!sk || !sessionTracker.isSessionRegistered(sk)) return;
+        const pc = sessionTracker.getSessionContext(sk);
         if (!pc) return;
         const loc = getProjectLocation(pc.project, dataDir);
         let ctx = `⚡ Project: ${pc.project}`;
@@ -1740,6 +1774,42 @@ const _plugin: Record<string, any> = definePluginEntry({
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
         return txt(clearContextFn(dataDir, logger));
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_register",
+      label: "Orchestrator Register",
+      description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
+      parameters: Type.Object({}),
+      async execute(_id: string, _params: any) {
+        const sk = sessionTracker.sessionKey;
+        if (!sk) return txt("error: no session key available");
+        const newly = sessionTracker.registerSession(sk);
+        if (newly) {
+          sessionTracker.trackAction("session_registered");
+          writeLiveAgents("register", sessionTracker, logger);
+          logger.info("hooks", `session registered: ${sk}`);
+          return txt("registered");
+        }
+        return txt("already registered");
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_unregister",
+      label: "Orchestrator Unregister",
+      description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking. The session will no longer receive project context injection. Call this when project work is complete or the session should no longer be tracked.",
+      parameters: Type.Object({}),
+      async execute(_id: string, _params: any) {
+        const sk = sessionTracker.sessionKey;
+        if (!sk) return txt("error: no session key available");
+        sessionTracker.unregisterSession(sk);
+        sessionTracker.clearContext();
+        sessionTracker.trackAction("session_unregistered");
+        writeLiveAgents("unregister", sessionTracker, logger);
+        logger.info("hooks", `session unregistered: ${sk}`);
+        return txt("unregistered");
       },
     });
 
