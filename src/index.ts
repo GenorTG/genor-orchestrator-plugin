@@ -1459,6 +1459,7 @@ const TOOL_NAMES = [
   "orchestrator_auto_populate", "orchestrator_log_session", "orchestrator_log_decision",
   "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
   "orchestrator_advance_phase",
+  "orchestrator_get_routing",
 ] as const;
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -1873,6 +1874,49 @@ const _plugin: Record<string, any> = definePluginEntry({
         writeLiveAgents("workflow_advance", sessionTracker, logger);
         logger.info("workflow", `Phase advanced: ${wf.currentPhase} (${wf.getProgress()})`);
         return txt({ ok: true, phase: wf.currentPhase, progress: wf.getProgress(), elapsed: wf.getPhaseElapsed(), phase_history: wf.phaseHistory });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  MODEL ROUTING
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_get_routing",
+      label: "Get Model Routing",
+      description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation). Returns the ordered model list and best available model for the given project and category.",
+      parameters: Type.Object({
+        category: Type.String({ description: "Task category: coding, fixing, research, q&a, documentation" }),
+        project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
+      }),
+      async execute(_id: string, params: any) {
+        const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
+        const proj = params.project || sessionTracker.currentProject;
+        if (!proj) {
+          return txt({ ok: false, error: "No project specified and no project context set. Use orchestrator_set_context first or pass a project name." });
+        }
+        const pc = cfg.projects?.[proj];
+        if (!pc) {
+          return txt({ ok: false, error: `Project '${proj}' not found in dashboard-config.json` });
+        }
+        const routing = pc.model_routing;
+        if (!routing) {
+          return txt({ ok: false, error: `No model_routing configured for project '${proj}'` });
+        }
+        const cat = params.category.toLowerCase().trim();
+        const models = routing[cat];
+        if (!models || models.length === 0) {
+          return txt({ ok: false, error: `No models routed for category '${cat}' in project '${proj}'. Available categories: ${Object.keys(routing).join(", ")}` });
+        }
+        return txt({
+          ok: true,
+          project: proj,
+          category: cat,
+          recommended: models[0],
+          fallbacks: models.slice(1),
+          all: models,
+          source: "dashboard-config.json projects." + proj + ".model_routing",
+        });
       },
     });
 
