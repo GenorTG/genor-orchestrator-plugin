@@ -4,7 +4,7 @@ import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 // ═══════════════════════════════════════════════════════════════
 //  TABLE OF CONTENTS — for quick LLM & developer navigation
@@ -585,41 +585,94 @@ class SessionTracker {
 const LIVE_AGENTS_FILE = "live-agents.json";
 
 function writeLiveAgents(reason: string, tracker: SessionTracker, logger?: OrchestratorLogger): void {
+  // Debounced: queues write to disk, coalesces rapid sequential calls
+  queueLiveAgents(reason, tracker);
+}
+
+// Debounce: coalesce rapid sequential writes into one disk write every 500ms
+let _liveAgentsTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingData: { agents: any[]; agent_count: number; active_count: number; last_updated: string; reason: string } | null = null;
+let _pendingState: { project: string | null; task: string | null; model: string | null; agent: string; timestamp: string; subagent_depth: number; action: string | null } | null = null;
+
+function flushLiveAgents(): void {
+  _liveAgentsTimer = null;
   try {
     const dataDir = getDataDir();
-    logger?.debug("live-agents", `Writing ${reason} — project=${tracker.currentProject} action=${tracker.currentAction}`);
-    const agents: any[] = [];
+    if (_pendingData) {
+      const d = _pendingData;
+      _pendingData = null;
+      writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), d);
+    }
+    if (_pendingState) {
+      const s = _pendingState;
+      _pendingState = null;
+      writeJSON(path.join(dataDir, "state.json"), s);
+    }
+  } catch (e: any) {
+    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgents: ${e.message}\n`, 'utf-8'); } catch {}
+  }
+}
 
+function queueLiveAgents(reason: string, tracker: SessionTracker): void {
+  const main = tracker.toLiveState(reason);
+  const agents: any[] = [];
+  if (main.project || main.agent) agents.push(main);
+  for (let i = 0; i < tracker.subagentDepth; i++) {
+    agents.push({
+      agent: `${tracker.currentAgent}::sub-${i + 1}`,
+      project: tracker.currentProject,
+      task: tracker.currentTask,
+      model: tracker.currentModel,
+      model_provider: tracker.currentModelProvider,
+      model_tier: tracker.currentModelTier,
+      subagent_depth: 0,
+      action: "working",
+      current_file: null,
+      agent_status: "working",
+      touched_files: [],
+      action_history: [],
+      token_usage: { input: 0, output: 0, total: 0 },
+      last_error: null,
+      timestamp: new Date().toISOString(),
+      session_key: null,
+      uptime_ms: 0,
+      elapsed: "—",
+      session_started_at: new Date(tracker.sessionStartTimestamp).toISOString(),
+      parent_depth: i + 1,
+    });
+  }
+  _pendingData = {
+    agents,
+    agent_count: agents.length,
+    active_count: agents.filter(a => a.project).length,
+    last_updated: new Date().toISOString(),
+    reason,
+  };
+  if (tracker.currentProject) {
+    _pendingState = {
+      project: tracker.currentProject,
+      task: tracker.currentTask,
+      model: tracker.currentModel,
+      agent: tracker.currentAgent,
+      timestamp: new Date().toISOString(),
+      subagent_depth: tracker.subagentDepth,
+      action: tracker.currentAction,
+    };
+  }
+  if (!_liveAgentsTimer) {
+    _liveAgentsTimer = setTimeout(flushLiveAgents, 500);
+  }
+}
+
+function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
+  if (_liveAgentsTimer) { clearTimeout(_liveAgentsTimer); _liveAgentsTimer = null; }
+  _pendingData = null;
+  _pendingState = null;
+  try {
+    const dataDir = getDataDir();
     const main = tracker.toLiveState(reason);
-    if (main.project || main.agent) {
-      agents.push(main);
-    }
-
-    for (let i = 0; i < tracker.subagentDepth; i++) {
-      agents.push({
-        agent: `${tracker.currentAgent}::sub-${i + 1}`,
-        project: tracker.currentProject,
-        task: tracker.currentTask,
-        model: tracker.currentModel,
-        model_provider: tracker.currentModelProvider,
-        model_tier: tracker.currentModelTier,
-        subagent_depth: 0,
-        action: "working",
-        current_file: null,
-        agent_status: "working",
-        touched_files: [],
-        action_history: [],
-        token_usage: { input: 0, output: 0, total: 0 },
-        last_error: null,
-        timestamp: new Date().toISOString(),
-        session_key: null,
-        uptime_ms: 0,
-        elapsed: "—",
-        session_started_at: new Date(tracker.sessionStartTimestamp).toISOString(),
-        parent_depth: i + 1,
-      });
-    }
-
+    const agents: any[] = [];
+    if (main.project || main.agent) agents.push(main);
     writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), {
       agents,
       agent_count: agents.length,
@@ -627,7 +680,6 @@ function writeLiveAgents(reason: string, tracker: SessionTracker, logger?: Orche
       last_updated: new Date().toISOString(),
       reason,
     });
-
     if (tracker.currentProject) {
       writeJSON(path.join(dataDir, "state.json"), {
         project: tracker.currentProject,
@@ -640,11 +692,7 @@ function writeLiveAgents(reason: string, tracker: SessionTracker, logger?: Orche
       });
     }
   } catch (e: any) {
-    try {
-      if (e?.message) {
-        fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} writeLiveAgents(${reason}): ${e.message}\n`, 'utf-8');
-      }
-    } catch { /* double-fault guard */ }
+    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgentsNow(${reason}): ${e.message}\n`, 'utf-8'); } catch {}
   }
 }
 
@@ -1480,33 +1528,43 @@ const _plugin: Record<string, any> = definePluginEntry({
             try {
               const loc = getProjectLocation(info.project, dataDir);
               if (loc && fs.existsSync(path.join(loc, ".git"))) {
-                const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                const changed = statusRaw.trim().split("\n").filter(Boolean);
-                if (changed.length > 0) {
-                  // Bump patch version
-                  let version = "0.0.0";
-                  const pj = path.join(loc, "package.json");
-                  if (fs.existsSync(pj)) {
-                    try {
-                      version = JSON.parse(fs.readFileSync(pj, "utf-8")).version || "0.0.0";
-                    } catch {}
-                  }
-                  const parts = version.split(".").map(Number);
-                  parts[2] = (parts[2] || 0) + 1;
-                  const newVersion = parts.join(".");
-                  if (fs.existsSync(pj)) {
-                    const pkg = JSON.parse(fs.readFileSync(pj, "utf-8"));
-                    pkg.version = newVersion;
-                    fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
-                  }
-                  execSync("git add -A", { cwd: loc, encoding: "utf-8", timeout: 30000 });
-                  execSync(`git commit -m "v${newVersion}: session ${info.task} [auto-commit]"`, { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                // Non-blocking: spawn async child process for git operations
+                const doAutoCommit = () => {
                   try {
-                    execSync("git tag v${newVersion}", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                    execSync("git push --tags 2>&1", { cwd: loc, encoding: "utf-8", timeout: 15000 });
-                  } catch {}
-                  logger.info("hooks", `Auto-committed v${newVersion} for ${info.project}`);
-                }
+                    const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 10000 });
+                    const changed = statusRaw.trim().split("\n").filter(Boolean);
+                    if (changed.length === 0) return;
+                    // Bump patch version
+                    let version = "0.0.0";
+                    const pj = path.join(loc, "package.json");
+                    if (fs.existsSync(pj)) {
+                      try { version = JSON.parse(fs.readFileSync(pj, "utf-8")).version || "0.0.0"; } catch {}
+                    }
+                    const parts = version.split(".").map(Number);
+                    parts[2] = (parts[2] || 0) + 1;
+                    const newVersion = parts.join(".");
+                    if (fs.existsSync(pj)) {
+                      const pkg = JSON.parse(fs.readFileSync(pj, "utf-8"));
+                      pkg.version = newVersion;
+                      fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+                    }
+                    // Use spawn for async git operations to avoid blocking event loop
+                    const child = spawn("git", ["add", "-A"], { cwd: loc, stdio: "ignore" });
+                    child.on("close", (code: number | null) => {
+                      if (code !== 0) return;
+                      const child2 = spawn("git", ["commit", "-m", `v${newVersion}: session ${info.task} [auto-commit]`], { cwd: loc, stdio: "ignore" });
+                      child2.on("close", (code2: number | null) => {
+                        if (code2 !== 0) return;
+                        spawn("git", ["tag", `v${newVersion}`], { cwd: loc, stdio: "ignore" });
+                        spawn("git", ["push", "--tags"], { cwd: loc, stdio: "ignore" });
+                        logger.info("hooks", `Auto-committed v${newVersion} for ${info.project}`);
+                      });
+                    });
+                  } catch (e: any) {
+                    logger.warn("hooks", `Auto-commit status check failed: ${e.message}`);
+                  }
+                };
+                doAutoCommit();
               }
             } catch (e: any) {
               logger.warn("hooks", `Auto-commit failed: ${e.message}`);
@@ -2010,6 +2068,9 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
       },
     },
     tools: [...TOOL_NAMES],
+    contracts: {
+      tools: [...TOOL_NAMES],
+    },
   },
   enumerable: false,
 });
