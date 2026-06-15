@@ -1441,6 +1441,12 @@ function getLogs(dataDir: string, opts: any, logger: OrchestratorLogger) {
   };
 }
 
+function requireRegistration(): string | null {
+  const sk = sessionTracker.sessionKey;
+  if (sk && sessionTracker.isSessionRegistered(sk)) return null;
+  return "This session is not registered with the orchestrator. Call orchestrator_register first to opt in to orchestrator tracking and project context injection.";
+}
+
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger) {
   projDir(project, dataDir);
   
@@ -1763,6 +1769,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, restart PM2 process.'" }),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(setContext(dataDir, params.project, params.task, logger));
       },
     });
@@ -1773,6 +1781,8 @@ const _plugin: Record<string, any> = definePluginEntry({
       description: "Clear active project context. Disables auto-routing and auto-logging.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(clearContextFn(dataDir, logger));
       },
     });
@@ -1857,6 +1867,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.Optional(Type.String({ description: "Project name for per-project routing rules. Omit for global-only check." })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(checkModels(dataDir, params.project, logger));
       },
     });
@@ -1866,7 +1878,9 @@ const _plugin: Record<string, any> = definePluginEntry({
       label: "Auto-Populate",
       description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.",
       parameters: Type.Object({}),
-      async execute() {
+      async execute(_id: string, _params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(autoPopulate(dataDir, logger));
       },
     });
@@ -1887,6 +1901,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         checked: Type.Optional(Type.Boolean({ description: "Reviewed flag." })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`log: ${params.task}`);
         writeLiveAgents("tool_log_session", sessionTracker, logger);
         return txt(logSession(dataDir, params, logger));
@@ -1906,6 +1922,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         consequences: Type.Optional(Type.String({ description: "Impact of this decision. Format:\n• **Good:** benefits this unlocks\n• **Risks:** things to watch for\n• **Requires:** follow-up work or migrations needed" })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(logDecision(dataDir, params, logger));
       },
     });
@@ -1921,6 +1939,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         since: Type.Optional(Type.String({ description: "ISO timestamp filter." })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(getLogs(dataDir, params, logger));
       },
     });
@@ -1933,6 +1953,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.String({ description: "Project name to sync." }),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`sync: ${params.project}`);
         writeLiveAgents("tool_sync_project", sessionTracker, logger);
         return txt(syncProject(dataDir, params.project, logger));
@@ -1947,6 +1969,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.String({ description: "Project name." }),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         return txt(getProjectDocsFn(dataDir, params.project, logger));
       },
     });
@@ -1960,6 +1984,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         skip: Type.Optional(Type.Boolean({ description: "Mark current phase as skipped." })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         const wf = sessionTracker.workflow;
         if (!wf.enabled) {
           return txt({ ok: false, error: "Workflow enforcement is not enabled for this project. Set workflow.enabled in dashboard-config.json" });
@@ -1999,6 +2025,8 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
       async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
         const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
         const proj = params.project || sessionTracker.currentProject;
         if (!proj) {
@@ -2025,6 +2053,31 @@ const _plugin: Record<string, any> = definePluginEntry({
           fallbacks: models.slice(1),
           all: models,
           source: "dashboard-config.json projects." + proj + ".model_routing",
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_get_registered_sessions",
+      label: "Get Registered Sessions",
+      description: "List all currently registered orchestrator sessions with their project context, status, and activity. Only sessions that explicitly called orchestrator_register are tracked.",
+      parameters: Type.Object({}),
+      async execute(_id: string, _params: any) {
+        const keys = sessionTracker.getRegisteredSessions();
+        const sessions = keys.map(k => {
+          const ctx = sessionTracker.getSessionContext(k);
+          return {
+            session_key: k,
+            has_context: !!ctx,
+            project: ctx?.project || null,
+            task: ctx?.task || null,
+            is_current: k === sessionTracker.sessionKey,
+          };
+        });
+        return txt({
+          ok: true,
+          count: sessions.length,
+          registered_sessions: sessions,
         });
       },
     });
