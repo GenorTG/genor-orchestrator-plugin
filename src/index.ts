@@ -118,6 +118,7 @@ interface DashboardConfig {
       qa_retries?: number;
       skip_phases?: string[];
     };
+    model_routing?: Record<string, string[]>;
   }>;
   safeguards?: SafeguardsConfig;
 }
