@@ -1494,40 +1494,23 @@ const _plugin = definePluginEntry({
         catch { /* */ }
         //  SLASH COMMANDS
         //  Individually registered for Discord autocomplete:
-        //    /genor — command reference
+        //    /genor-COMMAND — all orchestrator slash commands
         //    /genor-dashboard — dashboard URL
         //    /genor-status — quick status
         //    /genor-help — command reference
-        api.registerCommand({
-            name: "genor",
-            description: "Genor's Orchestrator \u2014 available commands",
-            requireAuth: false,
-            handler: () => ({
-                text: [
-                    "**\U0001f3e0 Genor's Orchestrator \u2014 Commands**",
-                    "",
-                    "**/genor** \u2014 This help",
-                    "**/genor-dashboard** \u2014 Dashboard URL",
-                    "**/genor-status** \u2014 Quick status overview",
-                    "**/genor-help** \u2014 This help",
-                    "",
-                    "Dashboard: http://${tailscaleHost}:${dashPort}",
-                ].join("\n"),
-                continueAgent: false,
-            }),
-        });
+        //    /genor-git-commit — git commit + versioning
         api.registerCommand({
             name: "genor-dashboard",
-            description: "Show the Genor's Orchestrator Dashboard URL",
+            description: "Show GenorBoard dashboard URL",
             requireAuth: false,
             handler: () => ({
-                text: `**\U0001f3e0 Genor's Orchestrator Dashboard**\n\n**URL:** http://${tailscaleHost}:${dashPort}\n**Port:** ${dashPort}\n**Data:** ${dataDir}`,
+                text: `**\U0001f3e0 GenorBoard**\n\n**URL:** http://${tailscaleHost}:${dashPort}\n**Port:** ${dashPort}\n**Data:** ${dataDir}`,
                 continueAgent: false,
             }),
         });
         api.registerCommand({
             name: "genor-status",
-            description: "Quick status overview of the orchestrator",
+            description: "Quick orchestrator status overview",
             requireAuth: false,
             handler: () => ({
                 text: [
@@ -1543,23 +1526,100 @@ const _plugin = definePluginEntry({
         });
         api.registerCommand({
             name: "genor-help",
-            description: "Genor's Orchestrator command reference",
+            description: "List all /genor-* commands",
             requireAuth: false,
             handler: () => ({
                 text: [
-                    "**\U0001f3e0 Genor's Orchestrator \u2014 Commands**",
+                    "**\U0001f3e0 GenorBoard \u2014 Available Commands**",
                     "",
-                    "**/genor** \u2014 This help",
+                    "**/genor-help** \u2014 This list",
                     "**/genor-dashboard** \u2014 Dashboard URL",
                     "**/genor-status** \u2014 Quick status overview",
-                    "**/genor-help** \u2014 This help",
+                    "**/genor-git-commit** \u2014 Commit project changes with versioning",
                     "",
                     "Dashboard: http://${tailscaleHost}:${dashPort}",
                 ].join("\n"),
                 continueAgent: false,
             }),
         });
-        logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active`);
+        api.registerCommand({
+            name: "genor-git-commit",
+            description: "Git commit + version bump for the current project",
+            requireAuth: false,
+            handler: () => {
+                try {
+                    const proj = sessionTracker.currentProject;
+                    if (!proj) {
+                        return { text: "**\u26a0 No project context.** Set context first with `/genor-set-context project=... task=...` or use `orchestrator_set_context`.", continueAgent: false };
+                    }
+                    const loc = getProjectLocation(proj, dataDir);
+                    if (!loc || !fs.existsSync(path.join(loc, ".git"))) {
+                        return { text: `**\u26a0 ${proj}** has no git repo at \`${loc}\`. Cannot commit.`, continueAgent: false };
+                    }
+                    // Check git status
+                    const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 10000 });
+                    const changed = statusRaw.trim().split("\n").filter(Boolean);
+                    if (changed.length === 0) {
+                        return { text: `**\u2705 ${proj}** \u2014 nothing to commit, working tree clean.`, continueAgent: false };
+                    }
+                    // Read current version from package.json
+                    let currentVersion = "0.0.0";
+                    const pj = path.join(loc, "package.json");
+                    if (fs.existsSync(pj)) {
+                        try {
+                            currentVersion = JSON.parse(fs.readFileSync(pj, "utf-8")).version || "0.0.0";
+                        }
+                        catch { }
+                    }
+                    // Bump patch version
+                    const parts = currentVersion.split(".").map(Number);
+                    parts[2] = (parts[2] || 0) + 1;
+                    const newVersion = parts.join(".");
+                    // Update package.json with new version
+                    if (fs.existsSync(pj)) {
+                        const pkg = JSON.parse(fs.readFileSync(pj, "utf-8"));
+                        pkg.version = newVersion;
+                        fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+                    }
+                    // Generate commit message from status
+                    const added = changed.filter(l => l.startsWith("?")).length;
+                    const modified = changed.filter(l => l.startsWith(" M") || l.startsWith("M ")).length;
+                    const deleted = changed.filter(l => l.startsWith(" D") || l.startsWith("D ")).length;
+                    const summary = [
+                        modified > 0 ? `${modified} modified` : "",
+                        added > 0 ? `${added} added` : "",
+                        deleted > 0 ? `${deleted} deleted` : "",
+                    ].filter(Boolean).join(", ");
+                    const commitMsg = `v${newVersion}: auto-commit (${summary || "changes"})`;
+                    // Git operations
+                    execSync("git add -A", { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                    execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                    execSync(`git tag v${newVersion}`, { cwd: loc, encoding: "utf-8", timeout: 10000 });
+                    // Try push (may fail if no remote)
+                    let pushResult = "";
+                    try {
+                        pushResult = execSync("git push --tags 2>&1", { cwd: loc, encoding: "utf-8", timeout: 30000 });
+                    }
+                    catch (e) {
+                        pushResult = "Push skipped: " + (e.message || "no remote");
+                    }
+                    return {
+                        text: [
+                            `**\u2705 Committed v${newVersion} \u2014 ${proj}**`,
+                            `**Repository:** \`${loc}\``,
+                            `**Changes:** ${changed.length} files (${summary})`,
+                            `**Message:** ${commitMsg}`,
+                            `**Push:** ${pushResult.includes("*") ? "\u2705 pushed" : "\u26a0 " + pushResult}`,
+                        ].join("\n"),
+                        continueAgent: false,
+                    };
+                }
+                catch (e) {
+                    return { text: `**\u274c Git commit failed:** ${e.message}`, continueAgent: false };
+                }
+            },
+        });
+        logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 4 slash commands`);
     },
 });
 // ═══════════════════════════════════════════════════════════════
