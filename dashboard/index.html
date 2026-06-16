@@ -2411,7 +2411,10 @@ function refreshChatSessions() {
     const live = (DS?.all?.sessions || []).find(s2 => s2.key === key) ? '● ' : '○ ';
     const opt = document.createElement('option');
     opt.value = key;
-    opt.textContent = live + (s.displayName || 'Unnamed') + ' — ' + (s.model || '?');
+    const shortKey = key.length > 12 ? key.slice(-8) : '';
+    const name = (s.displayName || 'Unnamed');
+    const status = s.status ? ' [' + s.status + ']' : '';
+    opt.textContent = live + name + (shortKey ? ' (' + shortKey + ')' : '') + status + ' — ' + (s.model || '?');
     sel.appendChild(opt);
   });
 
