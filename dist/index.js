@@ -1645,8 +1645,20 @@ const _plugin = definePluginEntry({
                 writeLiveAgents("subagent_ended", sessionTracker, logger);
             }
         });
-        api.on("before_model_resolve", async (event) => {
+        api.on("before_model_resolve", async (event, hookCtx) => {
             try {
+                // Ensure sessionKey is populated for any active session.
+                // session_start may not have fired for sessions that existed before
+                // the plugin was loaded or after a gateway restart. Lazily populate
+                // the key on the first turn so orchestrator_register works.
+                const ctxSessionKey = hookCtx?.sessionKey || "";
+                if (ctxSessionKey && !sessionTracker.sessionKey) {
+                    const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
+                    if (!isBackground) {
+                        sessionTracker.start(ctxSessionKey, "resumed");
+                        logger.debug("hooks", `before_model_resolve: populated sessionKey=${ctxSessionKey}`);
+                    }
+                }
                 sessionTracker.setStatus("resolving");
                 sessionTracker.trackAction("resolving_model");
                 writeLiveAgents("before_model_resolve", sessionTracker, logger);
