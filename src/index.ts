@@ -1600,9 +1600,32 @@ const TOOL_NAMES = [
   "orchestrator_get_config", "orchestrator_get_models", "orchestrator_check_models",
   "orchestrator_auto_populate", "orchestrator_log_session", "orchestrator_log_decision",
   "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
-  "orchestrator_advance_phase",
-  "orchestrator_get_routing",
+  "orchestrator_advance_phase", "orchestrator_get_routing",
+  "orchestrator_register", "orchestrator_unregister", "orchestrator_get_registered_sessions",
 ] as const;
+
+// Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
+// Each entry matches an api.registerTool({...}) call in register() below.
+// Parameters use OpenClaw's TypeBox schema compiled to JSON Schema.
+const TOOL_METADATA: Array<{ name: string; label: string; description: string; parameters: any }> = [
+  { name: "orchestrator_set_context", label: "Orchestrator Set Context", description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name (e.g., kfinance, kotw)." }, task: { type: "string", description: "Describe the task you are about to do." }, original_prompt: { type: "string", description: "OPTIONAL: The original user request that triggered this task." } }, required: ["project", "task"] } },
+  { name: "orchestrator_clear_context", label: "Orchestrator Clear Context", description: "Clear active project context. Disables auto-routing and auto-logging.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_register", label: "Orchestrator Register", description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_unregister", label: "Orchestrator Unregister", description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_get_status", label: "Status", description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_get_config", label: "Config", description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_get_models", label: "Models", description: "List models from the model inventory with optional filters (status, provider, search, project routing).", parameters: { type: "object", properties: { status: { type: "string", description: "Filter by status: active, discovered, offline, removed. Comma-separated." }, provider: { type: "string", description: "Filter by provider name (partial match)." }, search: { type: "string", description: "Search by model ID or name (partial match)." }, agent_ready: { type: "boolean", description: "Filter by agent_ready flag." }, project: { type: "string", description: "Apply project routing filters to results." } } } },
+  { name: "orchestrator_check_models", label: "Check Models (routing)", description: "Check which models are eligible for a project, applying all routing filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name for per-project routing rules. Omit for global-only check." } } } },
+  { name: "orchestrator_auto_populate", label: "Auto-Populate", description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_log_session", label: "Log Session", description: "Log a completed session to the per-project session log. Writes a structured session entry with full metadata.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, task: { type: "string", description: "Task description." }, model: { type: "string", description: "Model used." }, agent: { type: "string", description: "Agent name." }, status: { type: "string", description: "Session status." } }, required: ["project", "task", "model"] } },
+  { name: "orchestrator_log_decision", label: "Log Decision", description: "Log an architecture decision record (ADR) to the project.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Decision title." }, context: { type: "string", description: "Why this decision was needed." }, decision: { type: "string", description: "What was decided." } }, required: ["project", "title", "context", "decision"] } },
+  { name: "orchestrator_get_logs", label: "Logs", description: "Query orchestration logs: routing decisions, model choices, session activity, config changes.", parameters: { type: "object", properties: { limit: { type: "number", description: "Max entries (default: 50)." }, level: { type: "string", description: "Minimum level: debug, info, warn, error." }, source: { type: "string", description: "Filter by source (e.g., routing, session, models)." }, since: { type: "string", description: "ISO timestamp filter." } } } },
+  { name: "orchestrator_sync_project", label: "Sync Project", description: "Sync a registered project with the orchestrator: regenerates CONTEXT.md and KEY_FILES.md from the project source.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, commit: { type: "boolean", description: "Auto-commit changes to the project repo." } }, required: ["project"] } },
+  { name: "orchestrator_get_project_docs", label: "Project Docs", description: "Get project documentation files (CONTEXT.md, KEY_FILES.md, RECOVERY.md) from the orchestrator data directory.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." } }, required: ["project"] } },
+  { name: "orchestrator_advance_phase", label: "Advance Workflow Phase", description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish).", parameters: { type: "object", properties: { phase: { type: "string", description: "Target phase to transition to. Omit to auto-advance." }, skip: { type: "boolean", description: "Mark current phase as skipped." } } } },
+  { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
+  { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
+];
 
 const PLUGIN_ID = "genor-orchestrator";
 
@@ -1959,8 +1982,6 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.Optional(Type.String({ description: "Project name for per-project routing rules. Omit for global-only check." })),
       }),
       async execute(_id: string, params: any) {
-        const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: reg });
         return txt(checkModels(dataDir, params.project, logger));
       },
     });
@@ -2031,8 +2052,6 @@ const _plugin: Record<string, any> = definePluginEntry({
         since: Type.Optional(Type.String({ description: "ISO timestamp filter." })),
       }),
       async execute(_id: string, params: any) {
-        const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: reg });
         return txt(getLogs(dataDir, params, logger));
       },
     });
@@ -2061,8 +2080,6 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.String({ description: "Project name." }),
       }),
       async execute(_id: string, params: any) {
-        const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: reg });
         return txt(getProjectDocsFn(dataDir, params.project, logger));
       },
     });
@@ -2117,8 +2134,6 @@ const _plugin: Record<string, any> = definePluginEntry({
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
       async execute(_id: string, params: any) {
-        const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: reg });
         const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
         const proj = params.project || sessionTracker.currentProject;
         if (!proj) {
@@ -2368,10 +2383,12 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
         maintenanceIntervalMs: { type: "number", description: "Background maintenance interval in ms. (default: 1800000 = 30min)" },
       },
     },
-    tools: [...TOOL_NAMES],
-    contracts: {
-      tools: [...TOOL_NAMES],
-    },
+    tools: TOOL_METADATA.map(t => ({
+      name: t.name,
+      label: t.label,
+      description: t.description,
+      parameters: t.parameters,
+    })),
   },
   enumerable: false,
 });

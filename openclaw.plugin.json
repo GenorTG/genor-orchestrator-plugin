@@ -1,68 +1,270 @@
 {
-    "id": "genor-orchestrator",
-    "name": "Genor's Orchestrator",
-    "description": "Model routing, session logging, live agent tracking, project context automation, ADR tracking, hooks, background maintenance. Dashboard is a separate PM2 sidecar.",
-    "version": "0.5.27",
-    "configSchema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "orchestratorDataDir": {
-                "type": "string",
-                "description": "Override for orchestrator-data directory. Defaults to workspace-root/orchestrator-data/ or ORCHESTRATOR_DATA_DIR env."
-            },
-            "logLevel": {
-                "type": "string",
-                "enum": [
-                    "debug",
-                    "info",
-                    "warn",
-                    "error"
-                ],
-                "description": "Logging level. (default: info)"
-            },
-            "logRetentionDays": {
-                "type": "number",
-                "description": "Days to retain orchestration log entries. (default: 30)"
-            },
-            "maintenanceIntervalMs": {
-                "type": "number",
-                "description": "Background maintenance interval in ms. (default: 1800000 = 30min)"
-            },
-            "dashboardPort": {
-                "type": "number",
-                "description": "Dashboard web UI port (default: 8767)"
-            },
-            "dashboardHost": {
-                "type": "string",
-                "description": "Dashboard hostname override"
-            }
-        }
-    },
-    "activation": {
-        "onStartup": true
-    },
-    "contracts": {
-        "tools": [
-            "orchestrator_set_context",
-            "orchestrator_clear_context",
-            "orchestrator_get_status",
-            "orchestrator_get_config",
-            "orchestrator_get_models",
-            "orchestrator_check_models",
-            "orchestrator_auto_populate",
-            "orchestrator_log_session",
-            "orchestrator_log_decision",
-            "orchestrator_get_logs",
-            "orchestrator_sync_project",
-            "orchestrator_get_project_docs",
-            "orchestrator_advance_phase",
-            "orchestrator_get_routing"
-        ]
-    },
-    "openclaw": {
-        "build": {
-            "openclawVersion": ">=2026.5.17"
-        }
+  "id": "genor-orchestrator",
+  "name": "Genor's Orchestrator",
+  "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
+  "version": "0.5.28",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "orchestratorDataDir": {
+        "type": "string",
+        "description": "Override data directory path"
+      },
+      "logLevel": {
+        "type": "string",
+        "description": "Log level: debug, info, warn, error. (default: info)"
+      },
+      "logRetentionDays": {
+        "type": "number",
+        "description": "Log retention in days. (default: 30)"
+      },
+      "dashboardPort": {
+        "type": "number",
+        "description": "Dashboard web UI port (default: 8766)"
+      },
+      "maintenanceIntervalMs": {
+        "type": "number",
+        "description": "Background maintenance interval in ms. (default: 1800000 = 30min)"
+      }
     }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "openclaw": {
+    "build": {
+      "openclawVersion": ">=2026.5.17"
+    }
+  },
+  "contracts": {
+    "tools": [
+      {
+        "name": "orchestrator_set_context",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Project name"
+            },
+            "task": {
+              "type": "string",
+              "description": "Task description"
+            }
+          },
+          "required": [
+            "project",
+            "task"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_clear_context",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_register",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_unregister",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_get_status",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_get_config",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_get_models",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "search": {
+              "type": "string"
+            },
+            "agent_ready": {
+              "type": "boolean"
+            },
+            "project": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "orchestrator_check_models",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "orchestrator_auto_populate",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "orchestrator_log_session",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project",
+            "task",
+            "model"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_log_decision",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "context": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project",
+            "title",
+            "context",
+            "decision"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_get_logs",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            },
+            "level": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "since": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "orchestrator_sync_project",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_get_project_docs",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_advance_phase",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string"
+            },
+            "skip": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "orchestrator_get_routing",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "category"
+          ]
+        }
+      },
+      {
+        "name": "orchestrator_get_registered_sessions",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ]
+  }
 }
