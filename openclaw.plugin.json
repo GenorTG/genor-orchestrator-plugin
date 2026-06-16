@@ -2,7 +2,7 @@
   "id": "genor-orchestrator",
   "name": "Genor's Orchestrator",
   "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
-  "version": "0.5.28",
+  "version": "0.5.3",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -38,233 +38,23 @@
   },
   "contracts": {
     "tools": [
-      {
-        "name": "orchestrator_set_context",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string",
-              "description": "Project name"
-            },
-            "task": {
-              "type": "string",
-              "description": "Task description"
-            }
-          },
-          "required": [
-            "project",
-            "task"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_clear_context",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_register",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_unregister",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_get_status",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_get_config",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_get_models",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string"
-            },
-            "provider": {
-              "type": "string"
-            },
-            "search": {
-              "type": "string"
-            },
-            "agent_ready": {
-              "type": "boolean"
-            },
-            "project": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      {
-        "name": "orchestrator_check_models",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      {
-        "name": "orchestrator_auto_populate",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "orchestrator_log_session",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string"
-            },
-            "task": {
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "project",
-            "task",
-            "model"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_log_decision",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string"
-            },
-            "title": {
-              "type": "string"
-            },
-            "context": {
-              "type": "string"
-            },
-            "decision": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "project",
-            "title",
-            "context",
-            "decision"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_get_logs",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "limit": {
-              "type": "number"
-            },
-            "level": {
-              "type": "string"
-            },
-            "source": {
-              "type": "string"
-            },
-            "since": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      {
-        "name": "orchestrator_sync_project",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "project"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_get_project_docs",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "project": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "project"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_advance_phase",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "phase": {
-              "type": "string"
-            },
-            "skip": {
-              "type": "boolean"
-            }
-          }
-        }
-      },
-      {
-        "name": "orchestrator_get_routing",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "category": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "category"
-          ]
-        }
-      },
-      {
-        "name": "orchestrator_get_registered_sessions",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      }
+      "orchestrator_set_context",
+      "orchestrator_clear_context",
+      "orchestrator_register",
+      "orchestrator_unregister",
+      "orchestrator_get_status",
+      "orchestrator_get_config",
+      "orchestrator_get_models",
+      "orchestrator_check_models",
+      "orchestrator_auto_populate",
+      "orchestrator_log_session",
+      "orchestrator_log_decision",
+      "orchestrator_get_logs",
+      "orchestrator_sync_project",
+      "orchestrator_get_project_docs",
+      "orchestrator_advance_phase",
+      "orchestrator_get_routing",
+      "orchestrator_get_registered_sessions"
     ]
   }
 }
