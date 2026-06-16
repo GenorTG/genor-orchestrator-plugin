@@ -1224,10 +1224,33 @@ function renderActivityFeed() {
     shown++;
     const lvl = e.level || 'info';
     const lvlClass = lvl === 'success' ? 'success' : lvl;
+    // Format a human-readable message from log entry fields
+    let msg = e.msg || e.message || '';
+    if (!msg && e._fp) {
+      // Fingerprint format: |action|agentName  e.g. |building_prompt|Amy
+      const fpParts = e._fp.split('|').filter(Boolean);
+      const reason = e.reason || '';
+      if (fpParts.length >= 2) {
+        const action = fpParts[0].replace(/_/g, ' ');
+        const agent = fpParts[1];
+        const status = e.agents?.[0]?.agent_status || '';
+        msg = agent + ' · ' + action + (status ? ' (' + status + ')' : '');
+        if (reason && reason !== action.replace(/ /g, '_')) {
+          msg += ' [' + reason + ']';
+        }
+      } else {
+        msg = e._fp;
+      }
+    } else if (!msg && e.reason) {
+      msg = e.reason.replace(/_/g, ' ');
+      if (e.agents?.[0]?.agent) msg = e.agents[0].agent + ' · ' + msg;
+    } else if (!msg) {
+      msg = JSON.stringify(e);
+    }
     html += '<div class="feed-entry">' +
       '<span class="ts">' + fmtTime(e.ts) + '</span>' +
       '<span class="lvl ' + lvlClass + '">' + esc(lvl) + '</span>' +
-      '<span class="msg">' + esc(e.msg || e.message || JSON.stringify(e)) + '</span>' +
+      '<span class="msg">' + esc(msg) + '</span>' +
       '</div>';
   }
 
