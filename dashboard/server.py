@@ -425,9 +425,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     pass
             # Fallback: read orchestrator.jsonl directly
             try:
-                import os
-                data_dir = cfg.get("data_dir", os.path.join(os.environ.get("HOME", "/tmp"), ".openclaw", "workspace", "orchestrator-data"))
-                log_path = os.path.join(data_dir, "logs", "orchestrator.jsonl")
+                _data_dir = cfg.get("data_dir", os.path.join(os.environ.get("HOME", "/tmp"), ".openclaw", "workspace", "orchestrator-data"))
+                log_path = os.path.join(_data_dir, "logs", "orchestrator.jsonl")
                 if os.path.exists(log_path):
                     with open(log_path) as f:
                         lines = f.readlines()
