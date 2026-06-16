@@ -86,54 +86,6 @@ body{
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TOOLTIP SYSTEM — clean hover info
-   ═══════════════════════════════════════════════════════════════ */
-[data-tip]{position:relative;cursor:help}
-[data-tip]:hover::after{
-  content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);
-  left:50%;transform:translateX(-50%);
-  background:#1c2333;color:var(--text-bright);font-size:10px;
-  padding:4px 10px;border-radius:4px;white-space:nowrap;
-  border:1px solid var(--border);z-index:1000;
-  font-family:var(--font-ui);box-shadow:0 4px 12px rgba(0,0,0,.4);
-  pointer-events:none;animation:tipIn .12s ease
-}
-[data-tip]:hover::before{
-  content:'';position:absolute;bottom:calc(100% + 2px);
-  left:50%;transform:translateX(-50%);
-  border:4px solid transparent;border-top-color:#1c2333;z-index:1001;
-  pointer-events:none
-}
-@keyframes tipIn{from{opacity:0;transform:translateX(-50%) translateY(3px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-
-/* ═══════════════════════════════════════════════════════════════
-   SECTION DIVIDER — visual hierarchy markers
-   ═══════════════════════════════════════════════════════════════ */
-.section-mark{
-  display:flex;align-items:center;gap:8px;margin:0 0 10px 0;font-size:10px;
-  text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);user-select:none
-}
-.section-mark::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border),transparent)}
-.section-mark .icon{font-size:12px}
-
-/* ═══════════════════════════════════════════════════════════════
-   CARD GLOW — hover elevation for depth
-   ═══════════════════════════════════════════════════════════════ */
-.term-card,.agent-card,.proj-card{transition:all .18s ease}
-.term-card:hover,.agent-card:hover,.proj-card:hover{
-  border-color:var(--blue);box-shadow:0 0 20px rgba(88,166,255,.08)
-}
-.agent-card:hover{border-color:var(--blue)}
-.proj-card:hover{border-color:var(--green)}
-
-/* ═══════════════════════════════════════════════════════════════
-   PULSE DOT — live indicator
-   ═══════════════════════════════════════════════════════════════ */
-.pulse-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-left:4px;vertical-align:middle}
-.pulse-dot.green{background:var(--green);box-shadow:0 0 6px var(--green)}
-.pulse-dot.blue{background:var(--blue);box-shadow:0 0 6px var(--blue)}
-.pulse-dot.yellow{background:var(--yellow);box-shadow:0 0 6px var(--yellow)}
-/* ═══════════════════════════════════════════════════════════════
    MAIN CONTENT AREA
    ═══════════════════════════════════════════════════════════════ */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -538,14 +490,14 @@ input.search:focus{border-color:var(--blue);outline:none}
 
 <!-- ═══════════════════ TAB BAR ═══════════════════ -->
 <div class="tab-bar" id="tabBar">
-  <button class="tab-btn active" data-tab="home" data-tip="Real-time activity feed — live agent actions, system events, and session changes">⌂ Home <span class="count" id="tbActivity">live</span></button>
-  <button class="tab-btn" data-tab="projects" data-tip="Project management — state docs, roadmaps, session logs, file editing">◆ Projects <span class="count" id="tbProjects">0</span></button>
-  <button class="tab-btn" data-tab="models" data-tip="Model inventory — CRUD, filtering, pricing, free-only mode toggle">⬡ Models <span class="count" id="tbModels">0</span></button>
-  <button class="tab-btn" data-tab="chat" data-tip="Agent conversation viewer — send messages to active sessions">💬 Chat</button>
-  <button class="tab-btn" data-tab="gateway" data-tip="Live gateway sessions — active agent connections and status">🔌 Gateway <span class="count" id="tbGateway">0</span></button>
-  <button class="tab-btn" data-tab="logs" data-tip="Orchestration log viewer — session events, context changes, system events">📋 Logs</button>
-  <button class="tab-btn" data-tab="safeguards" data-tip="Workflow enforcement — auto-recovery, idle detection, phase tracking">🛡️ Safeguards</button>
-  <button class="tab-btn" data-tab="settings" data-tip="Orchestrator configuration — dashboard settings and preferences">⚙ Settings</button>
+  <button class="tab-btn active" data-tab="home">⌂ Home <span class="count" id="tbActivity">live</span></button>
+  <button class="tab-btn" data-tab="projects">◆ Projects <span class="count" id="tbProjects">0</span></button>
+  <button class="tab-btn" data-tab="models">⬡ Models <span class="count" id="tbModels">0</span></button>
+  <button class="tab-btn" data-tab="gateway">🔌 Gateway <span class="count" id="tbGateway">0</span></button>
+  <button class="tab-btn" data-tab="chat">💬 Chat</button>
+  <button class="tab-btn" data-tab="logs">📋 Logs</button>
+  <button class="tab-btn" data-tab="settings">⚙ Settings</button>
+  <button class="tab-btn" data-tab="safeguards">🛡️ Safeguards</button>
   <span class="project-badge" id="projBadge" style="display:none;margin-left:auto;padding:2px 10px;font-size:10px;color:var(--cyan);background:rgba(88,166,255,.1);border-radius:10px"></span>
 </div>
 
@@ -556,10 +508,10 @@ input.search:focus{border-color:var(--blue);outline:none}
 <div class="tab-pane active" id="pane-home">
   <div class="home-layout">
     <div class="home-top" id="homeStats">
-      <div class="term-card" data-tip="Number of AI agents currently processing tasks"><div class="card-label">Agents Active</div><div class="card-value g" id="hcAgents">0</div><div class="card-sub">currently working</div></div>
-      <div class="term-card" data-tip="Models marked as agent-ready and available for routing"><div class="card-label">Models Online</div><div class="card-value b" id="hcModels">—</div><div class="card-sub">agent-ready</div></div>
-      <div class="term-card" data-tip="Projects registered with the orchestrator for context automation"><div class="card-label">Projects</div><div class="card-value" id="hcProjects">—</div><div class="card-sub">registered</div></div>
-      <div class="term-card" data-tip="Active sessions currently running on the OpenClaw gateway"><div class="card-label">Gateway Sessions</div><div class="card-value" id="hcSessions">—</div><div class="card-sub">on gateway</div></div>
+      <div class="term-card"><div class="card-label">Agents Active</div><div class="card-value g" id="hcAgents">0</div><div class="card-sub">currently working</div></div>
+      <div class="term-card"><div class="card-label">Models Online</div><div class="card-value b" id="hcModels">—</div><div class="card-sub">agent-ready</div></div>
+      <div class="term-card"><div class="card-label">Projects</div><div class="card-value" id="hcProjects">—</div><div class="card-sub">registered</div></div>
+      <div class="term-card"><div class="card-label">Gateway Sessions</div><div class="card-value" id="hcSessions">—</div><div class="card-sub">on gateway</div></div>
     </div>
     <div class="activity-feed-wrap">
       <div class="activity-feed-header">
@@ -608,21 +560,21 @@ input.search:focus{border-color:var(--blue);outline:none}
   </div>
   <div class="proj-detail" id="projDetail">
     <div class="back-bar">
-      <button class="back-btn" data-tip="Return to project list" onclick="closeProjDetail()">← Back</button>
+      <button class="back-btn" onclick="closeProjDetail()">← Back</button>
       <span class="proj-title" id="pdTitle"></span>
       <div class="proj-actions">
-        <button class="btn btn-sm btn-warning" data-tip="Toggle free-only mode for this project" onclick="projToggleFree()">Toggle Free-Only</button>
-        <button class="btn btn-sm" data-tip="Configure model allowlist and routing rules for this project" onclick="projOpenConfig()">Model Config</button>
+        <button class="btn btn-sm btn-warning" onclick="projToggleFree()">Toggle Free-Only</button>
+        <button class="btn btn-sm" onclick="projOpenConfig()">Model Config</button>
       </div>
     </div>
     <div class="tabs-secondary">
-      <span class="stab active" data-stab="state" data-tip="Project state — current status, deployed version, known issues" onclick="switchProjTab('state')">📋 STATE</span>
-      <span class="stab" data-stab="roadmap" data-tip="Project roadmap — planned features, milestones, and progress" onclick="switchProjTab('roadmap')">🗺 ROADMAP</span>
-      <span class="stab" data-stab="context" data-tip="Project context — location, README, file index, domain terms" onclick="switchProjTab('context')">📖 CONTEXT</span>
-      <span class="stab" data-stab="notes" data-tip="Project notes — observations, work logs, random thoughts" onclick="switchProjTab('notes')">📝 NOTES</span>
-      <span class="stab" data-stab="sessions" data-tip="Session history — all logged agent sessions for this project" onclick="switchProjTab('sessions')">📝 Session Log</span>
-      <span class="stab" data-stab="files" data-tip="Project file management — create and edit documentation files" onclick="switchProjTab('files')">📁 FILES</span>
-      <span class="stab" data-stab="manager" data-tip="Agent tree — sub-agent hierarchy, tasks, and distribution" onclick="switchProjTab('manager')">🤖 MANAGER</span>
+      <span class="stab active" data-stab="state" onclick="switchProjTab('state')">📋 STATE</span>
+      <span class="stab" data-stab="roadmap" onclick="switchProjTab('roadmap')">🗺 ROADMAP</span>
+      <span class="stab" data-stab="context" onclick="switchProjTab('context')">📖 CONTEXT</span>
+      <span class="stab" data-stab="notes" onclick="switchProjTab('notes')">📝 NOTES</span>
+      <span class="stab" data-stab="sessions" onclick="switchProjTab('sessions')">📝 Session Log</span>
+      <span class="stab" data-stab="files" onclick="switchProjTab('files')">📁 FILES</span>
+      <span class="stab" data-stab="manager" onclick="switchProjTab('manager')">🤖 MANAGER</span>
     </div>
     <div class="doc-area show" id="projDocArea">
       <div class="doc-toolbar">
@@ -658,8 +610,8 @@ input.search:focus{border-color:var(--blue);outline:none}
     <div class="models-stats" id="mStats"></div>
     <div class="models-toolbar">
       <div class="left">
-        <span class="title" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim)" data-tip="Browse, search, and manage all available AI models">Model Inventory</span>
-        <button class="btn btn-sm btn-primary" data-tip="Add a new model to the inventory" onclick="openNewModel()">+ New</button>
+        <span class="title" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim)">Model Inventory</span>
+        <button class="btn btn-sm btn-primary" onclick="openNewModel()">+ New</button>
         <button class="btn btn-sm btn-danger" id="bulkDisBtn" style="display:none" onclick="bulkDisable()">Disable</button>
         <button class="btn btn-sm btn-success" id="bulkEnaBtn" style="display:none" onclick="bulkEnable()">Enable</button>
         <span id="selCount" style="font-size:10px;color:var(--text-dim)"></span>
@@ -686,7 +638,7 @@ input.search:focus{border-color:var(--blue);outline:none}
     <!-- Session Selector -->
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-shrink:0">
       <span style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim)">Session:</span>
-      <select id="chatSessionSelect" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;font-family:var(--font);cursor:pointer" data-tip="Select a session to view its conversation history" onchange="switchChatSession()">
+      <select id="chatSessionSelect" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;font-family:var(--font);cursor:pointer" onchange="switchChatSession()">
         <option value="">— Select a session —</option>
       </select>
       <button class="btn btn-sm" onclick="refreshChatSessions()">↻</button>
@@ -705,7 +657,7 @@ input.search:focus{border-color:var(--blue);outline:none}
       <textarea id="chatInput" placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
         style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:12px;font-family:var(--font);resize:none;min-height:36px;max-height:80px"
         onkeydown="chatHandleKey(event)"></textarea>
-      <button class="btn btn-primary" onclick="chatSend()" id="chatSendBtn" style="padding:4px 16px;font-size:12px" data-tip="Send message to the selected session (Enter)" disabled>Send</button>
+      <button class="btn btn-primary" onclick="chatSend()" id="chatSendBtn" style="padding:4px 16px;font-size:12px" disabled>Send</button>
     </div>
     <div id="chatStatus" style="font-size:9px;color:var(--text-dim);padding:2px 4px;flex-shrink:0"></div>
   </div>
@@ -751,7 +703,7 @@ input.search:focus{border-color:var(--blue);outline:none}
 
     <!-- Safeguards Config Card -->
     <div class="sg-card" id="sgConfigCard">
-      <div class="sg-card-header" data-tip="Configure auto-recovery, idle detection, and error escalation rules">⚙️ Safeguards Configuration</div>
+      <div class="sg-card-header">⚙️ Safeguards Configuration</div>
       <div class="sg-card-body" id="sgConfigBody">
         <div style="text-align:center;padding:30px;color:var(--text-dim)">Loading safeguards config...</div>
       </div>
@@ -759,7 +711,7 @@ input.search:focus{border-color:var(--blue);outline:none}
 
     <!-- Workflow Enforcement per Project -->
     <div class="sg-card" style="margin-top:10px">
-      <div class="sg-card-header" data-tip="Per-project workflow phase enforcement and phase advancement">📋 Workflow Enforcement (per project)</div>
+      <div class="sg-card-header">📋 Workflow Enforcement (per project)</div>
       <div class="sg-card-body" id="sgWorkflowProjects" style="padding:10px">
         <div style="text-align:center;padding:20px;color:var(--text-dim)">Loading workflow config...</div>
       </div>
@@ -1146,56 +1098,23 @@ function renderHomeStats() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TAB SWITCHING — with URL hash routing
+   TAB SWITCHING
    ═══════════════════════════════════════════════════════════════ */
-
-/** Switch to a tab by name, updating hash. Does NOT push another hash entry. */
-function switchToTab(tab) {
-  const btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
-  if (!btn) return false;
-  document.querySelectorAll('.tab-btn[data-tab]').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  const pane = $('pane-' + tab);
-  if (pane) pane.classList.add('active');
-  if (tab === 'logs') loadLogs();
-  if (tab === 'gateway') loadGateway();
-  if (tab === 'safeguards') loadSafeguards();
-  if (tab === 'chat') { chatTabActivated(); }
-  else { stopChatPoll(); }
-  // Update hash without triggering hashchange (we're already there)
-  if (window.location.hash !== '#' + tab) {
-    history.replaceState(null, '', '#' + tab);
-  }
-  return true;
-}
-
-/** Handle hashchange — switch to the tab from the URL hash. */
-function onHashChange() {
-  const tab = window.location.hash.replace('#', '') || 'home';
-  if (tab && document.querySelector('.tab-btn[data-tab="' + tab + '"]')) {
-    switchToTab(tab);
-  }
-}
-
-// Bind tab buttons
 document.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => {
     const tab = btn.dataset.tab;
-    switchToTab(tab);
+    document.querySelectorAll('.tab-btn[data-tab]').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const pane = $('pane-' + tab);
+    if (pane) pane.classList.add('active');
+    if (tab === 'logs') loadLogs();
+    if (tab === 'gateway') loadGateway();
+    if (tab === 'safeguards') loadSafeguards();
+    if (tab === 'chat') { chatTabActivated(); }
+    else { stopChatPoll(); }
   });
 });
-
-// Listen for hash changes (back/forward navigation)
-window.addEventListener('hashchange', onHashChange);
-
-// On page load, read hash and switch to that tab
-(function() {
-  const tab = window.location.hash.replace('#', '') || 'home';
-  if (tab && document.querySelector('.tab-btn[data-tab="' + tab + '"]')) {
-    switchToTab(tab);
-  }
-})();
 
 /* ═══════════════════════════════════════════════════════════════
    HOME — Activity Feed
