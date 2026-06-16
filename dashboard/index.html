@@ -1111,7 +1111,8 @@ document.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
     if (tab === 'logs') loadLogs();
     if (tab === 'gateway') loadGateway();
     if (tab === 'safeguards') loadSafeguards();
-    if (tab === 'chat') chatTabActivated();
+    if (tab === 'chat') { chatTabActivated(); }
+    else { stopChatPoll(); }
   });
 });
 
@@ -2196,8 +2197,26 @@ let CHAT_SESSIONS = {};
 let CHAT_SELECTED_SESSION = null;
 let CHAT_PENDING_SESSION = null;
 let CHAT_SSE = null;
+let CHAT_POLL_TIMER = null;
+const DASHBOARD_SENT_MESSAGES = [];
+let DASHBOARD_MSG_COUNTER = 0;
+
+function startChatPoll() {
+  // Stop any existing poll
+  if (CHAT_POLL_TIMER) { clearInterval(CHAT_POLL_TIMER); CHAT_POLL_TIMER = null; }
+  if (!CHAT_SELECTED_SESSION) return;
+  // Poll every 4 seconds for new messages
+  CHAT_POLL_TIMER = setInterval(() => {
+    if (CHAT_SELECTED_SESSION) chatFetchHistory(CHAT_SELECTED_SESSION);
+  }, 4000);
+}
+
+function stopChatPoll() {
+  if (CHAT_POLL_TIMER) { clearInterval(CHAT_POLL_TIMER); CHAT_POLL_TIMER = null; }
+}
 
 function chatEscape(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
 
 function refreshChatSessions() {
   const sel = document.getElementById('chatSessionSelect');
@@ -2257,6 +2276,7 @@ function switchChatSession() {
 
   if (!key) {
     CHAT_SELECTED_SESSION = null;
+    stopChatPoll();
     if (msgs) msgs.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim)">Select a session to view its conversation</div>';
     if (info) info.style.display = 'none';
     if (btn) btn.disabled = true;
@@ -2273,6 +2293,9 @@ function switchChatSession() {
   }
   if (msgs) msgs.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Loading history...</div>';
   chatFetchHistory(key);
+
+  // Start auto-poll (every 4s) for real-time updates
+  startChatPoll();
 }
 
 async function chatFetchHistory(sessionKey) {
@@ -2335,12 +2358,28 @@ function chatRenderMessages(messages) {
   }
   let h = '';
   const seen = new Set();
-  messages.forEach(m => {
+  // First, merge in any locally-tracked dashboard-sent messages (display as user)
+  const allMsgs = [...(DASHBOARD_SENT_MESSAGES || []), ...messages];
+  allMsgs.forEach(m => {
     if (!m.content || !m.role) return;
-    // Dedup messages with same content + ts
+    // Dedup: prefer API messages over local tracking (local ones are removed once API confirms)
     const dedupKey = m.role + '|' + m.ts + '|' + (m.content || '').slice(0, 40);
-    if (seen.has(dedupKey)) return;
-    seen.add(dedupKey);
+    // For dashboard-sent messages, also dedup by content match (in case they appear from API too)
+    const isDashMsg = (m.id || '').startsWith('dash-');
+    if (!isDashMsg && seen.has(dedupKey)) return;
+    // If this is a real API message matching a dashboard sent one, remove from local tracking
+    if (!isDashMsg && seen.has('dash-' + dedupKey)) {
+      const idx = DASHBOARD_SENT_MESSAGES.findIndex(d => d.content === m.content);
+      if (idx >= 0) DASHBOARD_SENT_MESSAGES.splice(idx, 1);
+    }
+    if (isDashMsg) {
+      // Use a separate dedup for dash messages so they don't collide with API
+      const dashKey = 'dash-' + dedupKey;
+      if (seen.has(dashKey)) return;
+      seen.add(dashKey);
+    } else {
+      seen.add(dedupKey);
+    }
 
     const role = m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant';
     const ts = m.ts ? new Date(m.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
@@ -2379,8 +2418,16 @@ async function chatSend() {
       if (input) input.value = '';
       const status = document.getElementById('chatStatus');
       if (status) status.textContent = '✓ Sent at ' + new Date().toLocaleTimeString();
-      // Refresh history after sending
-      setTimeout(() => chatFetchHistory(CHAT_SELECTED_SESSION), 500);
+      // Track locally so we can display immediately
+      DASHBOARD_MSG_COUNTER++;
+      DASHBOARD_SENT_MESSAGES.push({
+        id: 'dash-' + DASHBOARD_MSG_COUNTER + '-' + Date.now(),
+        role: 'user',
+        content: msg,
+        ts: Date.now()
+      });
+      // Refresh history quickly + start auto-poll
+      setTimeout(() => { chatFetchHistory(CHAT_SELECTED_SESSION); startChatPoll(); }, 300);
     } else {
       const status = document.getElementById('chatStatus');
       if (status) status.textContent = '✗ ' + (data.error || 'Send failed');
@@ -2410,6 +2457,8 @@ async function selectChatSession(key) {
 }
 
 function chatTabActivated() {
+  // Start auto-poll when tab is activated
+  startChatPoll();
   refreshChatSessions();
   // Also start SSE for live session updates
   if (CHAT_SSE) { CHAT_SSE.close(); CHAT_SSE = null; }
@@ -2432,11 +2481,8 @@ function chatTabActivated() {
           status: s.status || '?'
         }));
         refreshChatSessions();
-        // Auto-refresh history for currently selected session
-        if (CHAT_SELECTED_SESSION) {
-          const stillLive = d.sessions.find(s => s.key === CHAT_SELECTED_SESSION);
-          if (stillLive) chatFetchHistory(CHAT_SELECTED_SESSION);
-        }
+        // Always refresh history when SSE fires for the selected session
+        if (CHAT_SELECTED_SESSION) chatFetchHistory(CHAT_SELECTED_SESSION);
       }
     } catch(e) { /* ignore parse errors */ }
   };
