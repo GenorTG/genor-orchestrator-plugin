@@ -798,6 +798,15 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
 
 const sessionTracker = new SessionTracker();
 
+/** Generate a stable default session key when hooks have not provided one yet.
+ *  Used as fallback for orchestrator_register when session_start has not
+ *  fired (e.g. sessions that existed before a gateway restart). */
+function agentDefaultSessionKey(): string {
+  if (sessionTracker.sessionKey) return sessionTracker.sessionKey;
+  return \`agent:main:auto:\${sessionTracker.currentAgent}:\${sessionTracker.sessionStartTimestamp}\`;
+}
+
+
 // ═══════════════════════════════════════════════════════════════
 //  PROJECT HELPERS
 // ═══════════════════════════════════════════════════════════════
@@ -1920,10 +1929,17 @@ const _plugin: Record<string, any> = definePluginEntry({
       description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        const sk = sessionTracker.sessionKey;
+        // Resolve the session key: prefer the hook-populated key, fall back
+        // to a synthetic stable key derived from agent identity + timestamp.
+        // session_start may not fire for sessions that existed before a
+        // gateway restart, so we can't depend on it for existing sessions.
+        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
         if (!sk) return txt("error: no session key available");
         const newly = sessionTracker.registerSession(sk);
         if (newly) {
+          // If no real session key was set yet, use this synthetic one
+          // as the tracker's current key so requireRegistration() works.
+          if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
           sessionTracker.trackAction("session_registered");
           writeLiveAgents("register", sessionTracker, logger);
           logger.info("hooks", `session registered: ${sk}`);
@@ -1939,7 +1955,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking. The session will no longer receive project context injection. Call this when project work is complete or the session should no longer be tracked.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        const sk = sessionTracker.sessionKey;
+        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
         if (!sk) return txt("error: no session key available");
         sessionTracker.unregisterSession(sk);
         sessionTracker.clearContext();

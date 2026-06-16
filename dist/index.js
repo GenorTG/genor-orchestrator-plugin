@@ -622,37 +622,87 @@ function flushLiveAgentsNow(reason, tracker) {
     }
 }
 const sessionTracker = new SessionTracker();
+/** Generate a stable default session key when hooks have not provided one yet.
+ *  Used as fallback for orchestrator_register when session_start has not
+ *  fired (e.g. sessions that existed before a gateway restart). */
+function agentDefaultSessionKey() {
+    if (sessionTracker.sessionKey)
+        return sessionTracker.sessionKey;
+    return ;
+    `agent:main:auto:\${sessionTracker.currentAgent}:\${sessionTracker.sessionStartTimestamp}\`;
+}
+
+
 // ═══════════════════════════════════════════════════════════════
 //  PROJECT HELPERS
 // ═══════════════════════════════════════════════════════════════
-function getProjectLocation(project, dataDir) {
-    const cfg = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-    return cfg.projects?.[project]?.location || null;
+
+function getProjectLocation(project: string, dataDir: string): string | null {
+  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
+  return cfg.projects?.[project]?.location || null;
 }
-function buildProjectToc(location) {
-    try {
-        const result = execSync(`find "${location}" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -maxdepth 4 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -300`, { encoding: "utf-8", timeout: 5000 });
-        return result.trim().split("\n").filter(Boolean);
-    }
-    catch {
-        return [];
-    }
+
+function buildProjectToc(location: string): string[] {
+  try {
+    const result = execSync(
+      `;
+    find;
+    "${location}" - not - path;
+    "*/node_modules/*" - not - path;
+    "*/.git/*" - not - path;
+    "*/dist/*" - maxdepth;
+    4 - type;
+    f;
+    (-name);
+    "*.ts" - o - name;
+    "*.tsx" - o - name;
+    "*.js" - o - name;
+    "*.jsx" - o - name;
+    "*.py" - o - name;
+    "*.md" - o - name;
+    "*.json" - o - name;
+    "*.yaml" - o - name;
+    "*.yml" - o - name;
+    "*.css" - o - name;
+    "*.html";
+    2 > /dev/null | head - 300 `,
+      { encoding: "utf-8", timeout: 5000 }
+    );
+    return result.trim().split("\n").filter(Boolean);
+  } catch { return []; }
 }
-function syncProjectToOrchestrator(project, dataDir, logger) {
-    const pd = projDir(project, dataDir);
-    const loc = getProjectLocation(project, dataDir);
-    if (!loc || !fs.existsSync(loc)) {
-        logger.warn("sync", `No valid location for ${project}`);
-        return;
+
+function syncProjectToOrchestrator(project: string, dataDir: string, logger: OrchestratorLogger): void {
+  const pd = projDir(project, dataDir);
+  const loc = getProjectLocation(project, dataDir);
+  if (!loc || !fs.existsSync(loc)) { logger.warn("sync", `;
+    No;
+    valid;
+    location;
+    for ($; { project } `); return; }
+
+  const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
+  const toc = buildProjectToc(loc);
+  const keyFiles = toc.filter(f =>
+    !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
+    f.endsWith("package-lock.json") || f.endsWith(".ts") || f.endsWith(".tsx") ||
+    f.endsWith(".py") || f.endsWith(".css") || f.endsWith(".html") ||
+    f.includes("tsconfig") || f.includes("next.config") ||
+    f.includes("tailwind") || f.endsWith(".env.example"))
+  );
+
+  let context = `; #)
+        $;
+    {
+        project;
     }
-    const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
-    const toc = buildProjectToc(loc);
-    const keyFiles = toc.filter(f => !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
-        f.endsWith("package-lock.json") || f.endsWith(".ts") || f.endsWith(".tsx") ||
-        f.endsWith(".py") || f.endsWith(".css") || f.endsWith(".html") ||
-        f.includes("tsconfig") || f.includes("next.config") ||
-        f.includes("tailwind") || f.endsWith(".env.example")));
-    let context = `# ${project}\n\n## Location\n\`${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
+    n;
+    n;
+    #;
+    #;
+    Location;
+    n;
+    `${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
     try {
         const pkg = readJSON(path.join(loc, "package.json"));
         if (pkg)
@@ -1781,11 +1831,19 @@ const _plugin = definePluginEntry({
             description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
             parameters: Type.Object({}),
             async execute(_id, _params) {
-                const sk = sessionTracker.sessionKey;
+                // Resolve the session key: prefer the hook-populated key, fall back
+                // to a synthetic stable key derived from agent identity + timestamp.
+                // session_start may not fire for sessions that existed before a
+                // gateway restart, so we can't depend on it for existing sessions.
+                const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
                 if (!sk)
                     return txt("error: no session key available");
                 const newly = sessionTracker.registerSession(sk);
                 if (newly) {
+                    // If no real session key was set yet, use this synthetic one
+                    // as the tracker's current key so requireRegistration() works.
+                    if (!sessionTracker.sessionKey)
+                        sessionTracker.sessionKey = sk;
                     sessionTracker.trackAction("session_registered");
                     writeLiveAgents("register", sessionTracker, logger);
                     logger.info("hooks", `session registered: ${sk}`);
@@ -1800,7 +1858,7 @@ const _plugin = definePluginEntry({
             description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking. The session will no longer receive project context injection. Call this when project work is complete or the session should no longer be tracked.",
             parameters: Type.Object({}),
             async execute(_id, _params) {
-                const sk = sessionTracker.sessionKey;
+                const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
                 if (!sk)
                     return txt("error: no session key available");
                 sessionTracker.unregisterSession(sk);
