@@ -407,21 +407,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_args = {"limit": log_limit}
             if log_level: log_args["level"] = log_level
             orc_logs = self._gateway_invoke("orchestrator_get_logs", log_args)
-            if orc_logs.get("ok"):
+            if orc_logs.get("ok") and not orc_logs.get("error"):
                 try:
                     text_payload = orc_logs["result"]["content"][0]["text"]
                     payload = json.loads(text_payload)
                     entries = payload.get("entries", [])
-                    sources = sorted(set(e.get("source", "?") for e in entries))
+                    if entries:
+                        sources = sorted(set(e.get("source", "?") for e in entries))
+                        source_counts = {}
+                        for s in sources: source_counts[s] = sum(1 for e in entries if e.get("source", "?") == s)
+                        self.send_json({"ok": True, "entries": entries, "count": len(entries),
+                            "sources": sources,
+                            "source_counts": [{k: v} for k, v in sorted(source_counts.items(), key=lambda x: -x[1])]})
+                        return
+                except Exception as e:
+                    # Fall through to JSONL fallback
+                    pass
+            # Fallback: read orchestrator.jsonl directly
+            try:
+                import os
+                data_dir = cfg.get("data_dir", os.path.join(os.environ.get("HOME", "/tmp"), ".openclaw", "workspace", "orchestrator-data"))
+                log_path = os.path.join(data_dir, "logs", "orchestrator.jsonl")
+                if os.path.exists(log_path):
+                    with open(log_path) as f:
+                        lines = f.readlines()
+                    # Parse newest first, newest at bottom
+                    lines = [l for l in lines if l.strip()]
+                    # Apply filters
+                    filtered = []
+                    for l in reversed(lines[-500:]):  # last 500 lines max
+                        try:
+                            e = json.loads(l)
+                            if log_level and e.get("level") != log_level:
+                                continue
+                            filtered.append(e)
+                            if len(filtered) >= log_limit:
+                                break
+                        except:
+                            continue
+                    sources = sorted(set(e.get("source", "?") for e in filtered))
                     source_counts = {}
-                    for s in sources: source_counts[s] = sum(1 for e in entries if e.get("source", "?") == s)
-                    self.send_json({"ok": True, "entries": entries, "count": len(entries),
+                    for s in sources: source_counts[s] = sum(1 for e in filtered if e.get("source", "?") == s)
+                    self.send_json({"ok": True, "entries": filtered, "count": len(filtered),
                         "sources": sources,
                         "source_counts": [{k: v} for k, v in sorted(source_counts.items(), key=lambda x: -x[1])]})
-                except Exception as e:
-                    self.send_json({"ok": False, "error": f"Parse: {e}"})
-            else:
-                self.send_json({"ok": False, "error": "No orchestrator logs available"})
+                else:
+                    self.send_json({"ok": False, "error": "No log file found"})
+            except Exception as e:
+                self.send_json({"ok": False, "error": f"Fallback: {e}"})
 
         elif path == "/api/prices":
             self.send_json(parse_price_log())
