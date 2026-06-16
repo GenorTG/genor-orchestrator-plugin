@@ -201,6 +201,23 @@ function writeJSON(filePath: string, data: any): void {
   fs.renameSync(tmp, filePath);
 }
 
+/** Extract tags from a task slug and notes text. Used for session entry tags. */
+function extractTags(task: string, notes: string): string[] {
+  const tags: string[] = [];
+  const stop = new Set(["the", "and", "for", "with", "from", "this", "that", "have", "has"]);
+  const t = (task || "").toLowerCase();
+  for (const part of t.split(/[-_]/)) {
+    if (part.length > 2 && !stop.has(part) && !/^v?\d/.test(part) && !tags.includes(part)) {
+      tags.push(part);
+    }
+  }
+  const n = (notes || "").toLowerCase();
+  for (const kw of ["design", "implement", "fix", "test", "refactor", "debug", "audit", "review"]) {
+    if (n.includes(kw) && !tags.includes(kw)) tags.push(kw);
+  }
+  return tags.slice(0, 8);
+}
+
 function readFileContent(p: string): string | null {
   if (!fs.existsSync(p)) return null;
   return fs.readFileSync(p, "utf-8");
@@ -451,6 +468,10 @@ class SessionTracker {
   // registered via orchestrator_set_context. This prevents project
   // context from bleeding between unrelated sessions.
   private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
+  // Subagent session registry — tracks which subagent keys belong to which parent
+  // and what project/task they were spawned under. Used at session_end to log
+  // the subagent with its real session key, not the parent's.
+  private subagentRegistry: Map<string, { parentKey: string | null; project: string | null; task: string | null; startedAt: string }> = new Map();
   // Explicitly registered sessions — only these get orchestrator tracking.
   // A session must call orchestrator_register before using any orchestrator
   // features. This ensures no chat/logging session accidentally gets project
@@ -614,6 +635,21 @@ class SessionTracker {
   /** Clean up session context for a given key. Call on session_end. */
   removeSessionContext(sessionKey: string): void {
     this.sessionContexts.delete(sessionKey);
+  }
+
+  /** Track a subagent session's metadata so we can log it with the right key. */
+  trackSubagent(subKey: string, info: { parentKey: string | null; project: string | null; task: string | null; startedAt: string }): void {
+    this.subagentRegistry.set(subKey, info);
+  }
+
+  /** Remove subagent tracking when subagent_ended fires. */
+  untrackSubagent(subKey: string): void {
+    this.subagentRegistry.delete(subKey);
+  }
+
+  /** Get subagent info by key, or undefined. */
+  getSubagent(subKey: string): { parentKey: string | null; project: string | null; task: string | null; startedAt: string } | undefined {
+    return this.subagentRegistry.get(subKey);
   }
 
   /** Register a session for orchestrator tracking. Returns true if newly registered. */
@@ -1391,22 +1427,46 @@ function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
       else if (raw?.sessions && Array.isArray(raw.sessions)) ps = raw.sessions;
     } catch { /* */ }
   }
-  ps.push({
-    date,
+  // Build entry in new canonical schema v2
+  const sessId = `sess_${(opts.id || (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/[^a-zA-Z0-9_]/g, "").slice(0, 14)}`;
+  const sessionKey = opts.session_key || "";
+  const parentSessionKey = opts.parent_session_key || (sessionKey.includes(":subagent:") ? sessionKey.split(":subagent:")[0] : null);
+  const agentNorm = (() => {
+    const a = (opts.agent || "system").toString().toLowerCase();
+    const m = a.match(/subagent[-_]?([0-9a-f]+)/);
+    if (m) return `sub-${m[1].slice(0, 8)}`;
+    if (a === "amy" || a === "spice") return a[0].toUpperCase() + a.slice(1);
+    return a || "system";
+  })();
+  const tags = Array.isArray(opts.tags) ? opts.tags : extractTags(opts.task || "", opts.notes || "");
+  const newEntry = {
+    id: sessId,
+    session_key: sessionKey,
+    parent_session_key: parentSessionKey,
+    agent: agentNorm,
     project: opts.project,
     task: opts.task,
-    goal: opts.goal || opts.task,
+    goal: opts.goal || opts.task || "",
+    original_prompt: opts.original_prompt || null,
     model: opts.model,
-    agent: opts.agent,
-    session_key: opts.session_key || "",
     status: opts.status,
+    start_time: opts.start_time || new Date().toISOString(),
+    end_time: opts.end_time || (opts.status === "running" ? null : new Date().toISOString()),
     duration: opts.duration || "",
+    tags,
+    links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null },
+    notes: opts.notes || "",
     qa: opts.qa || false,
     checked: opts.checked || false,
-    notes: opts.notes || "",
     logged_at: new Date().toISOString(),
-  });
-  writeJSON(psf, { sessions: ps });
+  };
+  // Check for duplicate by (session_key, task, status) — avoid log noise
+  const isDup = ps.some(e => e.session_key && e.session_key === newEntry.session_key
+    && e.task === newEntry.task && e.status === newEntry.status);
+  if (!isDup) {
+    ps.push(newEntry);
+    writeJSON(psf, { schema_version: 2, sessions: ps });
+  }
   logger.logSession(opts.project, opts.task, opts.model, opts.agent, opts.status);
   return { success: true, date, project: opts.project, task: opts.task, session_file: path.basename(df), total_project_sessions: ps.length };
 }
@@ -1447,21 +1507,22 @@ function requireRegistration(): string | null {
   return "This session is not registered with the orchestrator. Call orchestrator_register first to opt in to orchestrator tracking and project context injection.";
 }
 
-function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger) {
+function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
   projDir(project, dataDir);
-  
+
   // Read per-project workflow config from dashboard-config.json
   const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
   const projCfg = cfg.projects?.[project] || {};
-  
+
   sessionTracker.setContext(project, task, projCfg.workflow);
   writeLiveAgents("context", sessionTracker);
   const loc = getProjectLocation(project, dataDir);
   const toc = loc ? buildProjectToc(loc) : [];
-  
+
   // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
   const sessionModel = sessionTracker.currentModel;
   if (sessionModel && sessionModel !== "pending") {
+    const truncatedPrompt = originalPrompt ? String(originalPrompt).slice(0, 500) : null;
     logSession(dataDir, {
       project,
       task,
@@ -1471,6 +1532,7 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
       duration: "",
       session_key: sessionTracker.sessionKey || "",
       goal: task,
+      original_prompt: truncatedPrompt,
       notes: `Goal: ${task} | Agent: ${sessionTracker.currentAgent || "?"} | Key: ${sessionTracker.sessionKey || "?"} | Workflow: ${projCfg.workflow?.enabled ? "ON" : "OFF"}`,
     }, logger);
   }
@@ -1592,14 +1654,20 @@ const _plugin: Record<string, any> = definePluginEntry({
 
     api.on("session_end", async (event: any) => {
       try {
-        sessionTracker.setStatus("complete");
-        sessionTracker.trackAction("session_ending");
-        writeLiveAgents("session_end", sessionTracker, logger);
         // Clean up per-session project context
         const sk_end = (event.sessionKey || "").toString();
         if (sk_end) sessionTracker.unregisterSession(sk_end);
+        // Detect if this is a subagent session ending
+        const subInfo = sk_end ? sessionTracker.getSubagent(sk_end) : undefined;
+        const isSubagent = !!subInfo;
+        const isMain = sk_end && sk_end === sessionTracker.sessionKey;
+        if (isMain) {
+          sessionTracker.setStatus("complete");
+          sessionTracker.trackAction("session_ending");
+          writeLiveAgents("session_end", sessionTracker, logger);
+        }
         const info = sessionTracker.end();
-        if (info) {
+        if (info && (isMain || isSubagent)) {
           // Check if workflow enforcement needs auto-commit
           if (sessionTracker.workflow.enabled && sessionTracker.workflow.autoCommit && info.project) {
             try {
@@ -1653,7 +1721,8 @@ const _plugin: Record<string, any> = definePluginEntry({
             agent: sessionTracker.currentAgent || "system",
             status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "complete",
             duration: info.duration,
-            session_key: sessionTracker.sessionKey || "",
+            session_key: sk_end || sessionTracker.sessionKey || "",
+            parent_session_key: isSubagent && subInfo ? subInfo.parentKey || null : (sk_end && sk_end !== sessionTracker.sessionKey ? sessionTracker.sessionKey || null : null),
             goal: info.task,
             notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason} | Workflow: ${sessionTracker.workflow.enabled ? sessionTracker.workflow.currentPhase : "OFF"}`,
           }, logger);
@@ -1666,17 +1735,29 @@ const _plugin: Record<string, any> = definePluginEntry({
       } catch (err: any) { logger.error("hooks", `session_end error: ${err.message}`); }
     });
 
-    api.on("subagent_spawned", async () => {
+    api.on("subagent_spawned", async (event: any) => {
+      const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
       sessionTracker.subagentDepth++;
       sessionTracker.setStatus("working");
       if (sessionTracker.currentProject) {
-        logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject}`);
+        logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject} key=${subKey}`);
+      }
+      // Track subagent session info for accurate logging later
+      if (subKey) {
+        sessionTracker.trackSubagent(subKey, {
+          parentKey: sessionTracker.sessionKey,
+          project: sessionTracker.currentProject,
+          task: sessionTracker.currentTask,
+          startedAt: new Date().toISOString(),
+        });
       }
       writeLiveAgents("subagent_spawned", sessionTracker, logger);
     });
 
-    api.on("subagent_ended", async () => {
+    api.on("subagent_ended", async (event: any) => {
+      const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
       sessionTracker.subagentDepth = Math.max(0, sessionTracker.subagentDepth - 1);
+      if (subKey) sessionTracker.untrackSubagent(subKey);
       if (sessionTracker.currentProject) {
         writeLiveAgents("subagent_ended", sessionTracker, logger);
       }
@@ -1767,11 +1848,12 @@ const _plugin: Record<string, any> = definePluginEntry({
       parameters: Type.Object({
         project: Type.String({ description: "Project name (e.g., kfinance, kotw)." }),
         task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, restart PM2 process.'" }),
+        original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request that triggered this task. Captured in the session log for traceability — so we can see WHY the work was started, not just WHAT was done. Recommended: include the user's full request verbatim. Truncated to 500 chars." })),
       }),
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
-        return txt(setContext(dataDir, params.project, params.task, logger));
+        return txt(setContext(dataDir, params.project, params.task, logger, params.original_prompt));
       },
     });
 

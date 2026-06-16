@@ -390,6 +390,13 @@ body{
 .sg-cell-name{font-weight:600;color:var(--text-bright)}
 .sg-retry-badge{display:inline-block;background:var(--border);padding:0 6px;border-radius:8px;font-size:10px;font-weight:600;color:var(--text)}
 .sg-retry-badge.sg-retry-active{background:rgba(210,153,34,.2);color:var(--yellow)}
+.sg-timeline{display:flex;flex-direction:column;gap:4px}
+.sg-timeline-entry{display:grid;grid-template-columns:24px 90px 1fr 90px 130px;gap:8px;align-items:center;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;font-size:11px}
+.sg-timeline-icon{font-size:14px;text-align:center}
+.sg-timeline-phase{font-weight:600;color:var(--cyan);text-transform:capitalize}
+.sg-timeline-meta{color:var(--text-dim);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sg-timeline-dur{color:var(--yellow);font-size:10px;text-align:right;font-family:var(--font)}
+.sg-timeline-ts{color:var(--text-dim);font-size:9px;text-align:right;font-family:var(--font)}
 .sg-phase-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px}
 .sg-phase-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .sg-phase-info{font-size:11px;line-height:1.8}
@@ -1034,6 +1041,10 @@ async function initLoad() {
   renderSettings();
   loadLogs();
 
+  // Auto-populate models if empty
+  if (!r.models || !r.models.total || r.models.total === 0) {
+    populateModelsIfEmpty();
+  }
   // Update counts in tab buttons
   if ($('tbAgents')) $('tbAgents').textContent = (DS.agents||[]).length;
   if (r.projects) $('tbProjects').textContent = r.projects.count || 0;
@@ -1469,10 +1480,12 @@ function renderProjSessions() {
     for (const sess of logged) {
       const stCls = sess.status === 'complete' ? 'color:var(--green)' : sess.status === 'failed' || sess.status === 'interrupted' ? 'color:var(--red)' : sess.status === 'running' ? 'color:var(--yellow)' : '';
       const goalShort = (sess.goal || sess.task || '').slice(0, 60);
+      const op = sess.original_prompt || '';
+      const fullTitle = op ? (sess.goal || sess.task) + '\n\nOriginal prompt:\n' + op : (sess.goal || sess.task || '');
       const sk = sess.session_key || '';
       const skFull = sk ? sk.replace('agent:','') : '';
       h += '<tr><td style="white-space:nowrap">' + esc(sess.date||'') + '</td>' +
-        '<td style="font-family:var(--font);font-size:10px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(sess.goal||sess.task||'') + '">' + esc(goalShort) + '</td>' +
+        '<td style="font-family:var(--font);font-size:10px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(fullTitle) + '">' + esc(goalShort) + (op ? ' <span style="color:var(--green);font-size:9px">📝</span>' : '') + '</td>' +
         '<td style="font-size:9px;color:var(--text-dim);word-break:break-all;max-width:160px">' + esc(skFull) + '</td>' +
         '<td style="font-size:10px">' + esc(sess.model||'') + '</td>' +
         '<td>' + esc(sess.agent||'system') + '</td>' +
@@ -1591,11 +1604,24 @@ function renderProjManager() {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">Session Timeline</div>';
     for (let i = 0; i < Math.min(logged.length, 40); i++) {
       const l = logged[i];
-      const icon = l.status==='complete'||l.status==='done'?'✅' : l.status==='running'||l.status==='in_progress'?'\ud83d\udd04' : l.status==='failed'||l.status==='interrupted'?'\u274c' : '\u2753';
-      const indent = Math.min(i, 16);
-      h += '<div class="node" style="padding-left:' + (indent * 16) + 'px">' +
+    const icon = l.status==='complete'||l.status==='done'?'✅' : l.status==='running'||l.status==='in_progress'?'\ud83d\udd04' : l.status==='failed'||l.status==='interrupted'?'\u274c' : '\u2753';
+    // Build parent/child tree from parent_session_key links
+    function depthOf(l) {
+      let d = 0;
+      let p = l.parent_session_key;
+      while (p && d < 8) {
+        d++;
+        const parent = logged.find(x => x.session_key === p);
+        if (!parent) break;
+        p = parent.parent_session_key;
+      }
+      return d;
+    }
+    const subTag = l.parent_session_key ? '<span style="color:var(--yellow);font-size:9px;margin-left:4px">[sub]</span>' : '';
+    const realIndent = depthOf(l) * 20;
+      h += '<div class="node" style="padding-left:' + realIndent + 'px">' +
         '<span class="icon">' + icon + '</span>' +
-        '<span>' + esc((l.goal||l.task||'').slice(0,50)) + '</span>' +
+        '<span>' + esc((l.goal||l.task||'').slice(0,50)) + subTag + '</span>' +
         ' <span style="color:var(--text-dim);font-size:10px">(' + esc(l.agent||'') + ' | ' + esc(l.model||'') + ' | ' + esc(l.duration||'') + ')</span></div>';
     }
     if (logged.length > 40) {
@@ -1944,6 +1970,21 @@ function openNewModel() {
 /* ═══════════════════════════════════════════════════════════════
    LOGS TAB
    ═══════════════════════════════════════════════════════════════ */
+async function populateModelsIfEmpty() {
+  try {
+    toast('Populating model list from gateway...', 'info');
+    const r = await api('/api/auto-populate', { method: 'POST' });
+    if (r.ok) {
+      toast('Models populated: ' + (r.total_models || 0) + ' models', 'success');
+      await initLoad();
+    } else {
+      toast('Auto-populate failed: ' + (r.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    toast('Auto-populate error: ' + e.message, 'error');
+  }
+}
+
 async function loadLogs() {
   const level = $('logLevel').value;
   const source = $('logSource').value;
@@ -2380,6 +2421,7 @@ async function loadSafeguards() {
     loadSafeguardConfig(),
     loadWorkflowProjects(),
     loadAgentPhase(),
+    loadTimeline(),
     loadSafeguardLog(),
   ]);
 }
@@ -2445,6 +2487,49 @@ async function loadWorkflowProjects() {
       '</tr>';
     }
     html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red)">Error: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadTimeline() {
+  const el = $('sgTimelineBody');
+  try {
+    const r = await api('/api/live-agents');
+    if (r.error) { el.innerHTML = '<div style="color:var(--red);padding:10px">Error: ' + esc(r.error) + '</div>'; return; }
+    const agents = r.agents || [];
+    // Collect all phase histories from all live agents
+    let allPhases = [];
+    for (const a of agents) {
+      const wf = a.workflow || {};
+      const ph = wf.phase_history || [];
+      for (const entry of ph) {
+        allPhases.push({ ...entry, agent: a.agent || '?', project: a.project || '?' });
+      }
+    }
+    // Sort by enteredAt
+    allPhases.sort((x, y) => (x.enteredAt || '').localeCompare(y.enteredAt || ''));
+    if (!allPhases.length) {
+      el.innerHTML = '<div style="color:var(--text-dim);padding:10px">No workflow phases recorded yet. Set context on a project with workflow.enabled to start tracking phases.</div>';
+      return;
+    }
+    let html = '<div class="sg-timeline">';
+    for (let i = 0; i < Math.min(allPhases.length, 30); i++) {
+      const p = allPhases[i];
+      const phaseEmoji = {analyze: '🔍', plan: '📋', document: '📖', work: '🛠', log: '📝', finish: '✅'}[p.phase] || '⏵';
+      const dur = p.completedAt ? fmtMs(new Date(p.completedAt) - new Date(p.enteredAt)) : 'in progress';
+      const skipped = p.skipped ? ' <span style="color:var(--text-dim);font-size:9px">[skipped]</span>' : '';
+      const ts = p.enteredAt ? new Date(p.enteredAt).toLocaleString() : '';
+      html += '<div class="sg-timeline-entry">' +
+        '<span class="sg-timeline-icon">' + phaseEmoji + '</span>' +
+        '<span class="sg-timeline-phase">' + esc(p.phase) + skipped + '</span>' +
+        '<span class="sg-timeline-meta">' + esc(p.agent) + ' · ' + esc(p.project) + '</span>' +
+        '<span class="sg-timeline-dur">' + dur + '</span>' +
+        '<span class="sg-timeline-ts">' + esc(ts) + '</span>' +
+        '</div>';
+    }
+    html += '</div>';
     el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--red)">Error: ' + esc(e.message) + '</div>';

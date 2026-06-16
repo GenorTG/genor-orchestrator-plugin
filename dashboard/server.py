@@ -525,6 +525,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
             write_action(DATA_DIR, action)
             self.send_json({"ok": True, "action_id": action_id, "message": "Context set request queued"})
 
+        elif path == "/api/auto-populate":
+            # Run the auto-populate script via the gateway plugin
+            result = None
+            try:
+                result = self._gateway_invoke("orchestrator_auto_populate", {})
+            except Exception as e:
+                result = None  # Gateway call failed
+            # Use gateway result if ok, otherwise fall back to direct script execution
+            if result and result.get("ok"):
+                try:
+                    text = result["result"]["content"][0]["text"]
+                    payload = json.loads(text)
+                    self.send_json({"ok": True, "total_models": payload.get("total_models", 0), "output": payload.get("output", "")})
+                    return
+                except Exception:
+                    self.send_json({"ok": True, "raw": result})
+                    return
+            # Fallback: run the populate script directly
+            try:
+                script_paths = [
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "auto-populate-models.py"),
+                    os.path.expanduser("~/.openclaw/workspace/skills/genor-orchestrator/scripts/auto-populate-models.py"),
+                    os.path.expanduser("~/.openclaw/extensions/genor-orchestrator/scripts/auto-populate-models.py"),
+                ]
+                script = None
+                for s in script_paths:
+                    if os.path.exists(s): script = s; break
+                if not script:
+                    self.send_json({"ok": False, "error": "auto-populate script not found", "checked": script_paths})
+                    return
+                import subprocess
+                out = subprocess.run(["python3", script], capture_output=True, text=True, timeout=120)
+                with open(MODELS_FILE) as f: models = json.load(f)
+                self.send_json({"ok": out.returncode == 0, "total_models": len(models.get("models", [])), "output": out.stdout[-500:], "stderr": out.stderr[-200:] if out.stderr else ""})
+            except Exception as e2:
+                self.send_json({"ok": False, "error": f"fallback failed: {e2}"})
         elif path == "/api/control/clear-context":
             action_id = "clear_context_" + str(int(time.time() * 1000))
             action = {"id": action_id, "action": "clear_context",
