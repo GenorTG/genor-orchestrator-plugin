@@ -1828,8 +1828,11 @@ const _plugin: Record<string, any> = definePluginEntry({
           if (!isBackground) {
             // Bridge: register the real key alongside any synthetic one
             // so before_prompt_build finds the registration.
+            // CRITICAL: Only bridge from synthetic fallback keys
+            // (agent:main:auto:...) to real keys. NEVER bridge from one
+            // real key to another — that would cross-contaminate sessions.
             const regSk = sessionTracker.sessionKey;
-            if (regSk && regSk !== ctxSessionKey) {
+            if (regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:")) {
               sessionTracker.registerSession(ctxSessionKey);
               const existingCtx = sessionTracker.getSessionContext(regSk);
               if (existingCtx) {
@@ -1897,9 +1900,11 @@ const _plugin: Record<string, any> = definePluginEntry({
         // was skipped or didn't bridge.
         // Safety net bridge: if hookCtx has a real key that differs from
         // the synthetic fallback, register it and copy context across.
+        // CRITICAL: Only bridge from synthetic to real. Never bridge
+        // from one real key to another (cross-session pollution).
         if (hk) {
           const skVal = sessionTracker.sessionKey;
-          if (skVal && hk !== skVal && sessionTracker.isSessionRegistered(skVal)) {
+          if (skVal && hk !== skVal && skVal.startsWith("agent:main:auto:") && sessionTracker.isSessionRegistered(skVal)) {
             const existingCtx = sessionTracker.getSessionContext(skVal);
             sessionTracker.registerSession(hk);
             if (existingCtx) {
