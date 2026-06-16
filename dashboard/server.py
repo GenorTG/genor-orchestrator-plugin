@@ -17,9 +17,11 @@ GATEWAY_HOST = "127.0.0.1"
 GATEWAY_PORT = 18789
 
 def _read_gateway_token():
-    """Read gateway auth token from openclaw.json"""
+    """Read gateway auth token from openclaw.json or SOPS-encrypted secrets."""
+    home = os.environ.get("HOME", "/home/genorbox1")
+    # 1) Try direct from openclaw.json (normal path)
     try:
-        p = os.path.join(os.environ.get("HOME", "/home/genorbox1"), ".openclaw", "openclaw.json")
+        p = os.path.join(home, ".openclaw", "openclaw.json")
         with open(p) as f:
             cfg = json.load(f)
         t = cfg.get("gateway", {}).get("auth", {}).get("token", "")
@@ -27,6 +29,23 @@ def _read_gateway_token():
             return t
     except:
         pass
+    # 2) Try SOPS-encrypted secrets file (survives config corruption)
+    try:
+        import subprocess
+        secret_file = os.path.join(home, ".openclaw", "secrets.enc.json")
+        result = subprocess.run(
+            ["sops", "--decrypt", secret_file],
+            capture_output=True, timeout=5,
+            env={**os.environ, "SOPS_AGE_KEY_FILE": os.path.join(home, ".age", "key.txt")}
+        )
+        if result.returncode == 0:
+            secret_cfg = json.loads(result.stdout)
+            t = secret_cfg.get("data", {}).get("gateway_token", "")
+            if t and "REDACTED" not in t:
+                return t
+    except Exception as e:
+        print(f"[Dash] SOPS token fallback failed: {e}")
+    # 3) Last resort: environment variable
     return os.environ.get("GATEWAY_TOKEN", "")
 
 GATEWAY_TOKEN = _read_gateway_token()

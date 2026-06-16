@@ -20,14 +20,33 @@ const GATEWAY_HOST = '127.0.0.1';
 const GATEWAY_PORT = 18789;
 const WS_URL = `ws://${GATEWAY_HOST}:${GATEWAY_PORT}/ws`;
 
-// ── Token from config ─────────────────────────────────────────
+// ── Token from config (with SOPS fallback) ────────────────────
 function readConfigToken() {
+  // 1) Try direct from openclaw.json
   try {
     const p = path.join(HOME, '.openclaw', 'openclaw.json');
     const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
     const t = cfg.gateway?.auth?.token;
     if (t && !t.includes('REDACTED') && !t.startsWith('__')) return t;
   } catch (e) {}
+  // 2) Try SOPS-encrypted secrets (survives config corruption)
+  try {
+    const secretFile = path.join(HOME, '.openclaw', 'secrets.enc.json');
+    const ageKey = path.join(HOME, '.age', 'key.txt');
+    if (fs.existsSync(secretFile) && fs.existsSync(ageKey)) {
+      const { execSync } = require('child_process');
+      const stdout = execSync(
+        `sops --decrypt "${secretFile}"`,
+        { env: { ...process.env, SOPS_AGE_KEY_FILE: ageKey }, timeout: 5000, encoding: 'utf8' }
+      );
+      const cfg = JSON.parse(stdout);
+      const t = cfg.data?.gateway_token;
+      if (t && !t.includes('REDACTED')) return t;
+    }
+  } catch (e) {
+    console.error('[Bridge] SOPS token fallback failed:', e.message);
+  }
+  // 3) Last resort: environment variable
   return process.env.GATEWAY_TOKEN || '';
 }
 const TOKEN = readConfigToken();
