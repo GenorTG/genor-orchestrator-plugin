@@ -611,6 +611,7 @@ class SessionTracker {
 
   clearContext(): void {
     const prev = this.currentProject;
+    const prevKey = this.sessionKey;
     this.currentProject = null;
     this.currentTask = null;
     this.currentModel = null;
@@ -623,6 +624,15 @@ class SessionTracker {
     this.lastError = null;
     // Remove per-session context for this session
     if (this.sessionKey) this.sessionContexts.delete(this.sessionKey);
+    // Also sweep any other sessions that got bridged with the same project context
+    if (prev && prevKey) {
+      const projectToClean = prev;
+      for (const [sk, ctx] of this.sessionContexts.entries()) {
+        if (sk !== prevKey && ctx.project === projectToClean) {
+          this.sessionContexts.delete(sk);
+        }
+      }
+    }
     if (prev) this.trackAction("Clearing context");
   }
 
