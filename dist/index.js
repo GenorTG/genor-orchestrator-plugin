@@ -1281,7 +1281,17 @@ function logSession(dataDir, opts, logger) {
     }
     // Build entry in new canonical schema v2
     const sessId = `sess_${(opts.id || (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/[^a-zA-Z0-9_]/g, "").slice(0, 14)}`;
-    const sessionKey = opts.session_key || "";
+    // GUARANTEE session_key — generate synthetic stable key if missing
+    let sessionKey = opts.session_key || "";
+    let syntheticKey = false;
+    if (!sessionKey) {
+        syntheticKey = true;
+        const safeProj = (opts.project || "unknown").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 30);
+        const safeTask = (opts.task || "unknown").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
+        const startTime = opts.start_time || new Date().toISOString();
+        const hash = require("crypto").createHash("sha256").update(`${opts.project}|${opts.task}|${startTime}`).digest("hex").slice(0, 12);
+        sessionKey = `agent:main:synthetic:${safeProj}:${safeTask}:${hash}`;
+    }
     const parentSessionKey = opts.parent_session_key || (sessionKey.includes(":subagent:") ? sessionKey.split(":subagent:")[0] : null);
     const agentNorm = (() => {
         const a = (opts.agent || "system").toString().toLowerCase();
@@ -1308,7 +1318,7 @@ function logSession(dataDir, opts, logger) {
         end_time: opts.end_time || (opts.status === "running" ? null : new Date().toISOString()),
         duration: opts.duration || "",
         tags,
-        links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null },
+        links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null, synthetic_key: syntheticKey },
         notes: opts.notes || "",
         qa: opts.qa || false,
         checked: opts.checked || false,
