@@ -803,7 +803,7 @@ const sessionTracker = new SessionTracker();
  *  fired (e.g. sessions that existed before a gateway restart). */
 function agentDefaultSessionKey(): string {
   if (sessionTracker.sessionKey) return sessionTracker.sessionKey;
-  return \`agent:main:auto:\${sessionTracker.currentAgent}:\${sessionTracker.sessionStartTimestamp}\`;
+  return `agent:main:auto:${sessionTracker.currentAgent}:${sessionTracker.sessionStartTimestamp}`;
 }
 
 

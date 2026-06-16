@@ -628,81 +628,39 @@ const sessionTracker = new SessionTracker();
 function agentDefaultSessionKey() {
     if (sessionTracker.sessionKey)
         return sessionTracker.sessionKey;
-    return ;
-    `agent:main:auto:\${sessionTracker.currentAgent}:\${sessionTracker.sessionStartTimestamp}\`;
+    return `agent:main:auto:${sessionTracker.currentAgent}:${sessionTracker.sessionStartTimestamp}`;
 }
-
-
 // ═══════════════════════════════════════════════════════════════
 //  PROJECT HELPERS
 // ═══════════════════════════════════════════════════════════════
-
-function getProjectLocation(project: string, dataDir: string): string | null {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  return cfg.projects?.[project]?.location || null;
+function getProjectLocation(project, dataDir) {
+    const cfg = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
+    return cfg.projects?.[project]?.location || null;
 }
-
-function buildProjectToc(location: string): string[] {
-  try {
-    const result = execSync(
-      `;
-    find;
-    "${location}" - not - path;
-    "*/node_modules/*" - not - path;
-    "*/.git/*" - not - path;
-    "*/dist/*" - maxdepth;
-    4 - type;
-    f;
-    (-name);
-    "*.ts" - o - name;
-    "*.tsx" - o - name;
-    "*.js" - o - name;
-    "*.jsx" - o - name;
-    "*.py" - o - name;
-    "*.md" - o - name;
-    "*.json" - o - name;
-    "*.yaml" - o - name;
-    "*.yml" - o - name;
-    "*.css" - o - name;
-    "*.html";
-    2 > /dev/null | head - 300 `,
-      { encoding: "utf-8", timeout: 5000 }
-    );
-    return result.trim().split("\n").filter(Boolean);
-  } catch { return []; }
-}
-
-function syncProjectToOrchestrator(project: string, dataDir: string, logger: OrchestratorLogger): void {
-  const pd = projDir(project, dataDir);
-  const loc = getProjectLocation(project, dataDir);
-  if (!loc || !fs.existsSync(loc)) { logger.warn("sync", `;
-    No;
-    valid;
-    location;
-    for ($; { project } `); return; }
-
-  const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
-  const toc = buildProjectToc(loc);
-  const keyFiles = toc.filter(f =>
-    !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
-    f.endsWith("package-lock.json") || f.endsWith(".ts") || f.endsWith(".tsx") ||
-    f.endsWith(".py") || f.endsWith(".css") || f.endsWith(".html") ||
-    f.includes("tsconfig") || f.includes("next.config") ||
-    f.includes("tailwind") || f.endsWith(".env.example"))
-  );
-
-  let context = `; #)
-        $;
-    {
-        project;
+function buildProjectToc(location) {
+    try {
+        const result = execSync(`find "${location}" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -maxdepth 4 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.css" -o -name "*.html" \\) 2>/dev/null | head -300`, { encoding: "utf-8", timeout: 5000 });
+        return result.trim().split("\n").filter(Boolean);
     }
-    n;
-    n;
-    #;
-    #;
-    Location;
-    n;
-    `${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
+    catch {
+        return [];
+    }
+}
+function syncProjectToOrchestrator(project, dataDir, logger) {
+    const pd = projDir(project, dataDir);
+    const loc = getProjectLocation(project, dataDir);
+    if (!loc || !fs.existsSync(loc)) {
+        logger.warn("sync", `No valid location for ${project}`);
+        return;
+    }
+    const readme = readFileContent(path.join(loc, "README.md")) || "No README.md";
+    const toc = buildProjectToc(loc);
+    const keyFiles = toc.filter(f => !f.includes("node_modules") && (f.endsWith(".md") || f.endsWith("package.json") ||
+        f.endsWith("package-lock.json") || f.endsWith(".ts") || f.endsWith(".tsx") ||
+        f.endsWith(".py") || f.endsWith(".css") || f.endsWith(".html") ||
+        f.includes("tsconfig") || f.includes("next.config") ||
+        f.includes("tailwind") || f.endsWith(".env.example")));
+    let context = `# ${project}\n\n## Location\n\`${loc}\`\n\n## README\n\n${readme.slice(0, 3000)}\n`;
     try {
         const pkg = readJSON(path.join(loc, "package.json"));
         if (pkg)
