@@ -1180,7 +1180,9 @@ function switchToTab(tab) {
   if (tab === 'chat') { chatTabActivated(); }
   else { stopChatPoll(); }
   // Update hash without triggering hashchange (we're already there)
-  if (window.location.hash !== '#' + tab) {
+  // But DON'T overwrite project detail hashes (#projects/name/subtab)
+  const curHash = window.location.hash;
+  if (curHash !== '#' + tab && !curHash.startsWith('#projects/')) {
     history.replaceState(null, '', '#' + tab);
   }
   return true;
@@ -1188,9 +1190,28 @@ function switchToTab(tab) {
 
 /** Handle hashchange — switch to the tab from the URL hash. */
 function onHashChange() {
-  const tab = window.location.hash.replace('#', '') || 'home';
-  if (tab && document.querySelector('.tab-btn[data-tab="' + tab + '"]')) {
-    switchToTab(tab);
+  const raw = window.location.hash.replace('#', '') || 'home';
+  // Check for project detail hash: #projects/<name> or #projects/<name>/<stab>
+  if (raw.startsWith('projects/')) {
+    const parts = raw.split('/');
+    const projName = decodeURIComponent(parts[1]);
+    const subTab = parts[2] || 'state';
+    switchToTab('projects');
+    // Close current project detail before opening new one
+    if (CUR_PROJ && CUR_PROJ !== projName) closeProjDetail();
+    // After tab switch, open the project detail (deferred so renderProjects runs first)
+    setTimeout(() => { if (projName) openProjDetail(projName); }, 100);
+    setTimeout(() => { if (projName) switchProjTab(subTab); }, 300);
+    return;
+  }
+  if (raw === 'projects') {
+    switchToTab('projects');
+    // Close any open project detail so we see the list
+    if (CUR_PROJ) closeProjDetail();
+    return;
+  }
+  if (raw && document.querySelector('.tab-btn[data-tab="' + raw + '"]')) {
+    switchToTab(raw);
   }
 }
 
@@ -1207,9 +1228,21 @@ window.addEventListener('hashchange', onHashChange);
 
 // On page load, read hash and switch to that tab
 (function() {
-  const tab = window.location.hash.replace('#', '') || 'home';
-  if (tab && document.querySelector('.tab-btn[data-tab="' + tab + '"]')) {
-    switchToTab(tab);
+  const raw = window.location.hash.replace('#', '') || 'home';
+  if (raw.startsWith('projects/')) {
+    const parts = raw.split('/');
+    const projName = decodeURIComponent(parts[1]);
+    const subTab = parts[2] || 'state';
+    switchToTab('projects');
+    // Defer so renderProjects runs first
+    setTimeout(() => { if (projName) openProjDetail(projName); }, 200);
+    setTimeout(() => { if (projName) switchProjTab(subTab); }, 400);
+  } else if (raw === 'projects') {
+    switchToTab('projects');
+  } else if (raw && document.querySelector('.tab-btn[data-tab="' + raw + '"]')) {
+    switchToTab(raw);
+  } else {
+    switchToTab('home');
   }
 })();
 
@@ -1410,6 +1443,7 @@ async function openProjDetail(name) {
   const badge = $('projBadge');
   badge.style.display = 'inline-block';
   badge.textContent = '🔵 Working on: ' + name;
+  history.replaceState({}, '', '#projects/' + encodeURIComponent(name));
 
   const r = await api('/api/project-state?name=' + encodeURIComponent(name));
   if (r.error) { toast('Error: ' + r.error, 'error'); return; }
@@ -1426,6 +1460,7 @@ function closeProjDetail() {
   $('projDetail').classList.remove('show');
   // Hide project badge
   $('projBadge').style.display = 'none';
+  history.replaceState({}, '', '#projects');
 }
 
 function switchProjTab(tab) {
@@ -1440,6 +1475,9 @@ function switchProjTab(tab) {
   } else if (tab === 'manager') {
     $('projManagerArea').classList.add('show');
     renderProjManager();
+  }
+  if (CUR_PROJ) {
+    history.replaceState({}, '', '#projects/' + encodeURIComponent(CUR_PROJ) + '/' + tab);
   }
 }
 
