@@ -1149,6 +1149,11 @@ function renderHomeStats() {
    TAB SWITCHING — with URL hash routing
    ═══════════════════════════════════════════════════════════════ */
 
+/* ── Chat state (init before switchToTab — TDZ guard) ── */
+let CHAT_POLL_TIMER = null;
+const DASHBOARD_SENT_MESSAGES = [];
+let DASHBOARD_MSG_COUNTER = 0;
+
 /** Switch to a tab by name, updating hash. Does NOT push another hash entry. */
 function switchToTab(tab) {
   const btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
@@ -2278,9 +2283,6 @@ let CHAT_SESSIONS = {};
 let CHAT_SELECTED_SESSION = null;
 let CHAT_PENDING_SESSION = null;
 let CHAT_SSE = null;
-let CHAT_POLL_TIMER = null;
-const DASHBOARD_SENT_MESSAGES = [];
-let DASHBOARD_MSG_COUNTER = 0;
 
 function startChatPoll() {
   // Stop any existing poll
