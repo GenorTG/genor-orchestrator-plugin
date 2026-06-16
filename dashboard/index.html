@@ -1602,13 +1602,10 @@ function renderProjManager() {
   // Logged sessions timeline
   if (logged.length > 0) {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">Session Timeline</div>';
-    for (let i = 0; i < Math.min(logged.length, 40); i++) {
-      const l = logged[i];
-    const icon = l.status==='complete'||l.status==='done'?'✅' : l.status==='running'||l.status==='in_progress'?'\ud83d\udd04' : l.status==='failed'||l.status==='interrupted'?'\u274c' : '\u2753';
-    // Build parent/child tree from parent_session_key links
-    function depthOf(l) {
+    // Helper: depth of session in parent/child tree
+    const depthOf = (sess) => {
       let d = 0;
-      let p = l.parent_session_key;
+      let p = sess.parent_session_key;
       while (p && d < 8) {
         d++;
         const parent = logged.find(x => x.session_key === p);
@@ -1616,9 +1613,12 @@ function renderProjManager() {
         p = parent.parent_session_key;
       }
       return d;
-    }
-    const subTag = l.parent_session_key ? '<span style="color:var(--yellow);font-size:9px;margin-left:4px">[sub]</span>' : '';
-    const realIndent = depthOf(l) * 20;
+    };
+    for (let i = 0; i < Math.min(logged.length, 40); i++) {
+      const l = logged[i];
+      const icon = l.status==='complete'||l.status==='done'?'✅' : l.status==='running'||l.status==='in_progress'?'🔄' : l.status==='failed'||l.status==='interrupted'?'❌' : '❓';
+      const subTag = l.parent_session_key ? '<span style="color:var(--yellow);font-size:9px;margin-left:4px">[sub]</span>' : '';
+      const realIndent = depthOf(l) * 20;
       h += '<div class="node" style="padding-left:' + realIndent + 'px">' +
         '<span class="icon">' + icon + '</span>' +
         '<span>' + esc((l.goal||l.task||'').slice(0,50)) + subTag + '</span>' +
