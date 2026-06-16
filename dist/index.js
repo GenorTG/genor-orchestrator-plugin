@@ -29,6 +29,7 @@ function getDashboardDir() {
         process.env.DASHBOARD_DIR,
         path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator/dashboard"),
         path.join(os.homedir(), ".openclaw/extensions/genor-orchestrator/dashboard"),
+        path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "dashboard"),
     ];
     for (const c of candidates) {
         if (c && fs.existsSync(c))
@@ -2244,16 +2245,16 @@ const _plugin = definePluginEntry({
                     try {
                         const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 5000 });
                         const processes = JSON.parse(pm2Out);
-                        const dashProc = processes.find((p) => p.name === "genor-dashboard" || (p.pm2_env?.name === "genor-dashboard"));
-                        const bridgeProc = processes.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
+                        const dashProc = processes.find((p) => p.name === "genor-dashboard" || p.name === "orchestration-dashboard" || (p.pm2_env?.name === "genor-dashboard") || (p.pm2_env?.name === "orchestration-dashboard"));
+                        const bridgeProc = processes.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
                         if (!dashProc)
-                            addIssue("genor-dashboard PM2 process not found.");
+                            addIssue("Dashboard PM2 process not found (expected: genor-dashboard or orchestration-dashboard).");
                         else if (dashProc.pm2_env?.status !== "online") {
-                            addIssue("genor-dashboard is " + (dashProc.pm2_env?.status || "unknown") + ".");
+                            addIssue("Dashboard is " + (dashProc.pm2_env?.status || "unknown") + ".");
                             if (autoFix) {
                                 try {
-                                    execSync("pm2 start " + path.join(getDashboardDir(), "server.py") + " --interpreter python3 --name genor-dashboard 2>&1", { timeout: 10000 });
-                                    addFix("Started genor-dashboard");
+                                    execSync("pm2 start " + path.join(getDashboardDir(), "server.py") + " --interpreter python3 --name orchestration-dashboard 2>&1", { timeout: 10000 });
+                                    addFix("Started orchestration-dashboard");
                                 }
                                 catch (e) {
                                     addFix("Failed: " + e.message);
@@ -2261,7 +2262,7 @@ const _plugin = definePluginEntry({
                             }
                         }
                         if (!bridgeProc)
-                            addIssue("gateway-ws-bridge PM2 process not found.");
+                            addIssue("WebSocket bridge PM2 process not found (expected: genor-bridge, gateway-ws-bridge, or gw-ws-bridge).");
                         else if (bridgeProc.pm2_env?.status !== "online") {
                             addIssue("gateway-ws-bridge is " + (bridgeProc.pm2_env?.status || "unknown") + ".");
                             if (autoFix) {
@@ -2474,12 +2475,12 @@ const _plugin = definePluginEntry({
                     try {
                         const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 3000 });
                         const procs = JSON.parse(pm2Out);
-                        const ds = procs.find((p) => p.name === "genor-dashboard");
+                        const ds = procs.find((p) => p.name === "genor-dashboard" || p.name === "orchestration-dashboard" || (p.pm2_env?.name === "genor-dashboard") || (p.pm2_env?.name === "orchestration-dashboard"));
                         if (!ds)
-                            issues.push("genor-dashboard PM2 process missing.");
+                            issues.push("Dashboard PM2 process missing (genor-dashboard or orchestration-dashboard).");
                         else if (ds.pm2_env?.status !== "online")
-                            issues.push("genor-dashboard is " + (ds.pm2_env?.status || "unknown") + ".");
-                        const br = procs.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge");
+                            issues.push("Dashboard is " + (ds.pm2_env?.status || "unknown") + ".");
+                        const br = procs.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
                         if (!br)
                             issues.push("gateway-ws-bridge PM2 process missing.");
                         else if (br.pm2_env?.status !== "online")
