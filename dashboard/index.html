@@ -563,8 +563,9 @@ input.search:focus{border-color:var(--blue);outline:none}
     </div>
     <div class="activity-feed-wrap">
       <div class="activity-feed-header">
-        <div class="title">📡 Activity Feed (live)</div>
+        <div class="title">📡 Activity Feed</div>
         <div class="controls">
+          <button class="btn btn-xs" data-tip="Clear all entries from the feed" onclick="DS.activity=[];renderActivityFeed()">🗑 Clear</button>
           <label><input type="checkbox" id="feedAutoScroll" checked> Auto-scroll</label>
           <select id="feedFilter">
             <option value="">All levels</option>
@@ -1108,9 +1109,19 @@ async function initLoad() {
 /* ── Status Bar ── */
 function updateStatusBar() {
   const s = DS.state || {};
-  $('sbText').textContent = s.project ? s.project + ' / ' + (s.task||'—') : 'No active project';
-  $('sbModel').textContent = 'model: ' + (s.model||'—');
-  $('sbDot').className = 'sb-dot ' + (s.project ? 'on' : 'off');
+  const p = DS.all?.projects?.projects || [];
+  const m = DS.all?.models || {};
+  const projCount = p.length;
+  const modelCount = m.total || 0;
+  const agentCount = (DS.agents || []).length;
+  const actCount = (DS.agents || []).filter(a => (a.agent_status||a.status||'') === 'active' || (a.agent_status||a.status||'') === 'working').length;
+  if (s.project) {
+    $('sbText').textContent = s.project + ' / ' + (s.task||'—');
+  } else {
+    $('sbText').textContent = modelCount + ' models · ' + projCount + ' projects';
+  }
+  $('sbModel').textContent = (actCount ? actCount + ' active · ' : '') + (agentCount ? agentCount + ' agents' : '');
+  $('sbDot').className = 'sb-dot ' + (s.project || agentCount ? 'on' : 'off');
 }
 
 function updateHeaderStats() {
@@ -1257,6 +1268,8 @@ function renderActivityFeed() {
   feed.innerHTML = html ||
     '<div class="feed-empty"><span class="big">🔍</span>No entries match filter.</div>';
 
+  // Update status bar timestamp
+  $('sbTime').textContent = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   // Auto-scroll
   if ($('feedAutoScroll').checked) {
     feed.scrollTop = feed.scrollHeight;
