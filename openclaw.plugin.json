@@ -54,7 +54,8 @@
       "orchestrator_get_project_docs",
       "orchestrator_advance_phase",
       "orchestrator_get_routing",
-      "orchestrator_get_registered_sessions"
+      "orchestrator_get_registered_sessions",
+      "orchestrator_doctor"
     ]
   }
 }

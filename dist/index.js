@@ -1475,6 +1475,7 @@ const TOOL_METADATA = [
     { name: "orchestrator_advance_phase", label: "Advance Workflow Phase", description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish).", parameters: { type: "object", properties: { phase: { type: "string", description: "Target phase to transition to. Omit to auto-advance." }, skip: { type: "boolean", description: "Mark current phase as skipped." } } } },
     { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
     { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
+    { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, missing PM2 processes, context inconsistencies.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data', 'pm2'" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -2104,6 +2105,188 @@ const _plugin = definePluginEntry({
                 });
             },
         });
+        api.registerTool({
+            name: "orchestrator_doctor",
+            label: "Orchestrator Doctor",
+            description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, missing PM2 processes, context inconsistencies.",
+            parameters: Type.Object({
+                check: Type.Optional(Type.String({ description: "Specific check to run: 'all' (default), 'sessions', 'context', 'data', 'pm2'" })),
+                fix: Type.Optional(Type.Boolean({ description: "Auto-fix discovered issues when possible (default: false)" })),
+            }),
+            async execute(_id, params) {
+                const checks = (params.check || "all");
+                const autoFix = !!params.fix;
+                const issues = [];
+                const fixes = [];
+                let ok = true;
+                function addIssue(msg) { issues.push(msg); ok = false; }
+                function addFix(msg) { fixes.push(msg); }
+                // -- 1. SESSION HEALTH --
+                if (checks === "all" || checks === "sessions") {
+                    const hk = sessionTracker.sessionKey;
+                    if (!hk) {
+                        addIssue("No session key set. orchestrator_register will use synthetic fallback.");
+                        if (autoFix) {
+                            const sk = agentDefaultSessionKey();
+                            sessionTracker.registerSession(sk);
+                            sessionTracker.sessionKey = sk;
+                            addFix("Registered synthetic key: " + sk);
+                        }
+                    }
+                    else {
+                        if (!sessionTracker.isSessionRegistered(hk)) {
+                            addIssue("Session key " + hk + " is not registered. Call orchestrator_register.");
+                            if (autoFix) {
+                                sessionTracker.registerSession(hk);
+                                addFix("Registered session: " + hk);
+                            }
+                        }
+                    }
+                    const allRegSessions = sessionTracker.getRegisteredSessions();
+                    const syntheticKeys = allRegSessions.filter(k => k.startsWith("agent:main:auto:"));
+                    const realKeys = allRegSessions.filter(k => !k.startsWith("agent:main:auto:"));
+                    if (syntheticKeys.length > 0 && realKeys.length === 0) {
+                        addIssue("Only synthetic keys registered - project context injection may not fire because the gateway uses real session keys in hooks.");
+                    }
+                    if (autoFix && syntheticKeys.length > 0 && realKeys.length === 0 && hk && !hk.startsWith("agent:main:auto:")) {
+                        for (const sk of syntheticKeys) {
+                            const ctx = sessionTracker.getSessionContext(sk);
+                            sessionTracker.registerSession(hk);
+                            if (ctx) {
+                                sessionTracker.sessionKey = hk;
+                                sessionTracker.setContext(ctx.project, ctx.task || "");
+                                sessionTracker.setStatus("resolving");
+                                addFix("Copied context \"" + ctx.project + "\" from " + sk + " to real key " + hk);
+                            }
+                            else {
+                                addFix("Registered real key " + hk + " (no context to transfer)");
+                            }
+                        }
+                    }
+                }
+                // -- 2. CONTEXT HEALTH --
+                if (checks === "all" || checks === "context") {
+                    const hk = sessionTracker.sessionKey;
+                    const ctx = hk ? sessionTracker.getSessionContext(hk) : null;
+                    const allCtxRaw = sessionTracker.getRegisteredSessions()
+                        .map(k => ({ key: k, ctx: sessionTracker.getSessionContext(k) }))
+                        .filter((x) => !!x.ctx);
+                    if (!ctx && allCtxRaw.length === 0) {
+                        addIssue("No project context set. Use orchestrator_set_context to activate a project.");
+                    }
+                    else if (!ctx && allCtxRaw.length > 0) {
+                        addIssue("Context is set for other sessions but NOT the current one. Session key may differ.");
+                        if (autoFix && allCtxRaw[0].ctx) {
+                            const best = allCtxRaw[0];
+                            sessionTracker.sessionKey = hk || best.key;
+                            sessionTracker.setContext(best.ctx.project, best.ctx.task || "");
+                            addFix("Copied context \"" + best.ctx.project + "\" to current session");
+                        }
+                    }
+                    for (const x of allCtxRaw) {
+                        const loc = getProjectLocation(x.ctx.project, dataDir);
+                        if (loc && !fs.existsSync(loc)) {
+                            addIssue("Project \"" + x.ctx.project + "\" location missing: " + loc);
+                        }
+                    }
+                }
+                // -- 3. DATA HEALTH --
+                if (checks === "all" || checks === "data") {
+                    const modelsPath = path.join(dataDir, "models.json");
+                    if (fs.existsSync(modelsPath)) {
+                        try {
+                            const md = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
+                            const activeModels = (md.models || []).filter((m) => m.status === "active").length;
+                            if (activeModels === 0)
+                                addIssue("models.json has 0 active models. Run orchestrator_auto_populate.");
+                        }
+                        catch (e) {
+                            addIssue("models.json is corrupt: " + e.message + ". Run orchestrator_auto_populate.");
+                            if (autoFix) {
+                                try {
+                                    fs.unlinkSync(modelsPath);
+                                    addFix("Deleted corrupt models.json");
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    const cfgPath = path.join(dataDir, "dashboard-config.json");
+                    if (!fs.existsSync(cfgPath))
+                        addIssue("dashboard-config.json not found.");
+                    const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
+                    if (fs.existsSync(logPath)) {
+                        const stat = fs.statSync(logPath);
+                        const ageHrs = (Date.now() - stat.mtimeMs) / 3600000;
+                        if (ageHrs > 24)
+                            addIssue("orchestrator.jsonl last modified " + ageHrs.toFixed(1) + " hours ago.");
+                    }
+                    else {
+                        addIssue("orchestrator.jsonl missing.");
+                    }
+                    const livePath = path.join(dataDir, LIVE_AGENTS_FILE);
+                    if (fs.existsSync(livePath)) {
+                        const stat = fs.statSync(livePath);
+                        const ageSec = (Date.now() - stat.mtimeMs) / 1000;
+                        if (ageSec > 300)
+                            addIssue("live-agents.json stale (" + Math.round(ageSec) + "s old).");
+                        if (autoFix && ageSec > 600) {
+                            try {
+                                fs.unlinkSync(livePath);
+                                addFix("Removed stale live-agents.json");
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                // -- 4. PM2 PROCESS HEALTH --
+                if (checks === "all" || checks === "pm2") {
+                    try {
+                        const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 5000 });
+                        const processes = JSON.parse(pm2Out);
+                        const dashProc = processes.find((p) => p.name === "genor-dashboard" || (p.pm2_env?.name === "genor-dashboard"));
+                        const bridgeProc = processes.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
+                        if (!dashProc)
+                            addIssue("genor-dashboard PM2 process not found.");
+                        else if (dashProc.pm2_env?.status !== "online") {
+                            addIssue("genor-dashboard is " + (dashProc.pm2_env?.status || "unknown") + ".");
+                            if (autoFix) {
+                                try {
+                                    execSync("pm2 start " + path.join(getDashboardDir(), "server.py") + " --interpreter python3 --name genor-dashboard 2>&1", { timeout: 10000 });
+                                    addFix("Started genor-dashboard");
+                                }
+                                catch (e) {
+                                    addFix("Failed: " + e.message);
+                                }
+                            }
+                        }
+                        if (!bridgeProc)
+                            addIssue("gateway-ws-bridge PM2 process not found.");
+                        else if (bridgeProc.pm2_env?.status !== "online") {
+                            addIssue("gateway-ws-bridge is " + (bridgeProc.pm2_env?.status || "unknown") + ".");
+                            if (autoFix) {
+                                try {
+                                    execSync("pm2 start " + path.join(getDashboardDir(), "gateway-ws-bridge.js") + " --name gateway-ws-bridge 2>&1", { timeout: 10000 });
+                                    addFix("Started gateway-ws-bridge");
+                                }
+                                catch (e) {
+                                    addFix("Failed: " + e.message);
+                                }
+                            }
+                        }
+                    }
+                    catch (e) {
+                        addIssue("PM2 check failed: " + e.message);
+                    }
+                }
+                const result = { ok, checks: checks, auto_fix: autoFix, issues_found: issues.length, fixes_applied: fixes.length, session_key: sessionTracker.sessionKey || "(none)", registered: sessionTracker.sessionKey ? sessionTracker.isSessionRegistered(sessionTracker.sessionKey) : false, project_context: sessionTracker.currentProject || "(none)" };
+                if (issues.length > 0)
+                    result.issues = issues;
+                if (fixes.length > 0)
+                    result.fixes = fixes;
+                return txt(result);
+            },
+        });
         // ═══════════════════════════════════════════════════════════
         //  BACKGROUND MAINTENANCE
         // ═══════════════════════════════════════════════════════════
@@ -2138,6 +2321,7 @@ const _plugin = definePluginEntry({
         //    /genor-status — quick status
         //    /genor-help — command reference
         //    /genor-git-commit — git commit + versioning
+        //    /genor-doctor — diagnose and fix issues
         api.registerCommand({
             name: "genor-dashboard",
             description: "Show GenorBoard dashboard URL",
@@ -2172,6 +2356,7 @@ const _plugin = definePluginEntry({
                     "**\U0001f3e0 GenorBoard \u2014 Available Commands**",
                     "",
                     "**/genor-help** \u2014 This list",
+                    "**/genor-doctor** \u2014 Diagnose and fix orchestrator issues",
                     "**/genor-dashboard** \u2014 Dashboard URL",
                     "**/genor-status** \u2014 Quick status overview",
                     "**/genor-git-commit** \u2014 Commit project changes with versioning",
@@ -2258,7 +2443,69 @@ const _plugin = definePluginEntry({
                 }
             },
         });
-        logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 4 slash commands`);
+        api.registerCommand({
+            name: "genor-doctor",
+            description: "Diagnose and optionally fix orchestrator issues (session keys, registration, PM2, data health)",
+            requireAuth: false,
+            handler: () => {
+                try {
+                    const hk = sessionTracker.sessionKey;
+                    const issues = [];
+                    // Session key check
+                    if (!hk)
+                        issues.push("No session key set.");
+                    else if (!sessionTracker.isSessionRegistered(hk))
+                        issues.push("Session not registered. Call orchestrator_register.");
+                    // Context check
+                    const ctx = hk ? sessionTracker.getSessionContext(hk) : null;
+                    if (!ctx)
+                        issues.push("No project context set. Use orchestrator_set_context.");
+                    // Log age check
+                    const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
+                    if (fs.existsSync(logPath)) {
+                        const stat = fs.statSync(logPath);
+                        const ageHrs = (Date.now() - stat.mtimeMs) / 3600000;
+                        if (ageHrs > 24)
+                            issues.push("Log file stale (" + ageHrs.toFixed(1) + "h).");
+                    }
+                    else
+                        issues.push("Log file missing.");
+                    // PM2 check
+                    try {
+                        const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 3000 });
+                        const procs = JSON.parse(pm2Out);
+                        const ds = procs.find((p) => p.name === "genor-dashboard");
+                        if (!ds)
+                            issues.push("genor-dashboard PM2 process missing.");
+                        else if (ds.pm2_env?.status !== "online")
+                            issues.push("genor-dashboard is " + (ds.pm2_env?.status || "unknown") + ".");
+                        const br = procs.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge");
+                        if (!br)
+                            issues.push("gateway-ws-bridge PM2 process missing.");
+                        else if (br.pm2_env?.status !== "online")
+                            issues.push("gateway-ws-bridge is " + (br.pm2_env?.status || "unknown") + ".");
+                    }
+                    catch {
+                        issues.push("PM2 process list unavailable.");
+                    }
+                    const lines = ["**\uD83D\uDC8A Genor Orchestrator Doctor**"];
+                    if (issues.length === 0) {
+                        lines.push("", "**\u2705 All checks passed.**", "", "Session: " + hk);
+                    }
+                    else {
+                        lines.push("", "**" + issues.length + " issue(s) found:**", "");
+                        for (const iss of issues)
+                            lines.push(iss);
+                        lines.push("", "**Tip:** Use orchestrator_doctor (tool) with fix=true to auto-repair.");
+                    }
+                    return { text: lines.join("\n"), continueAgent: false };
+                }
+                catch (e) {
+                    return { text: "**\u274c Doctor error:** " + e.message, continueAgent: false };
+                }
+            },
+        });
+        logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
     },
 });
 // ═══════════════════════════════════════════════════════════════
