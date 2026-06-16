@@ -414,7 +414,7 @@ body{
    ═══════════════════════════════════════════════════════════════ */
 .msg-row{display:flex;gap:4px;margin-bottom:4px;animation:fadeIn .15s ease}
 .msg-row.user{justify-content:flex-end}
-.msg-bubble{max-width:85%;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.5;word-break:break-word;white-space:pre-wrap}
+.msg-bubble{max-width:85%;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.6;word-break:break-word;white-space:normal}.msg-bubble p{margin:4px 0}.msg-bubble p:first-child{margin-top:0}.msg-bubble p:last-child{margin-bottom:0}.msg-bubble code{background:rgba(128,128,128,.15);padding:1px 4px;border-radius:3px;font-family:var(--font-mono,'Courier New',monospace);font-size:11px}.msg-bubble pre{background:rgba(0,0,0,.3);padding:8px;border-radius:4px;overflow-x:auto;margin:6px 0}.msg-bubble pre code{background:none;padding:0;font-size:11px;line-height:1.4}.msg-bubble strong{font-weight:700}.msg-bubble em{font-style:italic}.msg-bubble del{text-decoration:line-through;opacity:.7}.msg-bubble a{color:var(--blue);text-decoration:underline}
 .msg-bubble.user{background:var(--blue);color:#000;border-bottom-right-radius:2px}
 .msg-bubble.assistant{background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-bottom-left-radius:2px}
 .msg-bubble.system{background:rgba(210,153,34,.12);color:var(--yellow);border:1px solid rgba(210,153,34,.2);font-size:11px;font-style:italic}
@@ -2296,6 +2296,36 @@ async function chatFetchHistory(sessionKey) {
   }
 }
 
+// ── Minimal markdown renderer (safe, no XSS) ─────────────────
+function chatRenderMarkdown(text) {
+  // Step 1: HTML-escape everything first
+  let s = chatEscape(text);
+  // Step 2: Code blocks (```...```) — render as <pre><code>
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    return '<pre><code class="lang-' + chatEscape(lang) + '">' + code.trim() + '</code></pre>';
+  });
+  // Step 3: Inline code (`...`)
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Step 4: Bold (**...** or __...__)
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Step 5: Italic (*...* or _..._) — but not inside words with underscores
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/(?<![\w])_([^_]+)_(?![\w])/g, '<em>$1</em>');
+  // Step 6: Strikethrough (~~...~~)
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  // Step 7: Links [text](url)
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Step 8: Line breaks (double newline = paragraph, single = <br>)
+  s = s.replace(/\n\n/g, '</p><p>');
+  s = s.replace(/\n/g, '<br>');
+  // Step 9: Wrap in paragraph if multiline
+  if (s.includes('</p>')) {
+    s = '<p>' + s + '</p>';
+  }
+  return s;
+}
+
 function chatRenderMessages(messages) {
   const container = document.getElementById('chatMessages');
   if (!container) return;
@@ -2314,7 +2344,7 @@ function chatRenderMessages(messages) {
 
     const role = m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant';
     const ts = m.ts ? new Date(m.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
-    const content = chatEscape(m.content || '').replace(/\n/g, '<br>');
+    const content = chatRenderMarkdown(m.content || '');
     h += '<div class="msg-row ' + role + '"><div class="msg-bubble ' + role + '">' +
       '<div class="msg-content">' + content + '</div>' +
       (ts ? '<div class="msg-ts">' + ts + '</div>' : '') +

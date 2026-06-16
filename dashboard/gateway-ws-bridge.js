@@ -70,6 +70,9 @@ function gw(method, path, body) {
 }
 
 // ── Outbox processing (fire-and-forget via HTTP) ──────────────
+const OUTBOX_SEND_TIMEOUT = 15000; // 15s — sessions_send can block on agent reply
+const STALE_SENDING_MS = 30000; // 30s — reset stuck "sending" items
+
 function processOutbox() {
   try {
     if (!fs.existsSync(OUTBOX_FILE)) return;
@@ -79,40 +82,80 @@ function processOutbox() {
     const pending = ob.pending || [];
     if (!pending.length) return;
 
-    const item = pending[0];
-    if (item.sent || item.sending) return;
-    item.sending = true;
-    fs.writeFileSync(OUTBOX_FILE, JSON.stringify(ob, null, 2));
+    const now = Date.now();
+    let changed = false;
 
-    console.log(`[Bridge] Sending to ${item.sessionKey}: "${(item.message||'').substring(0,40)}..."`);
-    const body = JSON.stringify({ tool: 'sessions_send', args: { sessionKey: item.sessionKey, message: item.message } });
+    // Reset stale sending items (bridge crashed mid-send)
+    for (const item of pending) {
+      if (item.sending && !item.sent && (now - (item.ts * 1000 || 0)) > STALE_SENDING_MS) {
+        item.sending = false;
+        item.retries = (item.retries || 0) + 1;
+        item.error = 'stale (crashed), retry ' + item.retries;
+        changed = true;
+        console.log(`[Bridge] ⚠ Reset stale sending item ${item.id}`);
+      }
+    }
+    // Drop items with too many retries
+    ob.pending = pending.filter(p => (p.retries || 0) < 5);
+
+    const next = (ob.pending || []).find(p => !p.sent && !p.sending);
+    if (!next) return;
+
+    next.sending = true;
+    changed = true;
+    if (changed) fs.writeFileSync(OUTBOX_FILE, JSON.stringify(ob, null, 2));
+
+    console.log(`[Bridge] Sending to ${next.sessionKey}: "${(next.message||'').substring(0,40)}..."`);
+    const body = JSON.stringify({ tool: 'sessions_send', args: { sessionKey: next.sessionKey, message: next.message } });
     const opts = {
       hostname: GATEWAY_HOST, port: GATEWAY_PORT,
       path: '/tools/invoke', method: 'POST',
       headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      timeout: 4000,
+      timeout: OUTBOX_SEND_TIMEOUT,
     };
     const req = http.request(opts, (res) => {
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => {
         if (res.statusCode === 200) {
-          item.sent = true; item.error = null;
-          console.log(`[Bridge] ✅ Sent to ${item.sessionKey}`);
+          next.sent = true; next.error = null;
+          console.log(`[Bridge] ✅ Sent to ${next.sessionKey}`);
         } else {
-          item.error = `HTTP ${res.statusCode}`;
-          console.log(`[Bridge] ❌ Send failed: ${item.error}`);
+          next.error = `HTTP ${res.statusCode}: ${d.substring(0, 100)}`;
+          console.log(`[Bridge] ❌ Send failed: ${next.error}`);
         }
-        cleanupOutbox();
+        // Flush state before cleanup
+        try {
+          const raw = fs.readFileSync(OUTBOX_FILE, 'utf8');
+          const ob2 = JSON.parse(raw);
+          ob2.pending = (ob2.pending || []).map(p => p.id === next.id ? next : p);
+          ob2.pending = ob2.pending.filter(p => !p.sent);
+          fs.writeFileSync(OUTBOX_FILE, JSON.stringify(ob2, null, 2));
+        } catch(e) {}
       });
     });
-    req.on('error', (e) => { item.error = e.message; cleanupOutbox(); });
+    req.on('error', (e) => {
+      next.error = e.message;
+      try {
+        const raw = fs.readFileSync(OUTBOX_FILE, 'utf8');
+        const ob2 = JSON.parse(raw);
+        ob2.pending = (ob2.pending || []).map(p => p.id === next.id ? next : p);
+        fs.writeFileSync(OUTBOX_FILE, JSON.stringify(ob2, null, 2));
+      } catch(e) {}
+    });
     req.on('timeout', () => {
       req.destroy();
-      // Timeout is expected — tool waits for reply
-      item.sent = true; item.error = null;
-      console.log(`[Bridge] ⏱ Ignoring timeout — message sent`);
-      cleanupOutbox();
+      // sessions_send can block — timeout is expected after send goes through
+      next.sent = true; next.error = null;
+      // Write state before cleanup (timeout handler mutates in-memory, not file)
+      try {
+        const raw = fs.readFileSync(OUTBOX_FILE, 'utf8');
+        const ob2 = JSON.parse(raw);
+        ob2.pending = (ob2.pending || []).map(p => p.id === next.id ? next : p);
+        ob2.pending = ob2.pending.filter(p => !p.sent);
+        fs.writeFileSync(OUTBOX_FILE, JSON.stringify(ob2, null, 2));
+      } catch(e) {}
+      console.log(`[Bridge] ⏱ sessions_send timed out — message probably sent`);
     });
     req.write(body);
     req.end();
