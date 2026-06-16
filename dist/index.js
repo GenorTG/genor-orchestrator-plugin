@@ -1655,16 +1655,32 @@ const _plugin = definePluginEntry({
         });
         api.on("before_model_resolve", async (event, hookCtx) => {
             try {
-                // Ensure sessionKey is populated for any active session.
-                // session_start may not have fired for sessions that existed before
-                // the plugin was loaded or after a gateway restart. Lazily populate
-                // the key on the first turn so orchestrator_register works.
+                // Resolve session key from hook context - the REAL gateway key.
+                // Bridge synthetic fallback keys (from orchestrator_register)
+                // with the real key so before_prompt_build injection works.
                 const ctxSessionKey = hookCtx?.sessionKey || "";
-                if (ctxSessionKey && !sessionTracker.sessionKey) {
+                if (ctxSessionKey) {
                     const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
                     if (!isBackground) {
-                        sessionTracker.start(ctxSessionKey, "resumed");
-                        logger.debug("hooks", `before_model_resolve: populated sessionKey=${ctxSessionKey}`);
+                        // Bridge: register the real key alongside any synthetic one
+                        // so before_prompt_build finds the registration.
+                        const regSk = sessionTracker.sessionKey;
+                        if (regSk && regSk !== ctxSessionKey) {
+                            sessionTracker.registerSession(ctxSessionKey);
+                            const existingCtx = sessionTracker.getSessionContext(regSk);
+                            if (existingCtx) {
+                                // start() resets context, so capture first then restore
+                                const { project, task } = existingCtx;
+                                sessionTracker.sessionKey = ctxSessionKey;
+                                sessionTracker.setContext(project, task || "");
+                                sessionTracker.setStatus("prompting");
+                            }
+                        }
+                        // Always adopt the real key as tracker primary key
+                        if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
+                            sessionTracker.start(ctxSessionKey, "resumed");
+                        }
+                        logger.info("hooks", "before_model_resolve: active session key=" + ctxSessionKey);
                     }
                 }
                 sessionTracker.setStatus("resolving");
@@ -1722,7 +1738,27 @@ const _plugin = definePluginEntry({
                 sessionTracker.trackAction("building_prompt");
                 writeLiveAgents("before_prompt_build", sessionTracker, logger);
                 // Scope project context injection to the session that registered it.
-                const sk = hookCtx?.sessionKey || sessionTracker.sessionKey;
+                const hk = hookCtx?.sessionKey || "";
+                // Safety net: if hook context has a real gateway key that differs
+                // from the synthetic fallback, register it so the context check
+                // still passes. This handles the case where before_model_resolve
+                // was skipped or didn't bridge.
+                // Safety net bridge: if hookCtx has a real key that differs from
+                // the synthetic fallback, register it and copy context across.
+                if (hk) {
+                    const skVal = sessionTracker.sessionKey;
+                    if (skVal && hk !== skVal && sessionTracker.isSessionRegistered(skVal)) {
+                        const existingCtx = sessionTracker.getSessionContext(skVal);
+                        sessionTracker.registerSession(hk);
+                        if (existingCtx) {
+                            const { project, task } = existingCtx;
+                            sessionTracker.sessionKey = hk;
+                            sessionTracker.setContext(project, task || "");
+                            sessionTracker.setStatus("resolving");
+                        }
+                    }
+                }
+                const sk = hk || sessionTracker.sessionKey;
                 // ONLY inject project context for explicitly registered sessions.
                 // A session must call orchestrator_register() to opt in — no
                 // chat/logging session ever gets context unless it registered.
