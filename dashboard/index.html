@@ -803,6 +803,8 @@ input.search:focus{border-color:var(--blue);outline:none}
   <span id="sbTime">—</span>
   <span class="sb-sep"></span>
   <span id="sbModel">model: —</span>
+  <span class="sb-sep"></span>
+  <span class="sb-item">📋 <span id="sbSessionsValid" style="color:var(--green)">sessions: —</span></span>
   <div class="sb-right">
     <span class="sb-item">SSE <span id="sseStatus" style="color:var(--yellow)">connecting</span></span>
     <span class="sb-item">⏱ <span id="upTime">0s</span></span>
@@ -896,6 +898,7 @@ async function refreshAll() {
     }
     updateHeaderStats();
     updateStatusBar();
+    updateSessionValidation();
     const pcount = r.projects ? (Array.isArray(r.projects.projects) ? r.projects.projects.length : r.projects.count || 0) : 0;
   const scount = Array.isArray(r.sessions) ? r.sessions.length : (r.sessions ? (r.sessions.count || 0) : 0);
   $('hText').textContent = (r.models ? r.models.total : 0) + ' models · ' + pcount + ' projects · ' + scount + ' sessions';
@@ -1083,6 +1086,7 @@ async function initLoad() {
 
   updateStatusBar();
   updateHeaderStats();
+  updateSessionValidation();
   renderHomeStats();
   renderActivityFeed();
   renderProjects();
@@ -1122,6 +1126,28 @@ function updateStatusBar() {
   }
   $('sbModel').textContent = (actCount ? actCount + ' active · ' : '') + (agentCount ? agentCount + ' agents' : '');
   $('sbDot').className = 'sb-dot ' + (s.project || agentCount ? 'on' : 'off');
+}
+
+async function updateSessionValidation() {
+  try {
+    const r = await api('/api/validate-sessions');
+    if (!r || !r.ok) { $('sbSessionsValid').textContent = 'sessions: err'; $('sbSessionsValid').style.color = 'var(--red)'; return; }
+    const errs = (r.issues || []).filter(i => i.severity === 'error').length;
+    const warns = (r.issues || []).filter(i => i.severity === 'warn').length;
+    if (errs > 0) {
+      $('sbSessionsValid').textContent = `sessions: ${errs}E/${warns}W`;
+      $('sbSessionsValid').style.color = 'var(--red)';
+    } else if (warns > 0) {
+      $('sbSessionsValid').textContent = `sessions: ${warns} warnings`;
+      $('sbSessionsValid').style.color = 'var(--yellow)';
+    } else {
+      $('sbSessionsValid').textContent = `sessions: ${r.total} ✅`;
+      $('sbSessionsValid').style.color = 'var(--green)';
+    }
+  } catch {
+    $('sbSessionsValid').textContent = 'sessions: err';
+    $('sbSessionsValid').style.color = 'var(--red)';
+  }
 }
 
 function updateHeaderStats() {

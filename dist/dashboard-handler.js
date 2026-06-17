@@ -640,6 +640,95 @@ function readGlobalErrors(limit = 20) {
         return [];
     }
 }
+// ═══ Session Validation (Phase 4a) ═══
+function validateProjectSessions(dataDir, project) {
+    const issues = [];
+    let total = 0;
+    const projectsChecked = [];
+    const checkProject = (projName) => {
+        const sf = path.join(DATA_DIR, "projects", projName, "sessions.json");
+        if (!fs.existsSync(sf))
+            return;
+        let sessions = [];
+        try {
+            const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
+            sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
+        }
+        catch {
+            return;
+        }
+        projectsChecked.push(projName);
+        const seenIds = new Map();
+        for (let i = 0; i < sessions.length; i++) {
+            const s = sessions[i];
+            total++;
+            const id = s.id || `index_${i}`;
+            const sk = s.session_key || "";
+            if (!sk || typeof sk !== "string") {
+                issues.push({ id, session_key: sk, issue: "Missing or invalid session_key", field: "session_key", severity: "error" });
+            }
+            else if (!sk.startsWith("agent:")) {
+                issues.push({ id, session_key: sk, issue: "session_key does not start with 'agent:'", field: "session_key", severity: "error" });
+            }
+            if (!s.project || typeof s.project !== "string" || !s.project.trim()) {
+                issues.push({ id, session_key: sk, issue: "Missing or empty project field", field: "project", severity: "error" });
+            }
+            if (!s.task || typeof s.task !== "string" || !s.task.trim()) {
+                issues.push({ id, session_key: sk, issue: "Missing or empty task field", field: "task", severity: "error" });
+            }
+            if (!s.start_time && !s.started_at && !s.logged_at) {
+                issues.push({ id, session_key: sk, issue: "No timestamp fields", field: "start_time", severity: "error" });
+            }
+            if (s.start_time && s.end_time && new Date(s.start_time).getTime() > new Date(s.end_time).getTime()) {
+                issues.push({ id, session_key: sk, issue: "start_time after end_time", field: "start_time/end_time", severity: "error" });
+            }
+            if (s.duration) {
+                const durStr = String(s.duration);
+                const numMatch = durStr.match(/^(\d+)\s*(min|h|hr)/i);
+                if (numMatch) {
+                    const val = parseInt(numMatch[1], 10);
+                    const unit = numMatch[2].toLowerCase();
+                    if ((unit === "h" || unit === "hr") && val > 24) {
+                        issues.push({ id, session_key: sk, issue: `Duration >24h: ${durStr}`, field: "duration", severity: "warn" });
+                    }
+                    if (unit === "min" && val > 1440) {
+                        issues.push({ id, session_key: sk, issue: `Duration >24h: ${durStr}`, field: "duration", severity: "warn" });
+                    }
+                }
+            }
+            if (seenIds.has(id)) {
+                issues.push({ id, session_key: sk, issue: `Duplicate id "${id}"`, field: "id", severity: "error" });
+            }
+            seenIds.set(id, i);
+            if (sk && sk.includes("synthetic") && (!s.project || !s.task)) {
+                issues.push({ id, session_key: sk, issue: "Synthetic key with missing fields", field: "session_key", severity: "warn" });
+            }
+        }
+    };
+    if (project) {
+        checkProject(project);
+    }
+    else {
+        const projDir = path.join(DATA_DIR, "projects");
+        if (fs.existsSync(projDir)) {
+            for (const p of fs.readdirSync(projDir).sort()) {
+                if (p.startsWith("."))
+                    continue;
+                const pp = path.join(projDir, p);
+                if (!fs.statSync(pp).isDirectory())
+                    continue;
+                checkProject(p);
+            }
+        }
+    }
+    return { ok: true, total, issues, projects_checked: projectsChecked };
+}
+function handleValidateSessions(req, res) {
+    const url = new URL(req.url || "/", "http://localhost");
+    const project = url.searchParams.get("project") || "";
+    const result = validateProjectSessions(DATA_DIR, project || undefined);
+    sendJSON(res, result);
+}
 function handleProjectErrors(req, res) {
     const url = new URL(req.url || "/", "http://localhost");
     const project = url.searchParams.get("project") || "";
@@ -743,6 +832,9 @@ export function createDashboardHandler(_api) {
                         return true;
                     case "/api/global-errors":
                         handleGlobalErrors(req, res);
+                        return true;
+                    case "/api/validate-sessions":
+                        handleValidateSessions(req, res);
                         return true;
                 }
             }

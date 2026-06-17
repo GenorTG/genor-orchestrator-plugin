@@ -800,18 +800,37 @@ function normalizeSessionsJson(project, dataDir) {
         let changed = false;
         sessions = sessions.map(s => {
             const ns = { ...s };
+            const now = new Date().toISOString();
+            // Legacy: timestamp → date
             if (ns.timestamp && !ns.date) {
                 ns.date = ns.timestamp.split("T")[0];
                 changed = true;
             }
+            // Phase 3d: Ensure all timestamp fields
+            if (!ns.start_time) {
+                ns.start_time = ns.timestamp || ns.logged_at || now;
+                changed = true;
+            }
+            if (!ns.started_at) {
+                ns.started_at = ns.start_time;
+                changed = true;
+            }
+            if (!ns.ended_at && ns.end_time) {
+                ns.ended_at = ns.end_time;
+                changed = true;
+            }
+            if (!ns.updated_at) {
+                ns.updated_at = ns.logged_at || now;
+                changed = true;
+            }
             if (!ns.logged_at) {
-                ns.logged_at = new Date().toISOString();
+                ns.logged_at = now;
                 changed = true;
             }
             return ns;
         });
         if (changed)
-            writeJSON(sf, { sessions });
+            writeJSON(sf, { schema_version: 2, sessions });
     }
     catch { /* */ }
 }
@@ -1204,6 +1223,102 @@ function logOrchestratorError(project, dataDir, entry) {
     }
     catch { /* errors never crash */ }
 }
+/** Validate session entries for integrity. Flags suspicious/fake entries without deleting. */
+function validateSessions(dataDir, project) {
+    const issues = [];
+    let total = 0;
+    const projectsChecked = [];
+    const checkProject = (projName) => {
+        const pd = getProjDir(projName, dataDir);
+        if (!pd)
+            return;
+        const sf = path.join(pd, "sessions.json");
+        if (!fs.existsSync(sf))
+            return;
+        let sessions = [];
+        try {
+            const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
+            sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
+        }
+        catch {
+            return;
+        }
+        projectsChecked.push(projName);
+        const seenIds = new Map();
+        for (let i = 0; i < sessions.length; i++) {
+            const s = sessions[i];
+            total++;
+            const id = s.id || `index_${i}`;
+            const sk = s.session_key || "";
+            // 1. Valid session_key format
+            if (!sk || typeof sk !== "string") {
+                issues.push({ id, session_key: sk, issue: "Missing or invalid session_key", field: "session_key", severity: "error" });
+            }
+            else if (!sk.startsWith("agent:")) {
+                issues.push({ id, session_key: sk, issue: "session_key does not start with 'agent:'", field: "session_key", severity: "error" });
+            }
+            // 2. Non-empty project and task
+            if (!s.project || typeof s.project !== "string" || !s.project.trim()) {
+                issues.push({ id, session_key: sk, issue: "Missing or empty project field", field: "project", severity: "error" });
+            }
+            if (!s.task || typeof s.task !== "string" || !s.task.trim()) {
+                issues.push({ id, session_key: sk, issue: "Missing or empty task field", field: "task", severity: "error" });
+            }
+            // 3. Valid timestamps
+            if (!s.start_time && !s.started_at && !s.logged_at) {
+                issues.push({ id, session_key: sk, issue: "No timestamp fields at all (start_time/started_at/logged_at all missing)", field: "start_time", severity: "error" });
+            }
+            if (s.start_time && s.end_time && new Date(s.start_time).getTime() > new Date(s.end_time).getTime()) {
+                issues.push({ id, session_key: sk, issue: "start_time is after end_time", field: "start_time/end_time", severity: "error" });
+            }
+            // 4. Duration sanity check
+            if (s.duration) {
+                const durStr = String(s.duration);
+                // Check for absurd durations (e.g. > 24h as numeric)
+                const numMatch = durStr.match(/^(\d+)\s*(min|h|hr)/i);
+                if (numMatch) {
+                    const val = parseInt(numMatch[1], 10);
+                    const unit = numMatch[2].toLowerCase();
+                    if ((unit === "h" || unit === "hr") && val > 24) {
+                        issues.push({ id, session_key: sk, issue: `Suspicious duration: ${durStr} (>24h)`, field: "duration", severity: "warn" });
+                    }
+                    if (unit === "min" && val > 1440) {
+                        issues.push({ id, session_key: sk, issue: `Suspicious duration: ${durStr} (>24h in minutes)`, field: "duration", severity: "warn" });
+                    }
+                }
+            }
+            // 5. Duplicate ID check
+            if (seenIds.has(id)) {
+                issues.push({ id, session_key: sk, issue: `Duplicate id: "${id}" appears at indices ${seenIds.get(id)} and ${i}`, field: "id", severity: "error" });
+            }
+            seenIds.set(id, i);
+            // 6. Check for obviously fake/synthetic entries
+            if (sk && sk.includes("synthetic")) {
+                // Synthetic keys are sometimes legitimate (migration), but flag if also missing other fields
+                if (!s.project || !s.task) {
+                    issues.push({ id, session_key: sk, issue: "Synthetic key with missing project/task — likely a broken entry", field: "session_key", severity: "warn" });
+                }
+            }
+        }
+    };
+    if (project) {
+        checkProject(project);
+    }
+    else {
+        const projectsDir = path.join(dataDir, "projects");
+        if (fs.existsSync(projectsDir)) {
+            for (const p of fs.readdirSync(projectsDir).sort()) {
+                if (p.startsWith("."))
+                    continue;
+                const pp = path.join(projectsDir, p);
+                if (!fs.statSync(pp).isDirectory())
+                    continue;
+                checkProject(p);
+            }
+        }
+    }
+    return { ok: true, total, issues, projects_checked: projectsChecked };
+}
 function getBacklogPath(project, dataDir) {
     return path.join(projDir(project, dataDir), "BACKLOG.json");
 }
@@ -1504,6 +1619,7 @@ function logSession(dataDir, opts, logger) {
         return a || "system";
     })();
     const tags = Array.isArray(opts.tags) ? opts.tags : extractTags(opts.task || "", opts.notes || "");
+    const now = new Date().toISOString();
     const newEntry = {
         id: sessId,
         session_key: sessionKey,
@@ -1515,15 +1631,19 @@ function logSession(dataDir, opts, logger) {
         original_prompt: opts.original_prompt || null,
         model: opts.model,
         status: opts.status,
-        start_time: opts.start_time || new Date().toISOString(),
-        end_time: opts.end_time || (opts.status === "running" ? null : new Date().toISOString()),
+        // ═══ Timestamps (Phase 3d) ═══
+        start_time: opts.start_time || now,
+        started_at: opts.start_time || now,
+        end_time: opts.end_time || (opts.status === "running" ? null : now),
+        ended_at: opts.end_time || (opts.status === "running" ? null : now),
+        updated_at: now,
+        logged_at: now,
         duration: opts.duration || "",
         tags,
         links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null, synthetic_key: syntheticKey },
         notes: opts.notes || "",
         qa: opts.qa || false,
         checked: opts.checked || false,
-        logged_at: new Date().toISOString(),
     };
     // Check for duplicate by (session_key, task, status) — avoid log noise
     const isDup = ps.some(e => e.session_key && e.session_key === newEntry.session_key
