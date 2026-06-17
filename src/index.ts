@@ -2458,7 +2458,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       handler: () => ({
         text: [
           "**\U0001f4ca Genor's Orchestrator \u2014 Status**",
-          "**Dashboard:** https://${tailscaleHost}/__openclaw__/orchestrator (via gateway)",
+          "**Dashboard:** https://${tailscaleHost}/orchestrator (via gateway)",
           "**Host:** ${hostname} (Tailscale: ${tailscaleHost})",
           "**Port:** ${dashPort}",
           "**Models:** ${modelCount}  **Sessions:** ${sessionCount}",
@@ -2482,7 +2482,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           "**/genor-status** \u2014 Quick status overview",
           "**/genor-git-commit** \u2014 Commit project changes with versioning",
           "",
-          "Dashboard: https://${tailscaleHost}/__openclaw__/orchestrator (via gateway)",
+          "Dashboard: https://${tailscaleHost}/orchestrator (via gateway)",
         ].join("\n"),
         continueAgent: false,
       }),
@@ -2620,12 +2620,12 @@ const _plugin: Record<string, any> = definePluginEntry({
     try {
       const dashHandler = createDashboardHandler(api);
       api.registerHttpRoute({
-        path: "/__openclaw__/orchestrator",
+        path: "/orchestrator",
         auth: "plugin",
         match: "prefix",
         handler: dashHandler,
       });
-      logger.info("plugin", "Dashboard handler registered at /__openclaw__/orchestrator");
+      logger.info("plugin", "Dashboard handler registered at /orchestrator");
     } catch (dhErr: any) {
       logger.warn("plugin", "Dashboard handler not loaded: " + dhErr.message);
     }
