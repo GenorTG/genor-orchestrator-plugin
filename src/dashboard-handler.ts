@@ -660,9 +660,20 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
       }
 
       // ── STATIC FILES ──
-      if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
-        sendFile(res, HTML_PATH);
-        return true;
+      if (method === "GET") {
+        // Dashboard main page
+        if (pathname === "/" || pathname === "/index.html") {
+          sendFile(res, HTML_PATH);
+          return true;
+        }
+        // Other static HTML files in dashboard dir
+        if (pathname.endsWith(".html") && !pathname.startsWith("/api/")) {
+          const staticFile = path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "dashboard", pathname.slice(1));
+          if (fs.existsSync(staticFile)) {
+            sendFile(res, staticFile);
+            return true;
+          }
+        }
       }
 
       // ── API ROUTES ──
