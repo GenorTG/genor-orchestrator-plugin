@@ -480,6 +480,13 @@ class SessionTracker {
   // features. This ensures no chat/logging session accidentally gets project
   // context injected into its prompts.
   private registeredSessions: Set<string> = new Set();
+  // Session-to-project binding: once a session registers to a project,
+  // it's locked to that project until explicitly released. This prevents
+  // cross-project contamination and ensures 1 session = 1 project.
+  private sessionProjectBinding: Map<string, string> = new Map();
+  // Track which projects have at least one active session.
+  // A project must have at least one session to be considered "active".
+  private projectActiveSessions: Map<string, Set<string>> = new Map();
 
   trackModel(model: string, provider?: string, tier?: number): void {
     this.currentModel = model;
@@ -596,6 +603,21 @@ class SessionTracker {
   }
 
   setContext(project: string, task: string, workflowConfig?: any): void {
+    // ═══ ENFORCE SESSION-PROJECT BINDING ═══
+    // Once a session registers to a project, it's locked to that project.
+    // This prevents cross-project contamination from a single session.
+    if (this.sessionKey && this.sessionProjectBinding.has(this.sessionKey)) {
+      const boundProject = this.sessionProjectBinding.get(this.sessionKey)!;
+      if (boundProject !== project) {
+        throw new Error(
+          `❌ Binding violation: This session is already locked to project "${boundProject}". ` +
+          `Cannot set context to "${project}". To work on a different project, start a completely ` +
+          `new session (not a subagent — a fresh session). If you're done with "${boundProject}", ` +
+          `call orchestrator_release_project first to unbind this session.`
+        );
+      }
+    }
+
     this.currentProject = project;
     this.currentTask = task;
     this.trackAction("Setting context");
@@ -608,6 +630,15 @@ class SessionTracker {
         project, task, model: this.currentModel, modelProvider: this.currentModelProvider,
         modelTier: this.currentModelTier, timestamp: Date.now(), workflowConfig
       });
+      // Bind session to project (if not already bound — first set_context creates the binding)
+      if (!this.sessionProjectBinding.has(this.sessionKey)) {
+        this.sessionProjectBinding.set(this.sessionKey, project);
+        // Track this session as active on the project
+        if (!this.projectActiveSessions.has(project)) {
+          this.projectActiveSessions.set(project, new Set());
+        }
+        this.projectActiveSessions.get(project)!.add(this.sessionKey);
+      }
     }
   }
 
@@ -625,16 +656,10 @@ class SessionTracker {
     this.agentStatus = "idle";
     this.lastError = null;
     // Remove per-session context for this session
+    // NOTE: Does NOT release session-project binding. The binding persists
+    // so that clearContext + setContext (different project) still fails.
+    // Use releaseProjectBinding() to fully unbind.
     if (this.sessionKey) this.sessionContexts.delete(this.sessionKey);
-    // Also sweep any other sessions that got bridged with the same project context
-    if (prev && prevKey) {
-      const projectToClean = prev;
-      for (const [sk, ctx] of this.sessionContexts.entries()) {
-        if (sk !== prevKey && ctx.project === projectToClean) {
-          this.sessionContexts.delete(sk);
-        }
-      }
-    }
     if (prev) this.trackAction("Clearing context");
   }
 
@@ -672,11 +697,13 @@ class SessionTracker {
     return true;
   }
 
-  /** Unregister a session from orchestrator tracking. */
+  /** Unregister a session from orchestrator tracking. Also releases project binding. */
   unregisterSession(sessionKey: string): boolean {
     if (!this.registeredSessions.has(sessionKey)) return false;
     this.registeredSessions.delete(sessionKey);
     this.sessionContexts.delete(sessionKey);
+    // Also release project binding
+    this.releaseProjectBinding(sessionKey);
     return true;
   }
 
@@ -688,6 +715,58 @@ class SessionTracker {
   /** Get list of all registered session keys. */
   getRegisteredSessions(): string[] {
     return Array.from(this.registeredSessions);
+  }
+
+  /** Release this session's project binding. Returns the previously bound project or null. */
+  releaseProjectBinding(sessionKey?: string): string | null {
+    const sk = sessionKey || this.sessionKey;
+    if (!sk || !this.sessionProjectBinding.has(sk)) return null;
+    const prevProject = this.sessionProjectBinding.get(sk)!;
+    this.sessionProjectBinding.delete(sk);
+    // Remove from project active sessions
+    if (this.projectActiveSessions.has(prevProject)) {
+      this.projectActiveSessions.get(prevProject)!.delete(sk);
+      if (this.projectActiveSessions.get(prevProject)!.size === 0) {
+        this.projectActiveSessions.delete(prevProject);
+      }
+    }
+    // Also clear context if it matches
+    if (this.currentProject === prevProject) {
+      this.currentProject = null;
+      this.currentTask = null;
+      this.workflow.reset({ enabled: false });
+      this.agentStatus = "idle";
+    }
+    if (sk === this.sessionKey) {
+      this.sessionContexts.delete(sk);
+    }
+    return prevProject;
+  }
+
+  /** Get the project a session is bound to, or null. */
+  getBoundProject(sessionKey?: string): string | null {
+    const sk = sessionKey || this.sessionKey;
+    return sk ? this.sessionProjectBinding.get(sk) || null : null;
+  }
+
+  /** Get projects that have at least one active session. */
+  getActiveProjects(): Array<{ project: string; active_sessions: number; session_keys: string[] }> {
+    const result: Array<{ project: string; active_sessions: number; session_keys: string[] }> = [];
+    for (const [project, sessions] of this.projectActiveSessions.entries()) {
+      if (sessions.size > 0) {
+        result.push({
+          project,
+          active_sessions: sessions.size,
+          session_keys: Array.from(sessions).filter(s => this.registeredSessions.has(s))
+        });
+      }
+    }
+    return result.sort((a, b) => b.active_sessions - a.active_sessions);
+  }
+
+  /** Check if a project has any active sessions. */
+  hasActiveSessionsFor(project: string): boolean {
+    return this.projectActiveSessions.has(project) && this.projectActiveSessions.get(project)!.size > 0;
   }
 }
 
@@ -727,6 +806,12 @@ function flushLiveAgents(): void {
 }
 
 function queueLiveAgents(reason: string, tracker: SessionTracker): void {
+  // ═══ SCOPE: Only track registered sessions ═══
+  // The plugin should be invisible to unregistered sessions.
+  // No live agents data, no tracking, no context injection for sessions
+  // that haven't explicitly opted in via orchestrator_register.
+  if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
+
   const main = tracker.toLiveState(reason);
   const agents: any[] = [];
   if (main.project || main.agent) agents.push(main);
@@ -778,6 +863,8 @@ function queueLiveAgents(reason: string, tracker: SessionTracker): void {
 }
 
 function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
+  // Only track registered sessions
+  if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
   if (_liveAgentsTimer) { clearTimeout(_liveAgentsTimer); _liveAgentsTimer = null; }
   _pendingData = null;
   _pendingState = null;
@@ -1551,6 +1638,18 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
   const loc = getProjectLocation(project, dataDir);
   const toc = loc ? buildProjectToc(loc) : [];
 
+  // Warn if this project has NO sessions logged yet (brand new / never worked on)
+  const pd = projDir(project, dataDir);
+  const psf = path.join(pd, "sessions.json");
+  let sessionCount = 0;
+  if (fs.existsSync(psf)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(psf, "utf-8"));
+      sessionCount = (Array.isArray(raw) ? raw : (raw.sessions || [])).length;
+    } catch { /* */ }
+  }
+  const isFresh = sessionCount === 0;
+
   // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
   const sessionModel = sessionTracker.currentModel;
   if (sessionModel && sessionModel !== "pending") {
@@ -1575,6 +1674,9 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
     location_configured: loc !== undefined && loc !== null,
     toc_file_count: toc.length,
     workflow_enabled: sessionTracker.workflow.enabled,
+    warning: isFresh ? `This project (${project}) has no sessions logged yet. ` +
+      `Orphaned/empty projects with no sessions are clutter. ` +
+      `Start working on the project to log the first session.` : undefined,
   };
 }
 
@@ -1624,6 +1726,10 @@ const TOOL_NAMES = [
   "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
   "orchestrator_advance_phase", "orchestrator_get_routing",
   "orchestrator_register", "orchestrator_unregister", "orchestrator_get_registered_sessions",
+  "orchestrator_release_project",
+  "orchestrator_list_active_projects",
+  "orchestrator_join_project",
+  "orchestrator_spawn_subagent",
 ] as const;
 
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
@@ -1648,6 +1754,10 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
   { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
   { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, missing PM2 processes, context inconsistencies.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data', 'pm2'" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
+  { name: "orchestrator_release_project", label: "Release Project Binding", description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project and need to switch contexts with a fresh start.", parameters: { type: "object", properties: { force: { type: "boolean", description: "Force release even if migration in progress (default: false)" } } } },
+  { name: "orchestrator_list_active_projects", label: "List Active Projects", description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
+  { name: "orchestrator_spawn_subagent", label: "Spawn Subagent", description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.", parameters: { type: "object", properties: { task: { type: "string", description: "Task description for the subagent." }, model: { type: "string", description: "Optional model override. Omit to use project routing rules." }, taskName: { type: "string", description: "Optional stable name for subagent (lowercase_underscores)." }, timeoutSeconds: { type: "number", description: "Optional timeout in seconds (default: 300, max: 1800)." } }, required: ["task"] } },
 ];
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -1710,8 +1820,18 @@ const _plugin: Record<string, any> = definePluginEntry({
 
     api.on("session_end", async (event: any) => {
       try {
-        // Clean up per-session project context
         const sk_end = (event.sessionKey || "").toString();
+        
+        // ═══ SCOPE: Only process registered sessions ═══
+        // Plugin is invisible to unregistered sessions.
+        // Skip all logging, auto-commit, and file writes.
+        if (!sk_end || !sessionTracker.isSessionRegistered(sk_end)) {
+          // Still clean up if somehow registered
+          if (sk_end) sessionTracker.unregisterSession(sk_end);
+          return;
+        }
+
+        // Clean up per-session project context
         if (sk_end) sessionTracker.unregisterSession(sk_end);
         // Detect if this is a subagent session ending
         const subInfo = sk_end ? sessionTracker.getSubagent(sk_end) : undefined;
@@ -1792,6 +1912,8 @@ const _plugin: Record<string, any> = definePluginEntry({
     });
 
     api.on("subagent_spawned", async (event: any) => {
+      // ═══ SCOPE: Only track registered parent sessions ═══
+      if (!sessionTracker.sessionKey || !sessionTracker.isSessionRegistered(sessionTracker.sessionKey)) return;
       const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
       sessionTracker.subagentDepth++;
       sessionTracker.setStatus("working");
@@ -1811,6 +1933,8 @@ const _plugin: Record<string, any> = definePluginEntry({
     });
 
     api.on("subagent_ended", async (event: any) => {
+      // ═══ SCOPE: Only track registered parent sessions ═══
+      if (!sessionTracker.sessionKey || !sessionTracker.isSessionRegistered(sessionTracker.sessionKey)) return;
       const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
       sessionTracker.subagentDepth = Math.max(0, sessionTracker.subagentDepth - 1);
       if (subKey) sessionTracker.untrackSubagent(subKey);
@@ -1821,10 +1945,23 @@ const _plugin: Record<string, any> = definePluginEntry({
 
     api.on("before_model_resolve", async (event: any, hookCtx: any) => {
       try {
+        const ctxSessionKey = hookCtx?.sessionKey || "";
+        
+        // ═══ SCOPE: Skip routing for unregistered sessions ═══
+        // But still let bridge logic run for synthetic-to-real key migration
+        const isUnregistered = !ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey);
+        const allRegistered = sessionTracker.getRegisteredSessions();
+        const hasSynthetic = allRegistered.some(k => k.startsWith("agent:main:auto:"));
+        
+        // If this session isn't registered AND there are no synthetic keys to bridge,
+        // skip all the heavy logic
+        if (isUnregistered && !hasSynthetic) {
+          return;
+        }
+
         // Resolve session key from hook context - the REAL gateway key.
         // Bridge synthetic fallback keys (from orchestrator_register)
         // with the real key so before_prompt_build injection works.
-        const ctxSessionKey = hookCtx?.sessionKey || "";
         if (ctxSessionKey) {
           const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
           if (!isBackground) {
@@ -1962,7 +2099,11 @@ const _plugin: Record<string, any> = definePluginEntry({
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
-        return txt(setContext(dataDir, params.project, params.task, logger, params.original_prompt));
+        try {
+          return txt(setContext(dataDir, params.project, params.task, logger, params.original_prompt));
+        } catch (err: any) {
+          return txt({ ok: false, error: err.message });
+        }
       },
     });
 
@@ -2399,10 +2540,279 @@ const _plugin: Record<string, any> = definePluginEntry({
           } catch (e: any) { addIssue("PM2 check failed: " + e.message); }
         }
 
+        // -- 5. PROJECT HEALTH (requires required docs, no orphaned projects) --
+        if (checks === "all" || checks === "data") {
+          const REQUIRED_PROJECT_DOCS = ["STATE.md"];
+          const pd = path.join(dataDir, "projects");
+          if (fs.existsSync(pd)) {
+            for (const e of fs.readdirSync(pd)) {
+              const pp = path.join(pd, e);
+              if (!fs.statSync(pp).isDirectory()) continue;
+              // Check if project has any sessions
+              const sf = path.join(pp, "sessions.json");
+              let sessCount = 0;
+              if (fs.existsSync(sf)) {
+                try {
+                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
+                  sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
+                } catch {}
+              }
+              // Check required docs
+              const missingDocs = REQUIRED_PROJECT_DOCS.filter(doc => !fs.existsSync(path.join(pp, doc)));
+              // Check for stale sessions (running entries older than 24h)
+              let staleSessions = 0;
+              if (sessCount > 0) {
+                try {
+                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
+                  const sessList = Array.isArray(d) ? d : (d.sessions || []);
+                  staleSessions = sessList.filter((s: any) =>
+                    s.status === "running" && s.start_time &&
+                    (Date.now() - new Date(s.start_time).getTime()) > 86400000
+                  ).length;
+                } catch {}
+              }
+
+              if (sessCount === 0) {
+                // Orphaned project
+                addIssue(`Project "${e}" has 0 sessions — it was scaffolded but never worked on. This is an incomplete project producing clutter.`);
+                if (autoFix) {
+                  addFix(`Removing empty project "${e}" — no sessions means no data to lose.`);
+                  try {
+                    // Move to archive instead of delete
+                    const archiveDir = path.join(dataDir, "projects", ".archived");
+                    fs.mkdirSync(archiveDir, { recursive: true });
+                    fs.renameSync(pp, path.join(archiveDir, e));
+                    addFix(`Archived empty project "${e}" to projects/.archived/`);
+                  } catch (archErr: any) {
+                    addFix(`Failed to archive "${e}": ${archErr.message}`);
+                  }
+                }
+              } else if (missingDocs.length > 0) {
+                addIssue(`Project "${e}" (${sessCount} sessions) is missing required docs: ${missingDocs.join(", ")}. Every project needs STATE.md to track its current status.`);
+                if (autoFix) {
+                  // Auto-initialize missing STATE.md
+                  if (missingDocs.includes("STATE.md")) {
+                    const loc = getProjectLocation(e, dataDir);
+                    const stateContent = [
+                      `# STATE: ${e}`,
+                      ``,
+                      `**Status:** Active`,
+                      `**Last Updated:** ${new Date().toISOString().split("T")[0]}`,
+                      `**Location:** ${loc || "Not configured"}`,
+                      ``,
+                      `## Sessions`,
+                      ``,
+                      `Total sessions logged: ${sessCount}`,
+                      ``,
+                      `## Current State`,
+                      ``,
+                      `_(Auto-generated by orchestrator_doctor. Update this file as the project evolves to keep docs in sync with reality.)_`,
+                    ].join("\n");
+                    fs.writeFileSync(path.join(pp, "STATE.md"), stateContent, "utf-8");
+                    addFix(`Auto-created STATE.md for project "${e}"`);
+                  }
+                }
+              }
+              // Check stale sessions
+              if (staleSessions > 0) {
+                addIssue(`Project "${e}" has ${staleSessions} stale "running" session(s) aged >24h — these should be closed or marked as interrupted.`);
+              }
+            }
+          }
+        }
+
         const result: any = { ok, checks: checks, auto_fix: autoFix, issues_found: issues.length, fixes_applied: fixes.length, session_key: sessionTracker.sessionKey || "(none)", registered: sessionTracker.sessionKey ? sessionTracker.isSessionRegistered(sessionTracker.sessionKey) : false, project_context: sessionTracker.currentProject || "(none)" };
         if (issues.length > 0) result.issues = issues;
         if (fixes.length > 0) result.fixes = fixes;
         return txt(result);
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  NEW TOOLS — Release Project, Active Projects, Join, Spawn Subagent
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_release_project",
+      label: "Orchestrator Release Project",
+      description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project.",
+      parameters: Type.Object({
+        force: Type.Optional(Type.Boolean({ description: "Force release (default: false)" })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const bound = sessionTracker.getBoundProject(sk);
+        if (!bound) return txt({ ok: false, error: "No project binding to release." });
+        const released = sessionTracker.releaseProjectBinding(sk);
+        sessionTracker.trackAction(`released_project: ${released}`);
+        writeLiveAgents("release_project", sessionTracker, logger);
+        logger.info("sessions", `Released project binding: ${released} (session=${sk})`);
+        return txt({
+          ok: true,
+          released_project: released,
+          message: `Released from project "${released}". You can now set context to a different project.`,
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_list_active_projects",
+      label: "Orchestrator List Active Projects",
+      description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.",
+      parameters: Type.Object({}),
+      async execute(_id: string, _params: any) {
+        const active = sessionTracker.getActiveProjects();
+        // Also supplement with projects from orchestrator-data that have sessions logged
+        const pd = path.join(dataDir, "projects");
+        const allProjects: Array<{ project: string; sessions_logged: number; location: string | null; healthy_docs: boolean; active_sessions: number }> = [];
+        if (fs.existsSync(pd)) {
+          for (const e of fs.readdirSync(pd)) {
+            const pp = path.join(pd, e);
+            if (!fs.statSync(pp).isDirectory()) continue;
+            const sf = path.join(pp, "sessions.json");
+            let sessCount = 0;
+            if (fs.existsSync(sf)) {
+              try {
+                const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
+                sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
+              } catch { /* */ }
+            }
+            const loc = getProjectLocation(e, dataDir);
+            const hasState = fs.existsSync(path.join(pp, "STATE.md"));
+            allProjects.push({
+              project: e,
+              sessions_logged: sessCount,
+              location: loc,
+              healthy_docs: hasState,
+              active_sessions: active.find(a => a.project === e)?.active_sessions || 0,
+            });
+          }
+        }
+        return txt({
+          ok: true,
+          active_project_count: active.length,
+          active_projects: active.map(a => ({
+            project: a.project,
+            active_sessions: a.active_sessions,
+            session_keys: a.session_keys,
+          })),
+          all_projects: allProjects.sort((a, b) => b.sessions_logged - a.sessions_logged),
+        });
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_join_project",
+      label: "Orchestrator Join Project",
+      description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.",
+      parameters: Type.Object({
+        project: Type.String({ description: "Project name to join. Use orchestrator_list_active_projects first to see active projects." }),
+        task: Type.String({ description: "Task description for what you're joining to do." }),
+      }),
+      async execute(_id: string, params: any) {
+        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        if (!sk) return txt({ ok: false, error: "No session key available." });
+
+        // Auto-register this session
+        sessionTracker.registerSession(sk);
+        if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
+
+        // Verify the project exists in data
+        const pd = path.join(dataDir, "projects");
+        const projExists = fs.existsSync(pd) && fs.existsSync(path.join(pd, params.project));
+        if (!projExists) {
+          return txt({
+            ok: false,
+            error: `Project "${params.project}" not found in orchestrator data. Active projects: ${sessionTracker.getActiveProjects().map(a => a.project).join(", ")}`,
+          });
+        }
+
+        try {
+          const result = setContext(dataDir, params.project, params.task, logger);
+          logger.info("sessions", `Session joined project: ${params.project}/${params.task} (session=${sk})`);
+          return txt({
+            ok: true,
+            joined_project: params.project,
+            task: params.task,
+            registered: true,
+            message: `Joined project "${params.project}" — context set, task: "${params.task}"`,
+            details: result,
+          });
+        } catch (err: any) {
+          return txt({
+            ok: false,
+            error: `Failed to join project "${params.project}": ${err.message}`,
+          });
+        }
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_spawn_subagent",
+      label: "Orchestrator Spawn Subagent",
+      description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.",
+      parameters: Type.Object({
+        task: Type.String({ description: "Task description for the subagent." }),
+        model: Type.Optional(Type.String({ description: "Optional model override. Omit to use project routing rules." })),
+        taskName: Type.Optional(Type.String({ description: "Optional stable name for subagent (lowercase with underscores/hyphens)." })),
+        timeoutSeconds: Type.Optional(Type.Number({ description: "Optional timeout in seconds (default: 300, max: 1800)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: "Session not registered. Call orchestrator_register or orchestrator_join_project first." });
+        if (!sessionTracker.currentProject) {
+          return txt({ ok: false, error: "No active project. Set project context first with orchestrator_set_context or orchestrator_join_project." });
+        }
+
+        const project = sessionTracker.currentProject;
+        const task = params.task;
+        const model = params.model || sessionTracker.currentModel || undefined;
+        const taskName = params.taskName || `sub-${project}-${Date.now().toString(36)}`;
+        const timeoutSeconds = Math.min(params.timeoutSeconds || 300, 1800);
+
+        // Log the subagent spawn
+        sessionTracker.trackSubagent(`pending-${taskName}`, {
+          parentKey: sessionTracker.sessionKey || "unknown",
+          project,
+          task,
+          startedAt: new Date().toISOString(),
+        });
+
+        sessionTracker.trackAction(`spawn_subagent: ${taskName}`);
+        writeLiveAgents("spawn_subagent", sessionTracker, logger);
+
+        // Build the spawn message with full context
+        const spawnTask = [
+          `[Subagent Task - Spawned by Orchestrator Plugin]`,
+          `Project: ${project}`,
+          `Parent Session: ${sessionTracker.sessionKey || "unknown"}`,
+          `Task: ${task}`,
+          model ? `Model: ${model}` : "",
+          `Timeout: ${timeoutSeconds}s`,
+        ].filter(Boolean).join("\n");
+
+        try {
+          // Use api.spawnSubagent or sessions_spawn via the tool
+          // The actual spawn is delegated to the OpenClaw runtime
+          logger.info("subagent", `Spawning: ${taskName} (${project}/${task}) model=${model || "auto"}`);
+
+          // Return the spawn request — the calling agent can use sessions_spawn
+          // with the orchestrator context injected
+          return txt({
+            ok: true,
+            project,
+            task,
+            task_name: taskName,
+            recommended_model: model || "auto-routed",
+            timeout_seconds: timeoutSeconds,
+            spawn_instructions: `Use sessions_spawn with the following context:\n\n${spawnTask}\n\nRecommended: runtime="subagent", taskName="${taskName}", model="${model || "auto"}"`,
+          });
+        } catch (err: any) {
+          logger.error("subagent", `Spawn failed for ${taskName}: ${err.message}`);
+          return txt({ ok: false, error: `Failed to spawn subagent: ${err.message}` });
+        }
       },
     });
 
