@@ -580,6 +580,56 @@ function handleSafeguardLog(_req: IncomingMessage, res: ServerResponse): void {
   sendJSON(res, { entries, count: entries.length });
 }
 
+// ── ERROR READING HELPERS ────────────────────────────────────
+
+function readOrchestratorErrors(project: string, limit: number = 50): any[] {
+  const pd = projectDir(project);
+  const errLog = path.join(pd, "errors.log");
+  if (!fs.existsSync(errLog)) return [];
+  try {
+    const content = fs.readFileSync(errLog, "utf-8");
+    return content.trim().split("\n").filter(Boolean).slice(-limit).map(l => {
+      try { return JSON.parse(l); } catch { return { error: l }; }
+    });
+  } catch { return []; }
+}
+
+function readGlobalErrors(limit: number = 20): any[] {
+  const projectsDir = path.join(DATA_DIR, "projects");
+  if (!fs.existsSync(projectsDir)) return [];
+  try {
+    const all: any[] = [];
+    for (const p of fs.readdirSync(projectsDir)) {
+      if (p.startsWith(".")) continue;
+      const pp = path.join(projectsDir, p);
+      if (!fs.statSync(pp).isDirectory()) continue;
+      const errFile = path.join(pp, "errors.log");
+      if (fs.existsSync(errFile)) {
+        try {
+          const content = fs.readFileSync(errFile, "utf-8");
+          for (const line of content.trim().split("\n").filter(Boolean)) {
+            try { all.push({ ...JSON.parse(line), project: p }); } catch {}
+          }
+        } catch {}
+      }
+    }
+    return all.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "")).slice(0, limit);
+  } catch { return []; }
+}
+
+function handleProjectErrors(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url || "/", "http://localhost");
+  const project = url.searchParams.get("project") || "";
+  if (!project) { sendJSON(res, { ok: false, error: "Missing project" }); return; }
+  const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+  sendJSON(res, { ok: true, errors: readOrchestratorErrors(project, limit) });
+}
+
+function handleGlobalErrors(req: IncomingMessage, res: ServerResponse): void {
+  const limit = parseInt(new URL(req.url || "/", "http://localhost").searchParams.get("limit") || "20", 10);
+  sendJSON(res, { ok: true, errors: readGlobalErrors(limit) });
+}
+
 // ── MAIN HTTP HANDLER ─────────────────────────────────────────
 const BASE_PATH = "/orchestrator";
 
@@ -632,6 +682,8 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/sse/live-sessions": handleSSE(res); return true;
           case "/api/project-state": return handleProjectState(req, res);
           case "/api/project-doc": return handleProjectDoc(req, res);
+          case "/api/project-errors": handleProjectErrors(req, res); return true;
+          case "/api/global-errors": handleGlobalErrors(req, res); return true;
         }
       }
 

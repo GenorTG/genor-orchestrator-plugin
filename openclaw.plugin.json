@@ -60,7 +60,10 @@
       "orchestrator_list_active_projects",
       "orchestrator_join_project",
       "orchestrator_spawn_subagent",
-      "orchestrator_create_project"
+      "orchestrator_create_project",
+      "orchestrator_backlog_add",
+      "orchestrator_backlog_list",
+      "orchestrator_backlog_update"
     ]
   }
 }
