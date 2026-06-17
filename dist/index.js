@@ -1191,6 +1191,89 @@ function getProjDir(name, dd) {
     return null;
 }
 // ═══════════════════════════════════════════════════════════════
+//  ERROR LOGGING
+// ═══════════════════════════════════════════════════════════════
+function logOrchestratorError(project, dataDir, entry) {
+    const pd = projDir(project, dataDir);
+    fs.mkdirSync(pd, { recursive: true });
+    const errLog = path.join(pd, "errors.log");
+    const timestamp = new Date().toISOString();
+    const line = JSON.stringify({ ...entry, timestamp }) + "\n";
+    try {
+        fs.appendFileSync(errLog, line, "utf-8");
+    }
+    catch { /* errors never crash */ }
+}
+function getBacklogPath(project, dataDir) {
+    return path.join(projDir(project, dataDir), "BACKLOG.json");
+}
+function readBacklog(project, dataDir) {
+    const bp = getBacklogPath(project, dataDir);
+    if (!fs.existsSync(bp))
+        return [];
+    try {
+        const raw = JSON.parse(fs.readFileSync(bp, "utf-8"));
+        return Array.isArray(raw) ? raw : (raw.tasks || []);
+    }
+    catch {
+        return [];
+    }
+}
+function writeBacklog(project, dataDir, tasks) {
+    writeJSON(getBacklogPath(project, dataDir), { tasks });
+}
+function backlogAdd(project, dataDir, opts) {
+    const tasks = readBacklog(project, dataDir);
+    const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const task = {
+        id,
+        title: opts.title,
+        description: opts.description || "",
+        status: "todo",
+        priority: (["p0", "p1", "p2", "p3"].includes(opts.priority || "") ? opts.priority : "p2"),
+        created: new Date().toISOString(),
+        updated: new Date().toISOString(),
+        assigned_to: null,
+        depends_on: opts.depends_on || [],
+        labels: opts.labels || [],
+        session_key: null,
+    };
+    tasks.push(task);
+    writeBacklog(project, dataDir, tasks);
+    return { ok: true, id };
+}
+function backlogList(project, dataDir, opts) {
+    let tasks = readBacklog(project, dataDir);
+    if (opts?.status)
+        tasks = tasks.filter(t => t.status === opts.status);
+    if (opts?.priority)
+        tasks = tasks.filter(t => t.priority === opts.priority);
+    if (opts?.label)
+        tasks = tasks.filter(t => t.labels.includes(opts.label));
+    return { ok: true, tasks };
+}
+function backlogUpdate(project, dataDir, opts) {
+    const tasks = readBacklog(project, dataDir);
+    const idx = tasks.findIndex(t => t.id === opts.id);
+    if (idx === -1)
+        return { ok: false, error: `Task ${opts.id} not found. Use orchestrator_backlog_list to see available tasks.` };
+    const task = tasks[idx];
+    if (opts.status && ["todo", "in_progress", "done", "blocked"].includes(opts.status))
+        task.status = opts.status;
+    if (opts.priority && ["p0", "p1", "p2", "p3"].includes(opts.priority))
+        task.priority = opts.priority;
+    if (opts.assigned_to !== undefined)
+        task.assigned_to = opts.assigned_to || null;
+    if (opts.labels !== undefined)
+        task.labels = opts.labels;
+    if (opts.session_key !== undefined)
+        task.session_key = opts.session_key || null;
+    task.updated = new Date().toISOString();
+    tasks[idx] = task;
+    writeBacklog(project, dataDir, tasks);
+    return { ok: true };
+}
+// ═══════════════════════════════════════════════════════════════
 //  TOOL LOGIC
 // ═══════════════════════════════════════════════════════════════
 function getStatus(dataDir, logger) {
@@ -1595,6 +1678,9 @@ const TOOL_NAMES = [
     "orchestrator_join_project",
     "orchestrator_spawn_subagent",
     "orchestrator_create_project",
+    "orchestrator_backlog_add",
+    "orchestrator_backlog_list",
+    "orchestrator_backlog_update",
 ];
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
 // Each entry matches an api.registerTool({...}) call in register() below.
@@ -1623,6 +1709,9 @@ const TOOL_METADATA = [
     { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
     { name: "orchestrator_spawn_subagent", label: "Spawn Subagent", description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.", parameters: { type: "object", properties: { task: { type: "string", description: "Task description for the subagent." }, model: { type: "string", description: "Optional model override. Omit to use project routing rules." }, taskName: { type: "string", description: "Optional stable name for subagent (lowercase_underscores)." }, timeoutSeconds: { type: "number", description: "Optional timeout in seconds (default: 300, max: 1800)." } }, required: ["task"] } },
     { name: "orchestrator_create_project", label: "Create Project", description: "Create a new project in orchestrator-data. Sets up project directory, STATE.md, and dashboard-config.json entry. Optionally spawns a dedicated session.", parameters: { type: "object", properties: { name: { type: "string", description: "Project name." }, directory: { type: "string", description: "Absolute path to project directory." }, description: { type: "string", description: "Short project description." }, spawn: { type: "boolean", description: "Schedule an immediate session." }, spawn_task: { type: "string", description: "Initial task description." } }, required: ["name"] } },
+    { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
+    { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
+    { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -1862,6 +1951,69 @@ const _plugin = definePluginEntry({
                         notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason} | Workflow: ${sessionTracker.workflow.enabled ? sessionTracker.workflow.currentPhase : "OFF"}`,
                     }, logger);
                     generateRecoveryDoc(info.project, dataDir, logger);
+                    // ═══ AUTO-Q&A ═══
+                    // After a completed session, run inline verification checks.
+                    if (info && info.project && event.reason !== "error" && event.reason !== "shutdown") {
+                        const qaLoc = getProjectLocation(info.project, dataDir);
+                        if (qaLoc) {
+                            try {
+                                const qaReportPath = path.join(projDir(info.project, dataDir), "QA_REPORT.md");
+                                let qaLines = [
+                                    `# QA Report: ${info.project}/${info.task || "unknown"}`,
+                                    `*Generated: ${new Date().toISOString()}*`,
+                                    ``,
+                                    `## Checks`,
+                                ];
+                                // Check 1: git status
+                                try {
+                                    const gitStatus = execSync("git status --porcelain 2>/dev/null || echo 'NOT_A_GIT_REPO'", { cwd: qaLoc, encoding: "utf-8", timeout: 5000 }).trim();
+                                    if (gitStatus === "NOT_A_GIT_REPO") {
+                                        qaLines.push(`- ❓ **Git**: Not a git repository`);
+                                    }
+                                    else if (gitStatus) {
+                                        const files = gitStatus.split("\n").length;
+                                        qaLines.push(`- ⚠️ **Git**: ${files} uncommitted file(s)`);
+                                        qaLines.push(`  \`\`\`\n  ${gitStatus.slice(0, 500)}\n  \`\`\``);
+                                    }
+                                    else {
+                                        qaLines.push(`- ✅ **Git**: Clean working tree`);
+                                    }
+                                }
+                                catch (e) {
+                                    qaLines.push(`- ❓ **Git**: Check failed — ${e.message}`);
+                                }
+                                // Check 2: npm run build (if package.json exists)
+                                try {
+                                    if (fs.existsSync(path.join(qaLoc, "package.json"))) {
+                                        const buildOut = execSync("npm run build 2>&1 || true", { cwd: qaLoc, encoding: "utf-8", timeout: 30000 }).trim();
+                                        const lastLine = buildOut.split("\n").pop() || "";
+                                        if (lastLine.includes("error") || lastLine.includes("Error") || lastLine.includes("Failed")) {
+                                            qaLines.push(`- ❌ **Build**: Failed — ${lastLine.slice(0, 200)}`);
+                                            qaLines.push(`  <details><summary>Full output</summary>\n  \`\`\`\n  ${buildOut.slice(0, 1000)}\n  \`\`\`\n  </details>`);
+                                        }
+                                        else {
+                                            qaLines.push(`- ✅ **Build**: Passed`);
+                                        }
+                                    }
+                                }
+                                catch {
+                                    qaLines.push(`- ❓ **Build**: Skipped (no package.json or build script)`);
+                                }
+                                qaLines.push(``, `## Summary`, `- **Project**: ${info.project}`, `- **Task**: ${info.task}`, `- **Duration**: ${info.duration || "N/A"}`, `- **QA Timestamp**: ${new Date().toISOString()}`);
+                                fs.writeFileSync(qaReportPath, qaLines.join("\n"), "utf-8");
+                                logger.info("qa", `QA report written for ${info.project}/${info.task}`);
+                            }
+                            catch (e) {
+                                logOrchestratorError(info.project, dataDir, {
+                                    phase: "log",
+                                    step: "auto_qa",
+                                    error: e.message,
+                                    action_taken: "QA report generation failed — continuing without it",
+                                });
+                                logger.warn("hooks", `Auto-QA failed: ${e.message}`);
+                            }
+                        }
+                    }
                     sessionTracker.currentAction = "session_complete";
                     writeLiveAgents("session_complete", sessionTracker, logger);
                     logger.info("hooks", `Session auto-logged: ${info.project}/${info.task} (${info.duration})`);
@@ -1869,6 +2021,14 @@ const _plugin = definePluginEntry({
                 logger.debug("hooks", `session_end: ${event.reason}`);
             }
             catch (err) {
+                if (sessionTracker.currentProject) {
+                    logOrchestratorError(sessionTracker.currentProject, dataDir, {
+                        phase: "log",
+                        step: "session_end",
+                        error: err.message,
+                        action_taken: "Session end handling failed — recovery doc may not have been generated",
+                    });
+                }
                 logger.error("hooks", `session_end error: ${err.message}`);
             }
         });
@@ -2041,6 +2201,40 @@ const _plugin = definePluginEntry({
                 ctx += `\nLocation: ${loc || "not set"}`;
                 ctx += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
                 ctx += ` | Data: orchestrator-data/projects/${pc.project}/`;
+                // ═══ PHASE ENFORCEMENT ═══
+                // Inject current workflow phase instructions so the AI knows what phase
+                // it's in and what to do.
+                if (sk && sessionTracker.isSessionRegistered(sk) && pc && sessionTracker.workflow.enabled) {
+                    const phase = sessionTracker.workflow.currentPhase;
+                    const phaseElapsed = sessionTracker.workflow.getPhaseElapsed();
+                    const progress = sessionTracker.workflow.getProgress();
+                    // Phase timeout config
+                    const phaseTimeouts = {
+                        analyze: 5 * 60 * 1000,
+                        plan: 10 * 60 * 1000,
+                        document: 10 * 60 * 1000,
+                        work: 30 * 60 * 1000,
+                        log: 5 * 60 * 1000,
+                        finish: 2 * 60 * 1000,
+                    };
+                    const phaseInstructions = {
+                        analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call orchestrator_advance_phase when analysis is complete.",
+                        plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call orchestrator_advance_phase when plan is approved.",
+                        document: "📝 PHASE: DOCUMENT — Write an ADR (orchestrator_log_decision) or design doc covering the architecture, trade-offs, and key decisions. Call orchestrator_advance_phase when design is documented.",
+                        work: "⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes. This is the doing phase. Call orchestrator_advance_phase when implementation is complete.",
+                        log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. Call orchestrator_advance_phase after logging.",
+                        finish: "✅ PHASE: FINISH — All phases complete. Generate RECOVERY.md if needed. Verify git status. Ensure everything is committed.",
+                    };
+                    // Check for phase timeout
+                    const phaseStarted = sessionTracker.workflow.currentPhaseStartedAt;
+                    const timeout = phaseTimeouts[phase] || 30 * 60 * 1000;
+                    const isTimedOut = (Date.now() - phaseStarted) > timeout;
+                    let phaseNote = phaseInstructions[phase] || `Phase: ${phase}`;
+                    if (isTimedOut) {
+                        phaseNote += `\n⚠️ This phase has exceeded its time limit (${Math.floor(timeout / 60000)}min). Auto-advancing is recommended.`;
+                    }
+                    ctx += `\n━━━ WORKFLOW ━━━\n${phaseNote}\nProgress: ${progress} phases complete\nElapsed: ${phaseElapsed}\n━━━━━━━━━━━━━`;
+                }
                 return { prependContext: ctx };
             }
             catch { /* */ }
@@ -2068,6 +2262,30 @@ const _plugin = definePluginEntry({
                 }
                 catch (e) {
                     logger.warn("hooks", `Auto-log failed: ${e.message}`);
+                }
+            }
+            // ═══ PHASE TIMEOUT ENFORCEMENT ═══
+            if (sessionTracker.workflow.enabled && sessionTracker.currentProject) {
+                const phase = sessionTracker.workflow.currentPhase;
+                const phaseTimeouts = {
+                    analyze: 5 * 60 * 1000,
+                    plan: 10 * 60 * 1000,
+                    document: 10 * 60 * 1000,
+                    work: 30 * 60 * 1000,
+                    log: 5 * 60 * 1000,
+                    finish: 2 * 60 * 1000,
+                };
+                const timeout = phaseTimeouts[phase] || 30 * 60 * 1000;
+                if ((Date.now() - sessionTracker.workflow.currentPhaseStartedAt) > timeout) {
+                    try {
+                        const next = sessionTracker.workflow.advance();
+                        if (next) {
+                            logger.warn("workflow", `Phase "${phase}" timed out — auto-advanced to "${next}"`);
+                        }
+                    }
+                    catch (e) {
+                        logger.warn("workflow", `Phase timeout advance failed: ${e.message}`);
+                    }
                 }
             }
             logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
@@ -2326,15 +2544,105 @@ const _plugin = definePluginEntry({
                 if (!wf.enabled) {
                     return txt({ ok: false, error: "Workflow enforcement is not enabled for this project. Set workflow.enabled in dashboard-config.json" });
                 }
+                const currentPhase = wf.currentPhase;
                 if (params.phase) {
                     // Check transition is valid
                     if (!wf.canTransitionTo(params.phase.toLowerCase())) {
-                        return txt({ ok: false, error: `Cannot transition to '${params.phase}' from current phase '${wf.currentPhase}'. Workflow must go forward: ${["analyze", "plan", "document", "work", "log", "finish"].join(" → ")}` });
+                        return txt({ ok: false, error: `Cannot transition to '${params.phase}' from current phase '${currentPhase}'. Workflow must go forward: ${["analyze", "plan", "document", "work", "log", "finish"].join(" → ")}` });
                     }
-                    wf.completePhase(wf.currentPhase, params.skip);
-                    wf.enterPhase(params.phase.toLowerCase());
+                    // ═══ QUALITY GATES ═══
+                    const target = params.phase.toLowerCase();
+                    // document → work: check for ADRs
+                    if (currentPhase === "document" && target === "work") {
+                        const project = sessionTracker.currentProject;
+                        if (project) {
+                            const adrsDir = path.join(dataDir, "adrs");
+                            let adrCount = 0;
+                            if (fs.existsSync(adrsDir)) {
+                                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
+                            }
+                            if (adrCount === 0) {
+                                const projAdrsDir = path.join(projDir(project, dataDir), "adrs");
+                                if (fs.existsSync(projAdrsDir)) {
+                                    adrCount = fs.readdirSync(projAdrsDir).filter(f => f.endsWith(".md")).length;
+                                }
+                            }
+                            if (adrCount === 0) {
+                                logger.warn("workflow", "No ADR found for this project. Consider documenting architecture decisions with orchestrator_log_decision before implementing.");
+                            }
+                        }
+                    }
+                    // work → log: warn about uncommitted changes
+                    if (currentPhase === "work" && target === "log") {
+                        const project = sessionTracker.currentProject;
+                        if (project) {
+                            const loc = getProjectLocation(project, dataDir);
+                            if (loc && fs.existsSync(path.join(loc, ".git"))) {
+                                try {
+                                    const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+                                    const changed = statusRaw.trim().split("\n").filter(Boolean);
+                                    if (changed.length > 0) {
+                                        logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase. Consider committing or stashing first.`);
+                                    }
+                                }
+                                catch { /* git check non-fatal */ }
+                            }
+                        }
+                    }
+                    // log → finish: verify session was logged
+                    if (currentPhase === "log" && target === "finish") {
+                        if (!sessionTracker.loggedTaskCompletion) {
+                            logger.warn("workflow", "Task completion has not been explicitly logged. Call orchestrator_log_session with status=complete before advancing to finish.");
+                        }
+                    }
+                    wf.completePhase(currentPhase, params.skip);
+                    wf.enterPhase(target);
                 }
                 else {
+                    // Auto-advance with quality gates
+                    // document → work: warn about missing ADRs on auto-advance
+                    if (currentPhase === "document") {
+                        const project = sessionTracker.currentProject;
+                        if (project) {
+                            const adrsDir = path.join(dataDir, "adrs");
+                            let adrCount = 0;
+                            if (fs.existsSync(adrsDir)) {
+                                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
+                            }
+                            if (adrCount === 0) {
+                                const projAdrsDir = path.join(projDir(project, dataDir), "adrs");
+                                if (fs.existsSync(projAdrsDir)) {
+                                    adrCount = fs.readdirSync(projAdrsDir).filter(f => f.endsWith(".md")).length;
+                                }
+                            }
+                            if (adrCount === 0) {
+                                logger.warn("workflow", "No ADR found for this project. Suggest documenting with orchestrator_log_decision before coding.");
+                            }
+                        }
+                    }
+                    // work → log: warn about uncommitted changes on auto-advance
+                    if (currentPhase === "work") {
+                        const project = sessionTracker.currentProject;
+                        if (project) {
+                            const loc = getProjectLocation(project, dataDir);
+                            if (loc && fs.existsSync(path.join(loc, ".git"))) {
+                                try {
+                                    const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+                                    const changed = statusRaw.trim().split("\n").filter(Boolean);
+                                    if (changed.length > 0) {
+                                        logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase.`);
+                                    }
+                                }
+                                catch { /* git check non-fatal */ }
+                            }
+                        }
+                    }
+                    // log → finish: verify session was logged on auto-advance
+                    if (currentPhase === "log") {
+                        if (!sessionTracker.loggedTaskCompletion) {
+                            logger.warn("workflow", "Task completion not explicitly logged. Call orchestrator_log_session with status=complete before finish.");
+                        }
+                    }
                     const next = wf.advance();
                     if (!next) {
                         return txt({ ok: true, warning: "Already at last phase. No more phases to advance.", phase: wf.currentPhase, progress: wf.getProgress() });
@@ -2344,6 +2652,64 @@ const _plugin = definePluginEntry({
                 writeLiveAgents("workflow_advance", sessionTracker, logger);
                 logger.info("workflow", `Phase advanced: ${wf.currentPhase} (${wf.getProgress()})`);
                 return txt({ ok: true, phase: wf.currentPhase, progress: wf.getProgress(), elapsed: wf.getPhaseElapsed(), phase_history: wf.phaseHistory });
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  BACKLOG TOOLS
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_backlog_add",
+            label: "Add Backlog Task",
+            description: "Add a task to a project's backlog.",
+            parameters: Type.Object({
+                project: Type.String({ description: "Project name." }),
+                title: Type.String({ description: "Task title." }),
+                description: Type.Optional(Type.String({ description: "Task description." })),
+                priority: Type.Optional(Type.String({ description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." })),
+                labels: Type.Optional(Type.Array(Type.String(), { description: "Labels/tags." })),
+                depends_on: Type.Optional(Type.Array(Type.String(), { description: "Task IDs this depends on." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                return txt(backlogAdd(dataDir, params.project, params));
+            },
+        });
+        api.registerTool({
+            name: "orchestrator_backlog_list",
+            label: "List Backlog",
+            description: "List backlog tasks with optional filters.",
+            parameters: Type.Object({
+                project: Type.String({ description: "Project name." }),
+                status: Type.Optional(Type.String({ description: "Filter by status: todo, in_progress, done, blocked." })),
+                priority: Type.Optional(Type.String({ description: "Filter by priority: p0, p1, p2, p3." })),
+                label: Type.Optional(Type.String({ description: "Filter by label." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                return txt(backlogList(params.project, dataDir, params));
+            },
+        });
+        api.registerTool({
+            name: "orchestrator_backlog_update",
+            label: "Update Backlog Task",
+            description: "Update a backlog task's status, priority, assignment, or labels.",
+            parameters: Type.Object({
+                project: Type.String({ description: "Project name." }),
+                id: Type.String({ description: "Task ID." }),
+                status: Type.Optional(Type.String({ description: "New status: todo, in_progress, done, blocked." })),
+                priority: Type.Optional(Type.String({ description: "New priority: p0, p1, p2, p3." })),
+                assigned_to: Type.Optional(Type.String({ description: "Assign to agent or user." })),
+                labels: Type.Optional(Type.Array(Type.String(), { description: "Replace labels." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                return txt(backlogUpdate(params.project, dataDir, params));
             },
         });
         // ═══════════════════════════════════════════════════════════
