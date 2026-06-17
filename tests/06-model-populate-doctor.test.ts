@@ -26,7 +26,7 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_register")!("", { project: "test-project" });
     api.tools.get("orchestrator_set_context")!("", {
       project: "test-project",
       task: "doctor test",
@@ -36,7 +36,7 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
   describe("orchestrator_auto_populate", () => {
     it("should return error since python3 is not available in test", async () => {
       const exec = api.tools.get("orchestrator_auto_populate")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       // Script not found or python3 unavailable
       expect(result).toHaveProperty("error") || expect(result).toHaveProperty("success", false);
     });
@@ -63,7 +63,7 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
     });
     it("should run all checks by default", async () => {
       const exec = api.tools.get("orchestrator_doctor")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("checks", "all");
       expect(result).toHaveProperty("session_key");
       expect(result).toHaveProperty("registered", true);
@@ -114,7 +114,7 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
   describe("orchestrator_check_models (additional)", () => {
     it("should return total available and eligible counts", async () => {
       const exec = api.tools.get("orchestrator_check_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result.total_available).toBeGreaterThan(0);
       expect(result.eligible_count).toBeGreaterThanOrEqual(0);
       expect(result.eligible_count).toBeLessThanOrEqual(result.total_available);
@@ -122,14 +122,14 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
     it("should enumerate applied filters", async () => {
       const exec = api.tools.get("orchestrator_check_models")!;
       // Without project, only global filters apply
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(Array.isArray(result.filters_applied)).toBe(true);
       // offline-model is globally disabled
       expect(result.filters_applied).toContain("global_disabled");
     });
     it("should return eligible_models with details", async () => {
       const exec = api.tools.get("orchestrator_check_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(Array.isArray(result.eligible_models)).toBe(true);
       if (result.eligible_models.length > 0) {
         const m = result.eligible_models[0];
@@ -146,7 +146,7 @@ describe("PLUGIN-001f — Model Population & Doctor", () => {
       config.free_only_mode = true;
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
       const exec = api.tools.get("orchestrator_check_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result.free_only_mode).toBe(true);
       // Free-only should filter out paid models
       // But we also have global_disabled for offline-model

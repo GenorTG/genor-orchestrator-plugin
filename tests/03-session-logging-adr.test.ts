@@ -27,7 +27,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_register")!("", { project: "test-project" });
     api.tools.get("orchestrator_set_context")!("", {
       project: "test-project",
       task: "logging test",
@@ -197,7 +197,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
   describe("orchestrator_get_logs", () => {
     it("should return log entries", async () => {
       const exec = api.tools.get("orchestrator_get_logs")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("entries");
       expect(Array.isArray(result.entries)).toBe(true);
       expect(result).toHaveProperty("sources");

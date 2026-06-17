@@ -64,7 +64,10 @@
       "orchestrator_backlog_add",
       "orchestrator_backlog_list",
       "orchestrator_backlog_update",
-      "orchestrator_backlog_dispatch"
+      "orchestrator_backlog_dispatch",
+      "orchestrator_backlog_dispatch_all",
+      "orchestrator_verify_models",
+      "orchestrator_auto_pr"
     ]
   }
 }

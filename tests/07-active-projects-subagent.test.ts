@@ -31,20 +31,20 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
   describe("orchestrator_list_active_projects", () => {
     it("should return all projects with session counts", async () => {
       // Register + set context to create project binding
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "test",
       });
       const exec = api.tools.get("orchestrator_list_active_projects")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("ok", true);
       expect(result).toHaveProperty("all_projects");
       expect(Array.isArray(result.all_projects)).toBe(true);
     });
     it("should include session_logged counts for each project", async () => {
       // Log some sessions
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "session counting",
@@ -57,7 +57,7 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
         status: "complete",
       });
       const exec = api.tools.get("orchestrator_list_active_projects")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       // Find test-project in the list
       const tp = result.all_projects.find(
         (p: any) => p.project === "test-project",
@@ -66,13 +66,13 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(tp.sessions_logged).toBeGreaterThanOrEqual(1);
     });
     it("should report active sessions for bound projects", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "active check",
       });
       const exec = api.tools.get("orchestrator_list_active_projects")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result.active_project_count).toBeGreaterThanOrEqual(1);
       const active = result.active_projects.find(
         (p: any) => p.project === "test-project",
@@ -91,17 +91,18 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("ok", false);
       expect(result).toHaveProperty("error");
     });
-    it("should fail if no active project", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+    it("should succeed when registered for a project", async () => {
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       const exec = api.tools.get("orchestrator_spawn_subagent")!;
       const result = await unwrap(
         exec("", { task: "do something" }),
       );
-      expect(result).toHaveProperty("ok", false);
-      expect(result.error).toContain("No active project");
+      // Registration auto-sets project context, so spawning works
+      expect(result).toHaveProperty("ok", true);
+      expect(result).toHaveProperty("spawn_instructions");
     });
     it("should return spawn instructions when properly configured", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "spawn test",
@@ -121,7 +122,7 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("spawn_instructions");
     });
     it("should include recommended model from session tracker", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "model test",
@@ -135,7 +136,7 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("recommended_model", "auto-routed");
     });
     it("should respect timeoutSeconds upper bound", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "timeout test",

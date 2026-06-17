@@ -32,7 +32,7 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
   describe("Full lifecycle", () => {
     it("should complete register → set_context → work → log → clear", async () => {
       // 1. Register
-      const r1 = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const r1 = await unwrap(api.tools.get("orchestrator_register")!("", { project: "test-project" }));
       expect(r1).toHaveProperty("ok", true);
       // 2. Set context
       const r2 = await unwrap(
@@ -72,7 +72,7 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
     });
     it("should persist session data across tool calls", async () => {
       // Create a session
-      await api.tools.get("orchestrator_register")!("", {});
+      await api.tools.get("orchestrator_register")!("", { project: "test-project" });
       await api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
         task: "persistence test",
@@ -145,7 +145,7 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       }
     });
     it("should handle non-existent project gracefully", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       const exec = api.tools.get("orchestrator_get_project_docs")!;
       const result = await unwrap(
         exec("", { project: "nonexistent-project" }),
@@ -200,7 +200,7 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
         path.join(projDir, "sessions.json"),
         JSON.stringify(sessions, null, 2),
       );
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       const exec = api.tools.get("orchestrator_doctor")!;
       const result = await unwrap(exec("", { check: "data" }));
       // Should flag issues
@@ -220,12 +220,12 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       plugin.register(emptyApi);
       emptyApi.tools.get("orchestrator_register")!("", {});
       const exec = emptyApi.tools.get("orchestrator_get_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result.total).toBe(0);
       expect(result.models).toEqual([]);
     });
     it("should handle provider filter with no matches", async () => {
-      api.tools.get("orchestrator_register")!("", {});
+      api.tools.get("orchestrator_register")!("", { project: "test-project" });
       const exec = api.tools.get("orchestrator_get_models")!;
       const result = await unwrap(
         exec("", { provider: "nonexistent-provider" }),
@@ -284,10 +284,10 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
   describe("Multiple registrations", () => {
     it("should handle re-registration gracefully (idempotent register)", async () => {
       // First register succeeds with object
-      const rFirst = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const rFirst = await unwrap(api.tools.get("orchestrator_register")!("", { project: "test-project" }));
       expect(rFirst).toHaveProperty("ok", true);
       // Second call returns string "already registered"
-      const rSecond = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const rSecond = await unwrap(api.tools.get("orchestrator_register")!("", { project: "test-project" }));
       expect(typeof rSecond === "string" || rSecond.ok === true).toBe(true);
     });
   });

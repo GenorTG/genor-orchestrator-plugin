@@ -26,7 +26,7 @@ describe("PLUGIN-001b — Status & Config", () => {
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
     // Register + set context for tools that need it
-    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_register")!("", { project: "test-project" });
     api.tools.get("orchestrator_set_context")!("", {
       project: "test-project",
       task: "testing",
@@ -36,7 +36,7 @@ describe("PLUGIN-001b — Status & Config", () => {
   describe("orchestrator_get_status", () => {
     it("should return status object with model counts", async () => {
       const exec = api.tools.get("orchestrator_get_status")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("total_models");
       expect(result).toHaveProperty("active_models");
       expect(result).toHaveProperty("agent_ready_models");
@@ -46,12 +46,12 @@ describe("PLUGIN-001b — Status & Config", () => {
     });
     it("should report free_only_mode from config", async () => {
       const exec = api.tools.get("orchestrator_get_status")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("free_only_mode", false);
     });
     it("should include data_dir in response", async () => {
       const exec = api.tools.get("orchestrator_get_status")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("data_dir");
       expect(typeof result.data_dir).toBe("string");
     });
@@ -60,7 +60,7 @@ describe("PLUGIN-001b — Status & Config", () => {
   describe("orchestrator_get_config", () => {
     it("should return config with free_only_mode and projects", async () => {
       const exec = api.tools.get("orchestrator_get_config")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("free_only_mode");
       expect(result).toHaveProperty("disabled_models");
       expect(result).toHaveProperty("projects");
@@ -68,12 +68,12 @@ describe("PLUGIN-001b — Status & Config", () => {
     });
     it("should list disabled models from config", async () => {
       const exec = api.tools.get("orchestrator_get_config")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result.disabled_models).toContain("offline-model");
     });
     it("should include total model count", async () => {
       const exec = api.tools.get("orchestrator_get_config")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("total_models", 8);
     });
   });
@@ -81,7 +81,7 @@ describe("PLUGIN-001b — Status & Config", () => {
   describe("orchestrator_get_models", () => {
     it("should list all models by default", async () => {
       const exec = api.tools.get("orchestrator_get_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("total", 8);
       expect(result).toHaveProperty("filtered");
       expect(Array.isArray(result.models)).toBe(true);
@@ -126,7 +126,7 @@ describe("PLUGIN-001b — Status & Config", () => {
   describe("orchestrator_check_models", () => {
     it("should return eligibility without project", async () => {
       const exec = api.tools.get("orchestrator_check_models")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("eligible_count");
       expect(result).toHaveProperty("total_available", 8);
       expect(result).toHaveProperty("filters_applied");

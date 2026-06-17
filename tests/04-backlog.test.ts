@@ -28,7 +28,7 @@ describe("PLUGIN-001d — Backlog", () => {
     await registerPlugin(dd, plugin, api);
     // Ensure test-project exists
     fs.mkdirSync(path.join(dd, "projects", "test-project"), { recursive: true });
-    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_register")!("", { project: "test-project" });
     api.tools.get("orchestrator_set_context")!("", {
       project: "test-project",
       task: "backlog testing",

@@ -813,6 +813,97 @@ function handleGlobalErrors(req: IncomingMessage, res: ServerResponse): void {
   sendJSON(res, { ok: true, errors: readGlobalErrors(limit) });
 }
 
+// ── CONTROL PLANE HANDLERS ──────────────────────────────────
+
+function controlDir(): string {
+  return path.join(DATA_DIR, "control");
+}
+
+function writeAction(action: string, params: Record<string, any>, ttlSeconds = 60): string {
+  const id = `${action}_${Date.now()}`;
+  const cd = controlDir();
+  if (!fs.existsSync(cd)) fs.mkdirSync(cd, { recursive: true });
+  fs.writeFileSync(
+    path.join(cd, `${id}.action.json`),
+    JSON.stringify({ id, action, params, created_at: new Date().toISOString(), ttl_seconds: ttlSeconds }, null, 2)
+  );
+  return id;
+}
+
+function handleAgentAction(req: IncomingMessage, res: ServerResponse): void {
+  readBody(req).then(body => {
+    const { action, agent, project, task } = body;
+    if (!action) { sendJSON(res, { ok: false, error: "Missing action" }, 400); return; }
+    let actionId: string;
+    switch (action) {
+      case "stop_agent": actionId = writeAction("stop_agent", { agent: agent || "unknown", project }); break;
+      case "spawn_agent": actionId = writeAction("spawn_agent", { agent: agent || "new", project, task: task || "" }); break;
+      case "set_context": actionId = writeAction("set_context", { project: project || "", task: task || "" }); break;
+      case "clear_context": actionId = writeAction("clear_context", {}); break;
+      default: sendJSON(res, { ok: false, error: `Unknown action: ${action}` }, 400); return;
+    }
+    sendJSON(res, { ok: true, action_id: actionId, message: `Action ${action} queued` });
+  }).catch(err => sendJSON(res, { ok: false, error: err.message }, 500));
+}
+
+function handleRecoverStuck(req: IncomingMessage, res: ServerResponse): void {
+  readBody(req).then(body => {
+    const laPath = path.join(DATA_DIR, "live-agents.json");
+    if (!fs.existsSync(laPath)) { sendJSON(res, { ok: true, recovered: [], message: "No live agents" }); return; }
+    const live = JSON.parse(fs.readFileSync(laPath, "utf-8"));
+    const agents = live.agents || [];
+    const now = Date.now();
+    const stuckTimeout = (body.timeout_seconds || 300) * 1000;
+    const recovered: string[] = [];
+    for (const a of agents) {
+      if (!a.project) continue;
+      const lastUpdate = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      if ((now - lastUpdate) > stuckTimeout && a.agent_status !== "idle" && a.agent_status !== "complete") {
+        writeAction("set_context", { project: a.project, task: a.task || "auto-recovery" }, 30);
+        recovered.push(a.agent || "?");
+      }
+    }
+    sendJSON(res, { ok: true, recovered_count: recovered.length, recovered });
+  }).catch(err => sendJSON(res, { ok: false, error: err.message }, 500));
+}
+
+function handleSetProjectRouting(req: IncomingMessage, res: ServerResponse): void {
+  readBody(req).then(body => {
+    const { project, routing } = body;
+    if (!project) { sendJSON(res, { ok: false, error: "Missing project" }, 400); return; }
+    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || { free_only_mode: false, disabled_models: [], projects: {} };
+    cfg.projects = cfg.projects || {};
+    cfg.projects[project] = cfg.projects[project] || {};
+    if (routing && typeof routing === "object") cfg.projects[project].model_routing = routing;
+    if (typeof body.free_only === "boolean") cfg.projects[project].free_only = body.free_only;
+    if (Array.isArray(body.model_allowlist)) cfg.projects[project].model_allowlist = body.model_allowlist;
+    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    sendJSON(res, { ok: true, message: `Routing updated for ${project}` });
+  }).catch(err => sendJSON(res, { ok: false, error: err.message }, 500));
+}
+
+function handleTriggerMaintenance(req: IncomingMessage, res: ServerResponse): void {
+  writeAction("set_context", { project: "__maintenance__", task: "trigger" }, 10);
+  sendJSON(res, { ok: true, message: "Maintenance triggered" });
+}
+
+function handleControlActions(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    const cd = controlDir();
+    const pending: string[] = [];
+    const results: string[] = [];
+    if (fs.existsSync(cd)) {
+      for (const f of fs.readdirSync(cd)) {
+        if (f.endsWith(".action.json")) pending.push(f);
+        if (f.endsWith(".result.json")) results.push(f);
+      }
+    }
+    sendJSON(res, { ok: true, pending_count: pending.length, result_count: results.length, pending, results });
+  } catch (err) {
+    sendJSON(res, { ok: false, error: String(err) }, 500);
+  }
+}
+
 // ── MAIN HTTP HANDLER ─────────────────────────────────────────
 const BASE_PATH = "/orchestrator";
 
@@ -892,6 +983,17 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/project-doc": return handleProjectDocSave(req, res);
           case "/api/create-project": handleCreateProject(req, res); return true;
           case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
+          case "/api/agent-action": handleAgentAction(req, res); return true;
+          case "/api/recover-stuck": handleRecoverStuck(req, res); return true;
+          case "/api/set-project-routing": handleSetProjectRouting(req, res); return true;
+          case "/api/trigger-maintenance": handleTriggerMaintenance(req, res); return true;
+        }
+      }
+
+      // ── GET-only supplementary API ──
+      if (method === "GET") {
+        switch (pathname) {
+          case "/api/control-actions": handleControlActions(req, res); return true;
         }
       }
 

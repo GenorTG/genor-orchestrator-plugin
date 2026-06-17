@@ -1891,7 +1891,7 @@ function getLogs(dataDir: string, opts: any, logger: OrchestratorLogger) {
 function requireRegistration(): string | null {
   const sk = sessionTracker.sessionKey;
   if (sk && sessionTracker.isSessionRegistered(sk)) return null;
-  return "This session is not registered with the orchestrator. Call orchestrator_register first to opt in to orchestrator tracking and project context injection.";
+  return "This session is not registered with the orchestrator. Call orchestrator_register(project=\"...\") to register on a specific project. Use orchestrator_get_status to see available projects, or orchestrator_create_project to create a new one.";
 }
 
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
@@ -2017,6 +2017,8 @@ const TOOL_NAMES = [
   "orchestrator_backlog_update",
   "orchestrator_backlog_dispatch",
   "orchestrator_backlog_dispatch_all",
+  "orchestrator_verify_models",
+  "orchestrator_auto_pr",
 ] as const;
 
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
@@ -2025,9 +2027,9 @@ const TOOL_NAMES = [
 const TOOL_METADATA: Array<{ name: string; label: string; description: string; parameters: any }> = [
   { name: "orchestrator_set_context", label: "Orchestrator Set Context", description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name (e.g., kfinance, kotw)." }, task: { type: "string", description: "Describe the task you are about to do." }, original_prompt: { type: "string", description: "OPTIONAL: The original user request that triggered this task." } }, required: ["project", "task"] } },
   { name: "orchestrator_clear_context", label: "Orchestrator Clear Context", description: "Clear active project context. Disables auto-routing and auto-logging.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_register", label: "Orchestrator Register", description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_register", label: "Orchestrator Register", description: "Register this session for a specific project. REQUIRES project name — cannot 'just register'. Use orchestrator_get_status to see projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project to register for." }, task: { type: "string", description: "Optional initial task." } }, required: ["project"] } },
   { name: "orchestrator_unregister", label: "Orchestrator Unregister", description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_status", label: "Status", description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.", parameters: { type: "object", properties: {} } },
+  { name: "orchestrator_get_status", label: "Status", description: "Get quick orchestration status: model counts, session count, project list (for registration discovery), free-only mode state. Works WITHOUT registration — use this to discover projects before calling orchestrator_register.", parameters: { type: "object", properties: {} } },
   { name: "orchestrator_get_config", label: "Config", description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.", parameters: { type: "object", properties: {} } },
   { name: "orchestrator_get_models", label: "Models", description: "List models from the model inventory with optional filters (status, provider, search, project routing).", parameters: { type: "object", properties: { status: { type: "string", description: "Filter by status: active, discovered, offline, removed. Comma-separated." }, provider: { type: "string", description: "Filter by provider name (partial match)." }, search: { type: "string", description: "Search by model ID or name (partial match)." }, agent_ready: { type: "boolean", description: "Filter by agent_ready flag." }, project: { type: "string", description: "Apply project routing filters to results." } } } },
   { name: "orchestrator_check_models", label: "Check Models (routing)", description: "Check which models are eligible for a project, applying all routing filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name for per-project routing rules. Omit for global-only check." } } } },
@@ -2051,6 +2053,8 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
   { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
   { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
+  { name: "orchestrator_verify_models", label: "Verify Models", description: "Ping active model provider endpoints to verify models are reachable and responding. Returns per-model online/offline status with timestamps. Updates models.json with verification metadata.", parameters: { type: "object", properties: { provider: { type: "string", description: "Optional: only verify models from a specific provider (e.g. 'lmstudio', 'ollama')." } } } },
+  { name: "orchestrator_auto_pr", label: "Auto PR", description: "Create a git branch, commit current changes, push, and open a PR. Must be called from within a git repo. Requires git and gh CLI configured. PR body includes summary of changes and related backlog tasks.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to use for the branch name and PR context." }, title: { type: "string", description: "PR title. Defaults to 'Phase/Feature update'." }, summary: { type: "string", description: "Detailed summary of changes for the PR body." }, branch: { type: "string", description: "Custom branch name. Defaults to 'feature/<project>-<timestamp>'." }, base: { type: "string", description: "Base branch to merge into (default: main)." } }, required: ["project"] } },
 ];
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -2697,20 +2701,40 @@ const _plugin: Record<string, any> = definePluginEntry({
     api.registerTool({
       name: "orchestrator_register",
       label: "Orchestrator Register",
-      description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
-      parameters: Type.Object({}),
-      async execute(_id: string, _params: any) {
-        // Resolve the session key: prefer the hook-populated key, fall back
-        // to a synthetic stable key derived from agent identity + timestamp.
-        // session_start may not fire for sessions that existed before a
-        // gateway restart, so we can't depend on it for existing sessions.
+      description: "Register this session for orchestrator tracking on a specific project. REQUIRES a project name. Registration sets project context automatically — you cannot 'just register' without a project. Use orchestrator_get_status first to see available projects, or orchestrator_create_project to make a new one.",
+      parameters: Type.Object({
+        project: Type.String({ description: "Project name to register and bind to (e.g., 'genor-orchestrator-plugin'). The session is locked to this project until unregistered or released. Use orchestrator_get_status to list available projects." }),
+        task: Type.Optional(Type.String({ description: "Initial task description (optional). Can use orchestrator_set_context to set/change later." })),
+      }),
+      async execute(_id: string, params: any) {
+        const project = params.project;
+        if (!project) return txt({ ok: false, error: "Project name is required. Use orchestrator_get_status to see available projects, or orchestrator_create_project to make a new one.", available_projects: listAvailableProjects(dataDir) });
+        
+        // Validate project exists in orchestrator-data
+        // Check against dashboard-config.json (the canonical project registry)
+        // — not filesystem, since setContext creates the directory on first use.
+        // If the config file doesn't exist yet (fresh setup), skip validation.
+        const cfgPath = path.join(dataDir, "dashboard-config.json");
+        if (fs.existsSync(cfgPath)) {
+          const cfg: DashboardConfig = readJSON(cfgPath) || {};
+          const knownProjects = cfg.projects ? Object.keys(cfg.projects) : [];
+          if (knownProjects.length > 0 && !knownProjects.includes(project)) {
+            return txt({
+              ok: false,
+              error: `Project "${project}" is not configured in orchestrator-data.`,
+              hint: 'Use orchestrator_get_status to see available projects, or orchestrator_create_project to create a new one.',
+              available_projects: knownProjects,
+            });
+          }
+        }
+        // If no config file or no projects defined, skip validation — the
+        // project directory will be created by setContext on first use.
+        
+        // Resolve session key
         const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
         if (!sk) return txt("error: no session key available");
         
-        // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
-        // If this session key doesn't match tracker's current key and there's
-        // already an active registration with a different project context,
-        // warn prominently to surface unintended LLM tool calls.
+        // Registration guard
         const existingSessions = sessionTracker.getRegisteredSessions();
         const hasActiveRegistration = existingSessions.length > 0 && !existingSessions.includes(sk);
         if (hasActiveRegistration) {
@@ -2723,23 +2747,60 @@ const _plugin: Record<string, any> = definePluginEntry({
         }
         
         const newly = sessionTracker.registerSession(sk);
-        if (newly) {
-          if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
-          sessionTracker.trackAction("session_registered");
-          writeLiveAgents("register", sessionTracker, logger);
-          logger.info("registration", `session registered: ${sk} (total: ${existingSessions.length + 1})`);
-          // Return descriptive message so LLM + user can see what happened
+        if (!newly) {
+          // Already registered — optionally update project context
+          // This is allowed: re-registering for the same project is idempotent
+          if (sessionTracker.currentProject && sessionTracker.currentProject !== project) {
+            return txt({
+              ok: false,
+              error: `Already registered for project "${sessionTracker.currentProject}". Use orchestrator_release_project then register for "${project}", or orchestrator_set_context to change task within current project.`,
+            });
+          }
           return txt({
             ok: true,
-            message: "registered",
+            message: "already registered",
+            project,
             session_key: sk,
+          });
+        }
+        
+        // Set session key if not already set
+        if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
+        sessionTracker.trackAction("session_registered");
+        
+        // Set context to the project
+        try {
+          const task = params.task || "Registered for project — no initial task";
+          const ctxResult = setContext(dataDir, project, task, logger);
+          writeLiveAgents("register", sessionTracker, logger);
+          logger.info("registration", `session registered for project "${project}": ${sk}`);
+          
+          return txt({
+            ok: true,
+            message: `registered and bound to "${project}"`,
+            session_key: sk,
+            project,
+            context: ctxResult,
             total_registered: existingSessions.length + 1,
             warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
           });
+        } catch (err: any) {
+          // Registration succeeded but context setting failed — rollback
+          sessionTracker.unregisterSession(sk);
+          logger.error("registration", `Failed to set context after registration: ${err.message}`);
+          return txt({ ok: false, error: `Registration failed: ${err.message}` });
         }
-        return txt("already registered");
       },
     });
+
+    // Helper: list projects that exist in orchestrator-data
+    function listAvailableProjects(dir: string): string[] {
+      const projs = path.join(dir, "projects");
+      if (!fs.existsSync(projs)) return [];
+      return fs.readdirSync(projs)
+        .filter(f => !f.startsWith(".") && fs.statSync(path.join(projs, f)).isDirectory())
+        .sort();
+    }
 
     api.registerTool({
       name: "orchestrator_unregister",
@@ -3893,6 +3954,222 @@ const _plugin: Record<string, any> = definePluginEntry({
           spawn: spawnInfo,
           message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call orchestrator_set_context to start working, or orchestrator_join_project if you're in a different session.`,
         });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  TOOL — Verify Models
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_verify_models",
+      label: "Orchestrator Verify Models",
+      description: "Ping active model provider endpoints to verify models are reachable and responding. Updates models.json with last_verified metadata.",
+      parameters: Type.Object({
+        provider: Type.Optional(Type.String({ description: "Optional: only verify models from a specific provider." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+
+        const mdPath = path.join(dataDir, "models.json");
+        const md = readJSON(mdPath);
+        const allModels: ModelEntry[] = md?.models || [];
+        let targets = allModels.filter(m => m.status === "active");
+        if (params.provider) {
+          targets = targets.filter(m => (m.provider || "").toLowerCase() === params.provider.toLowerCase());
+        }
+
+        if (targets.length === 0) {
+          return txt({ ok: true, message: "No active models to verify.", checked: 0 });
+        }
+
+        // Group by provider for endpoint-level health checks
+        type ProviderGroup = { provider: string; models: ModelEntry[]; endpoint: string };
+        const groups: ProviderGroup[] = [];
+        const groupMap = new Map<string, ModelEntry[]>();
+        for (const m of targets) {
+          const prov = (m.provider || "unknown").toLowerCase();
+          if (!groupMap.has(prov)) groupMap.set(prov, []);
+          groupMap.get(prov)!.push(m);
+        }
+
+        // Known provider endpoints
+        const endpoints: Record<string, string> = {
+          lmstudio: "http://localhost:1234/v1/models",
+          ollama: "http://localhost:11434/api/tags",
+          local: "http://localhost:1234/v1/models",
+          openai: "https://api.openai.com/v1/models",
+          openrouter: "https://openrouter.ai/api/v1/models",
+          anthropic: "https://api.anthropic.com/v1/models",
+        };
+
+        for (const [prov, models] of groupMap) {
+          groups.push({
+            provider: prov,
+            models,
+            endpoint: endpoints[prov] || "",
+          });
+        }
+
+        const results: Array<{
+          model_id: string; provider: string; online: boolean;
+          status: string; error?: string; last_verified: string;
+        }> = [];
+        const now = new Date().toISOString();
+
+        for (const group of groups) {
+          let reachable = false;
+          let pingError: string | undefined;
+
+          if (group.endpoint) {
+            try {
+              // Use AbortController for timeout
+              const ac = new AbortController();
+              const timeout = setTimeout(() => ac.abort(), 5000);
+              const resp = await fetch(group.endpoint, {
+                signal: ac.signal,
+                method: "GET",
+                headers: { "User-Agent": "orchestrator-verify/1.0" },
+              });
+              clearTimeout(timeout);
+              reachable = resp.ok || resp.status === 401 || resp.status === 403;
+            } catch (e: any) {
+              reachable = false;
+              if (e.name === "AbortError") pingError = "timeout";
+              else if (e.code === "ECONNREFUSED") pingError = "connection refused";
+              else if (e.code === "ENOTFOUND") pingError = "DNS resolution failed";
+              else pingError = e.message || String(e);
+            }
+          } else {
+            pingError = "unknown provider — no endpoint configured";
+          }
+
+          for (const m of group.models) {
+            results.push({
+              model_id: m.id,
+              provider: m.provider || "unknown",
+              online: reachable,
+              status: reachable ? "online" : "unreachable",
+              error: pingError,
+              last_verified: now,
+            });
+
+            // Update models.json with verification metadata
+            if (md) {
+              const entry = (md.models as any[])?.find((x: any) => x.id === m.id);
+              if (entry) {
+                entry.last_verified = now;
+                entry.verified_status = reachable ? "online" : "unreachable";
+              }
+            }
+          }
+        }
+
+        // Write updated models.json
+        if (md) writeJSON(mdPath, md);
+
+        const online = results.filter(r => r.online).length;
+        const offline = results.filter(r => !r.online).length;
+
+        return txt({
+          ok: true,
+          checked: results.length,
+          online,
+          offline,
+          results,
+          timestamp: now,
+        });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  TOOL — Auto PR
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_auto_pr",
+      label: "Orchestrator Auto PR",
+      description: "Create a git branch, commit current changes, push, and open a PR. Must be called from within a git repo.",
+      parameters: Type.Object({
+        project: Type.String({ description: "Project name for branch naming and PR context." }),
+        title: Type.Optional(Type.String({ description: "PR title." })),
+        summary: Type.Optional(Type.String({ description: "Detailed summary of changes for the PR body." })),
+        branch: Type.Optional(Type.String({ description: "Custom branch name." })),
+        base: Type.Optional(Type.String({ description: "Base branch (default: main)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+
+        const project = params.project;
+        const loc = getProjectLocation(project, dataDir);
+        if (!loc) return txt({ ok: false, error: `Project "${project}" has no location configured. Set location in dashboard-config.json first.` });
+
+        const base = params.base || "main";
+        const branch = params.branch || `feature/${project}-${Date.now()}`;
+        const title = params.title || `Phase/Feature update for ${project}`;
+        const summary = params.summary || "Automated update via orchestrator pipeline.";
+
+        try {
+          // 1. Check git status
+          const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 10000 }).toString();
+          const changed = statusRaw.split("\n").filter(l => l.trim().length > 0);
+          if (changed.length === 0) {
+            return txt({ ok: false, error: "No uncommitted changes found. Nothing to PR." });
+          }
+
+          // 2. Stash any in-progress work if we need to switch branches
+          const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: loc, encoding: "utf-8", timeout: 5000 }).toString().trim();
+
+          // 3. Create branch
+          execSync(`git checkout -b "${branch}" 2>/dev/null || git checkout "${branch}"`, { cwd: loc, encoding: "utf-8", timeout: 10000 });
+
+          // 4. Add and commit
+          execSync("git add -A", { cwd: loc, encoding: "utf-8", timeout: 30000 });
+          const commitMsg = `${title}\n\n${summary}`.replace(/"/g, '\\"');
+          execSync(`git commit -m "${commitMsg}"`, { cwd: loc, encoding: "utf-8", timeout: 30000 });
+
+          // 5. Push
+          let pushOutput = "";
+          try {
+            pushOutput = execSync(`git push -u origin "${branch}" 2>&1`, { cwd: loc, encoding: "utf-8", timeout: 60000 }).toString();
+          } catch (pushErr: any) {
+            return txt({ ok: false, error: `Push failed: ${pushErr.message || pushErr}`, branch, committed: true });
+          }
+
+          // 6. Create PR via gh CLI
+          let prUrl = "";
+          let prError: string | undefined;
+          try {
+            const prOutput = execSync(
+              `gh pr create --base "${base}" --head "${branch}" --title "${title}" --body "${summary}" 2>&1`,
+              { cwd: loc, encoding: "utf-8", timeout: 30000 },
+            ).toString().trim();
+            prUrl = prOutput;
+          } catch (prErr: any) {
+            prError = prErr.message || String(prErr);
+          }
+
+          // 7. Switch back to original branch
+          try {
+            execSync(`git checkout "${currentBranch}" 2>/dev/null`, { cwd: loc, timeout: 5000 });
+          } catch { /* best-effort */ }
+
+          return txt({
+            ok: true,
+            project,
+            branch,
+            base,
+            commit_count: 1,
+            files_changed: changed.length,
+            push_output: pushOutput.trim(),
+            pr_url: prUrl || null,
+            pr_error: prError || null,
+          });
+        } catch (e: any) {
+          return txt({ ok: false, error: `Git/PR operation failed: ${e.message || e}` });
+        }
       },
     });
 

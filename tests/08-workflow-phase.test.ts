@@ -24,7 +24,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_register")!("", { project: "test-project" });
     api.tools.get("orchestrator_set_context")!("", {
       project: "test-project",
       task: "workflow testing",
@@ -34,7 +34,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
   describe("WorkflowTracker (internal)", () => {
     it("should start in analyze phase when enabled", async () => {
       const exec = api.tools.get("orchestrator_get_status")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       // Status doesn't expose workflow directly, but the workflow is
       // active behind the scenes after set_context with workflow enabled
     });
@@ -118,7 +118,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       // Workflow was configured with skip_phases: [] in fixtures
       // so no phases are skipped in the default test-project
       const exec = api.tools.get("orchestrator_advance_phase")!;
-      const r1 = await unwrap(exec("", {}));
+      const r1 = await unwrap(exec("", { project: "test-project" }));
       expect(r1.phase).toBe("plan");
     });
   });
@@ -140,16 +140,16 @@ describe("PLUGIN-001h — Workflow Phase", () => {
         task: "no-workflow",
       });
       const exec = api.tools.get("orchestrator_advance_phase")!;
-      const result = await unwrap(exec("", {}));
+      const result = await unwrap(exec("", { project: "test-project" }));
       expect(result).toHaveProperty("ok", false);
       expect(result.error).toContain("not enabled");
     });
     it("should return phase_history on advance", async () => {
       const exec = api.tools.get("orchestrator_advance_phase")!;
-      const r1 = await unwrap(exec("", {}));
+      const r1 = await unwrap(exec("", { project: "test-project" }));
       expect(r1).toHaveProperty("phase_history");
       expect(Array.isArray(r1.phase_history)).toBe(true);
-      const r2 = await unwrap(exec("", {}));
+      const r2 = await unwrap(exec("", { project: "test-project" }));
       expect(r2.phase_history.length).toBeGreaterThanOrEqual(
         r1.phase_history.length,
       );
