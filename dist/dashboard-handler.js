@@ -146,6 +146,8 @@ function handleAll(_req, res) {
     const projectsList = [];
     if (fs.existsSync(projDir)) {
         for (const name of fs.readdirSync(projDir).sort()) {
+            if (name.startsWith("."))
+                continue; // Skip hidden dirs (.archived)
             const p = path.join(projDir, name);
             if (!fs.statSync(p).isDirectory())
                 continue;
@@ -433,6 +435,8 @@ function handleProjects(_req, res) {
     if (!fs.existsSync(projDir))
         return sendJSON(res, { projects: [], count: 0 });
     const projects = fs.readdirSync(projDir).filter((n) => {
+        if (n.startsWith("."))
+            return false;
         const p = path.join(projDir, n);
         return fs.statSync(p).isDirectory();
     }).map((name) => {
