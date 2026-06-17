@@ -2505,24 +2505,6 @@ const _plugin = definePluginEntry({
         });
         // ── Dashboard HTTP handler — serve dashboard through gateway ──
         // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
-        // First register a minimal ping test route to verify registerHttpRoute works at all
-        try {
-            api.registerHttpRoute({
-                path: "/genor/ping",
-                auth: "plugin",
-                match: "exact",
-                handler: async (_req, res) => {
-                    res.writeHead(200, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ ok: true, pong: Date.now() }));
-                    return true;
-                },
-            });
-            logger.info("plugin", "Ping route registered at /genor/ping");
-        }
-        catch (pingErr) {
-            logger.warn("plugin", "Ping route registration failed: " + (pingErr?.message || String(pingErr)));
-        }
-        // Then register the full dashboard handler
         try {
             const dashHandler = createDashboardHandler(api);
             api.registerHttpRoute({

@@ -828,7 +828,7 @@ window.addEventListener('unhandledrejection', function(e) {
 /* ═══════════════════════════════════════════════════════════════
    CORE — API client, SSE, state management
    ═══════════════════════════════════════════════════════════════ */
-const BASE = '';
+const BASE = '/orchestrator';
 const DS = {
   all: null,         // /api/all snapshot
   agents: [],
@@ -2460,7 +2460,7 @@ function switchChatSession() {
 
 async function chatFetchHistory(sessionKey) {
   try {
-    const r = await fetch('/api/chat/history', {
+    const r = await fetch(BASE + '/api/chat/history', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({sessionKey})
@@ -2568,7 +2568,7 @@ async function chatSend() {
   if (btn) btn.disabled = true;
 
   try {
-    const r = await fetch('/api/chat/send', {
+    const r = await fetch(BASE + '/api/chat/send', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({sessionKey: CHAT_SELECTED_SESSION, message: msg})
@@ -2622,7 +2622,7 @@ function chatTabActivated() {
   refreshChatSessions();
   // Also start SSE for live session updates
   if (CHAT_SSE) { CHAT_SSE.close(); CHAT_SSE = null; }
-  CHAT_SSE = new EventSource('/api/sse/live-sessions');
+  CHAT_SSE = new EventSource(BASE + '/api/sse/live-sessions');
   CHAT_SSE.onmessage = (ev) => {
     try {
       const d = JSON.parse(ev.data);
