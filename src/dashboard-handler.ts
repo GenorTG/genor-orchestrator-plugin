@@ -272,6 +272,134 @@ async function handleAutoPopulate(_req: IncomingMessage, res: ServerResponse): P
   return true;
 }
 
+/** Project directory path */
+function projectDir(name: string): string {
+  const dir = path.join(DATA_DIR, "projects", name);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
+/** Safe filename guard (no path traversal) */
+function safeFile(fn: string): boolean {
+  return !fn.includes("..") && !fn.includes("/") && !fn.includes('\\');
+}
+
+async function handleProjectState(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const url = new URL(req.url || "/", "http://localhost");
+  const name = url.searchParams.get("name") || "";
+  if (!name) { sendError(res, 400, "Missing name"); return true; }
+
+  try {
+    const pd = projectDir(name);
+    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    const projCfg = cfg.projects?.[name] || {};
+    const sessions: any[] = [];
+
+    // Load logged sessions
+    const sf = path.join(pd, "sessions.json");
+    if (fs.existsSync(sf)) {
+      try {
+        const sdata = JSON.parse(fs.readFileSync(sf, "utf-8"));
+        sessions.push(...(sdata.sessions || []));
+      } catch {}
+    }
+
+    // List docs
+    const docs: any[] = [];
+    if (fs.existsSync(pd)) {
+      for (const f of fs.readdirSync(pd).sort()) {
+        const fp = path.join(pd, f);
+        try {
+          const st = fs.statSync(fp);
+          if (st.isFile()) {
+            docs.push({
+              name: f,
+              size: st.size,
+              modified: Math.floor(st.mtimeMs / 1000),
+              is_md: f.endsWith(".md"),
+              is_json: f.endsWith(".json"),
+            });
+          }
+        } catch {}
+      }
+    }
+
+    // Read known docs
+    const readProjectDoc = (fn: string): string => {
+      if (!safeFile(fn)) return "";
+      const fp = path.join(pd, fn);
+      if (!fs.existsSync(fp)) return "";
+      try { return fs.readFileSync(fp, "utf-8"); } catch { return ""; }
+    };
+
+    sendJSON(res, {
+      name,
+      config: projCfg,
+      sessions,
+      session_count: sessions.length,
+      docs,
+      state: readProjectDoc("STATE.md"),
+      roadmap: readProjectDoc("ROADMAP.md"),
+      context: readProjectDoc("CONTEXT.md"),
+      notes: readProjectDoc("NOTES.md"),
+      matched_live: [],
+      live_matched_count: 0,
+      agents_on_project: false,
+      total_live_gateway: 0,
+    });
+  } catch (err: any) {
+    sendError(res, 500, err.message);
+  }
+  return true;
+}
+
+async function handleProjectDoc(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const method = req.method || "GET";
+  const url = new URL(req.url || "/", "http://localhost");
+  const name = url.searchParams.get("name") || "";
+  const fn = url.searchParams.get("file") || "";
+
+  if (!name || !fn) { sendError(res, 400, "Missing name or file"); return true; }
+  if (!safeFile(fn)) { sendError(res, 400, "Invalid filename"); return true; }
+
+  const pd = projectDir(name);
+  const fp = path.join(pd, fn);
+
+  if (method === "GET") {
+    if (!fs.existsSync(fp)) { sendJSON(res, { content: null, error: "Not found" }); return true; }
+    const content = fs.readFileSync(fp, "utf-8");
+    sendJSON(res, { content, name, file: fn });
+  } else if (method === "DELETE") {
+    try {
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+      sendJSON(res, { ok: true });
+    } catch (err: any) {
+      sendJSON(res, { ok: false, error: err.message });
+    }
+  } else {
+    sendError(res, 405, "Method not allowed");
+  }
+  return true;
+}
+
+async function handleProjectDocSave(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  try {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const data = JSON.parse(body);
+    const { name, file, content } = data;
+    if (!name || !file) { sendJSON(res, { ok: false, error: "Missing name or file" }); return true; }
+    if (!safeFile(file)) { sendJSON(res, { ok: false, error: "Invalid filename" }); return true; }
+
+    const pd = projectDir(name);
+    fs.writeFileSync(path.join(pd, file), content || "", "utf-8");
+    sendJSON(res, { ok: true });
+  } catch (err: any) {
+    sendJSON(res, { ok: false, error: err.message });
+  }
+  return true;
+}
+
 function handleProjects(_req: IncomingMessage, res: ServerResponse): void {
   const projDir = path.join(DATA_DIR, "projects");
   if (!fs.existsSync(projDir)) return sendJSON(res, { projects: [], count: 0 });
@@ -400,6 +528,8 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/gateway": handleGateway(req, res); return true;
           case "/api/safeguard-log": handleSafeguardLog(req, res); return true;
           case "/api/sse/live-sessions": handleSSE(res); return true;
+          case "/api/project-state": return handleProjectState(req, res);
+          case "/api/project-doc": return handleProjectDoc(req, res);
         }
       }
 
@@ -408,6 +538,8 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
         switch (pathname) {
           case "/api/config": return handleConfigPOST(req, res).then(() => true);
           case "/api/auto-populate": return handleAutoPopulate(req, res);
+          case "/api/project-state": return handleProjectState(req, res);
+          case "/api/project-doc": return handleProjectDocSave(req, res);
         }
       }
 
