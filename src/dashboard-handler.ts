@@ -154,6 +154,25 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const modelList = models.models || [];
   const activeModelCount = modelList.filter((m: any) => m.agent_ready !== false && m.status !== "removed").length;
 
+  // Build projects list (same data as handleProjects)
+  const projDir = path.join(DATA_DIR, "projects");
+  const projectsList: any[] = [];
+  if (fs.existsSync(projDir)) {
+    for (const name of fs.readdirSync(projDir).sort()) {
+      const p = path.join(projDir, name);
+      if (!fs.statSync(p).isDirectory()) continue;
+      let sessions: any[] = [];
+      try { sessions = JSON.parse(fs.readFileSync(path.join(p, "sessions.json"), "utf-8")).sessions || []; } catch {}
+      const pc = cfg?.projects?.[name] || {};
+      projectsList.push({
+        name, session_count: sessions.length,
+        created: sessions[0]?.logged_at || "N/A",
+        model_allowlist: pc.model_allowlist || [],
+        free_only: pc.free_only || false,
+      });
+    }
+  }
+
   sendJSON(res, {
     sessions,
     live_session_count: meta.sessionCount || 0,
@@ -162,6 +181,7 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
     live_agents: liveAgents || { agents: [], agent_count: 0, active_count: 0 },
     state,
     models: { ...models, total: modelList.length, active: activeModelCount },
+    projects: { projects: projectsList, count: projectsList.length },
     config: cfg,
   });
 }
