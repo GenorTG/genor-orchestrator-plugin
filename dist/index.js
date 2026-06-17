@@ -1249,7 +1249,7 @@ function backlogList(project, dataDir, opts) {
     if (opts?.priority)
         tasks = tasks.filter(t => t.priority === opts.priority);
     if (opts?.label)
-        tasks = tasks.filter(t => t.labels.includes(opts.label));
+        tasks = tasks.filter(t => (t.labels || []).includes(opts.label));
     return { ok: true, tasks };
 }
 function backlogUpdate(project, dataDir, opts) {
