@@ -59,7 +59,8 @@
       "orchestrator_release_project",
       "orchestrator_list_active_projects",
       "orchestrator_join_project",
-      "orchestrator_spawn_subagent"
+      "orchestrator_spawn_subagent",
+      "orchestrator_create_project"
     ]
   }
 }

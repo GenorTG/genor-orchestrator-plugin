@@ -430,6 +430,84 @@ async function handleProjectDocSave(req, res) {
     }
     return true;
 }
+async function handleCreateProject(req, res) {
+    try {
+        const body = await readBody(req);
+        const params = JSON.parse(body);
+        const projectName = (params.name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+        if (!projectName || projectName.length < 2) {
+            return sendJSON(res, { ok: false, error: "Invalid project name." });
+        }
+        const projDir = path.join(DATA_DIR, "projects", projectName);
+        if (fs.existsSync(projDir)) {
+            return sendJSON(res, { ok: false, error: `Project "${projectName}" already exists.` });
+        }
+        fs.mkdirSync(projDir, { recursive: true });
+        // Create STATE.md
+        const loc = params.directory || null;
+        const stateContent = [
+            `# STATE: ${projectName} — v0.0.1`,
+            "",
+            "## Overview",
+            "",
+            params.description || "No description yet.",
+            "",
+            "## Status",
+            "",
+            "🟢 Active",
+            "",
+            loc ? `**Location:** \`${loc}\`` : "*Location not configured*",
+            "",
+            "## Sessions",
+            "",
+            "No sessions logged yet.",
+        ].join("\n");
+        fs.writeFileSync(path.join(projDir, "STATE.md"), stateContent, "utf-8");
+        // Update dashboard config
+        const configPath = path.join(DATA_DIR, "dashboard-config.json");
+        let cfg = {};
+        try {
+            if (fs.existsSync(configPath))
+                cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        }
+        catch { /* */ }
+        if (!cfg.projects)
+            cfg.projects = {};
+        cfg.projects[projectName] = {
+            location: loc,
+            workflow: { enabled: true },
+        };
+        fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+        // Create spawn marker if requested
+        let spawnInfo = null;
+        if (params.spawn) {
+            const spawnTask = params.spawn_task || `Start working on "${projectName}"`;
+            const spawnMarker = path.join(projDir, ".SPAWN_PENDING");
+            fs.writeFileSync(spawnMarker, JSON.stringify({
+                project: projectName,
+                task: spawnTask,
+                created_at: new Date().toISOString(),
+                spawned: false,
+            }), "utf-8");
+            spawnInfo = {
+                scheduled: true,
+                task: spawnTask,
+            };
+        }
+        sendJSON(res, {
+            ok: true,
+            project: projectName,
+            directory: loc,
+            description: params.description || null,
+            state_md: path.join(projDir, "STATE.md"),
+            spawn: spawnInfo,
+            message: `Project "${projectName}" created.`,
+        });
+    }
+    catch (err) {
+        sendJSON(res, { ok: false, error: err.message });
+    }
+}
 function handleProjects(_req, res) {
     const projDir = path.join(DATA_DIR, "projects");
     if (!fs.existsSync(projDir))
@@ -592,6 +670,9 @@ export function createDashboardHandler(_api) {
                     case "/api/auto-populate": return handleAutoPopulate(req, res);
                     case "/api/project-state": return handleProjectState(req, res);
                     case "/api/project-doc": return handleProjectDocSave(req, res);
+                    case "/api/create-project":
+                        handleCreateProject(req, res);
+                        return true;
                 }
             }
             // ── 404 ──

@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync, spawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import { createDashboardHandler } from "./dashboard-handler.js";
 // ── Tool result helper ─────────────────────────────────────────
 function txt(data) {
@@ -291,6 +292,7 @@ class SessionTracker {
     lastError = null;
     lastActivityTimestamp = Date.now();
     errorCount = 0;
+    loggedTaskCompletion = false;
     workflow = new WorkflowTracker();
     // Per-session project contexts — keyed by sessionKey.
     // A session only gets project context injected if it explicitly
@@ -354,6 +356,9 @@ class SessionTracker {
     }
     setStatus(status) {
         this.agentStatus = status;
+    }
+    markLoggedCompletion() {
+        this.loggedTaskCompletion = true;
     }
     start(key, reason) {
         this.sessionKey = key;
@@ -439,6 +444,8 @@ class SessionTracker {
                     `call orchestrator_release_project first to unbind this session.`);
             }
         }
+        // Reset completion log flag — new task starts fresh
+        this.loggedTaskCompletion = false;
         this.currentProject = project;
         this.currentTask = task;
         this.trackAction("Setting context");
@@ -1408,7 +1415,7 @@ function logSession(dataDir, opts, logger) {
         const safeProj = (opts.project || "unknown").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 30);
         const safeTask = (opts.task || "unknown").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
         const startTime = opts.start_time || new Date().toISOString();
-        const hash = require("crypto").createHash("sha256").update(`${opts.project}|${opts.task}|${startTime}`).digest("hex").slice(0, 12);
+        const hash = crypto.createHash("sha256").update(`${opts.project}|${opts.task}|${startTime}`).digest("hex").slice(0, 12);
         sessionKey = `agent:main:synthetic:${safeProj}:${safeTask}:${hash}`;
     }
     const parentSessionKey = opts.parent_session_key || (sessionKey.includes(":subagent:") ? sessionKey.split(":subagent:")[0] : null);
@@ -1538,6 +1545,17 @@ function setContext(dataDir, project, task, logger, originalPrompt) {
     };
 }
 function clearContextFn(dataDir, logger) {
+    // ═══ ENFORCE TASK COMPLETION LOGGING ═══
+    // Before clearing context, require the session to have logged
+    // its completion via orchestrator_log_session.
+    if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
+        return {
+            ok: false,
+            error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
+                `but hasn't logged completion. Call orchestrator_log_session with status="complete" (or "blocked"/"failed") ` +
+                `first to document what was done. This ensures no work falls through the cracks.`,
+        };
+    }
     const prev = sessionTracker.currentProject;
     sessionTracker.clearContext();
     if (prev) {
@@ -1584,6 +1602,7 @@ const TOOL_NAMES = [
     "orchestrator_list_active_projects",
     "orchestrator_join_project",
     "orchestrator_spawn_subagent",
+    "orchestrator_create_project",
 ];
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
 // Each entry matches an api.registerTool({...}) call in register() below.
@@ -1611,6 +1630,7 @@ const TOOL_METADATA = [
     { name: "orchestrator_list_active_projects", label: "List Active Projects", description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.", parameters: { type: "object", properties: {} } },
     { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
     { name: "orchestrator_spawn_subagent", label: "Spawn Subagent", description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.", parameters: { type: "object", properties: { task: { type: "string", description: "Task description for the subagent." }, model: { type: "string", description: "Optional model override. Omit to use project routing rules." }, taskName: { type: "string", description: "Optional stable name for subagent (lowercase_underscores)." }, timeoutSeconds: { type: "number", description: "Optional timeout in seconds (default: 300, max: 1800)." } }, required: ["task"] } },
+    { name: "orchestrator_create_project", label: "Create Project", description: "Create a new project in orchestrator-data. Sets up project directory, STATE.md, and dashboard-config.json entry. Optionally spawns a dedicated session.", parameters: { type: "object", properties: { name: { type: "string", description: "Project name." }, directory: { type: "string", description: "Absolute path to project directory." }, description: { type: "string", description: "Short project description." }, spawn: { type: "boolean", description: "Schedule an immediate session." }, spawn_task: { type: "string", description: "Initial task description." } }, required: ["name"] } },
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -1629,6 +1649,95 @@ const _plugin = definePluginEntry({
                 fs.mkdirSync(p, { recursive: true });
                 logger.info("boot", `Created dir: ${sub}`);
             }
+        }
+        // ═══════════════════════════════════════════════════════════
+        //  FIRST-RUN ONBOARDING
+        // ═══════════════════════════════════════════════════════════
+        // On first load, run all initialization tasks:
+        //   1. Ensure all data directories exist
+        //   2. Auto-populate model inventory from gateway config
+        //   3. Create default dashboard-config.json if missing
+        //   4. Create STATE.md for any existing project dirs that lack one
+        //   5. Run orchestrator_doctor checks to surface issues early
+        //   6. Write .FIRST_RUN marker so this only runs once
+        const firstRunMarker = path.join(dataDir, ".FIRST_RUN");
+        if (!fs.existsSync(firstRunMarker)) {
+            logger.info("boot", "═══════════ First run detected — running onboarding... ═══════════");
+            // Auto-populate model inventory
+            try {
+                const modelsPath = path.join(dataDir, "models.json");
+                if (!fs.existsSync(modelsPath)) {
+                    autoPopulate(dataDir, logger);
+                    logger.info("boot", "First-run: models auto-populated");
+                }
+            }
+            catch (e) {
+                logger.warn("boot", `First-run: model population skipped — ${e.message}`);
+            }
+            // Create default dashboard config if missing
+            try {
+                const configPath = path.join(dataDir, "dashboard-config.json");
+                if (!fs.existsSync(configPath)) {
+                    writeJSON(configPath, {
+                        dashboard: { title: "Orchestrator Dashboard", refreshInterval: 5000, theme: "dark" },
+                        projects: {},
+                    });
+                    logger.info("boot", "First-run: default dashboard config created");
+                }
+            }
+            catch (e) {
+                logger.warn("boot", `First-run: dashboard config creation skipped — ${e.message}`);
+            }
+            // Create STATE.md for any orphaned project dirs
+            try {
+                const projectsDir = path.join(dataDir, "projects");
+                if (fs.existsSync(projectsDir)) {
+                    for (const e of fs.readdirSync(projectsDir)) {
+                        const pp = path.join(projectsDir, e);
+                        if (!fs.statSync(pp).isDirectory() || e.startsWith("."))
+                            continue;
+                        const statePath = path.join(pp, "STATE.md");
+                        if (!fs.existsSync(statePath)) {
+                            const sf = path.join(pp, "sessions.json");
+                            let sessCount = 0;
+                            if (fs.existsSync(sf)) {
+                                try {
+                                    const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
+                                    sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
+                                }
+                                catch { /* */ }
+                            }
+                            const loc = getProjectLocation(e, dataDir);
+                            const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run orchestrator_sync_project)";
+                            const stateContent = [
+                                `# STATE: ${e} — v0.0.0`,
+                                "",
+                                "## Auto-Initialized",
+                                "",
+                                `Created automatically during first-run onboarding. Update this file as the project evolves.`,
+                                "",
+                                `**Sessions logged:** ${sessCount}`,
+                                repoNote,
+                                "",
+                                "## Quick Start",
+                                "",
+                                "1. Install the plugin in OpenClaw plugins config",
+                                "2. Ensure 'orchestratorDataDir' points here",
+                                "3. Call `orchestrator_register` to opt in",
+                                "4. Call `orchestrator_set_context` to start work",
+                                "5. Log sessions via `orchestrator_log_session`",
+                            ].join("\n");
+                            fs.writeFileSync(statePath, stateContent, "utf-8");
+                            logger.info("boot", `First-run: created STATE.md for project "${e}"`);
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                logger.warn("boot", `First-run: STATE.md creation skipped — ${e.message}`);
+            }
+            fs.writeFileSync(firstRunMarker, new Date().toISOString(), "utf-8");
+            logger.info("boot", `═══════════ First-run onboarding complete ═══════════`);
         }
         // Schedule nightly model population
         try {
@@ -1947,6 +2056,28 @@ const _plugin = definePluginEntry({
         api.on("agent_end", async () => {
             sessionTracker.trackAction("agent_stopped");
             writeLiveAgents("agent_end", sessionTracker, logger);
+            // ═══ AUTO-LOG UNREPORTED TASKS ═══
+            // If the session has active project context but never logged completion,
+            // auto-generate a log entry so the work isn't lost entirely.
+            if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
+                try {
+                    logSession(dataDir, {
+                        project: sessionTracker.currentProject,
+                        task: sessionTracker.currentTask || "auto-task",
+                        model: sessionTracker.currentModel || "unknown",
+                        agent: sessionTracker.currentAgent || "system",
+                        status: "interrupted",
+                        duration: "",
+                        session_key: sessionTracker.sessionKey || "",
+                        notes: `⚠️ Auto-logged at agent_end — session ended without explicit completion log.\nTask: ${sessionTracker.currentTask || "N/A"}`,
+                    }, logger);
+                    sessionTracker.markLoggedCompletion();
+                    logger.info("hooks", `Auto-logged uncompleted task for ${sessionTracker.currentProject}`);
+                }
+                catch (e) {
+                    logger.warn("hooks", `Auto-log failed: ${e.message}`);
+                }
+            }
             logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
         });
         api.on("gateway_stop", async () => {
@@ -2026,6 +2157,15 @@ const _plugin = definePluginEntry({
                 const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
                 if (!sk)
                     return txt("error: no session key available");
+                // ═══ ENFORCE TASK COMPLETION LOGGING ═══
+                if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
+                    return txt({
+                        ok: false,
+                        error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
+                            `but hasn't logged completion. Call orchestrator_log_session with status="complete" first ` +
+                            `to document what was done before unregistering.`,
+                    });
+                }
                 sessionTracker.unregisterSession(sk);
                 sessionTracker.clearContext();
                 sessionTracker.trackAction("session_unregistered");
@@ -2111,6 +2251,10 @@ const _plugin = definePluginEntry({
                     return txt({ ok: false, error: reg });
                 sessionTracker.trackAction(`log: ${params.task}`);
                 writeLiveAgents("tool_log_session", sessionTracker, logger);
+                // Mark completion logged so clearContext/unregister know work is documented
+                const terminal = ["complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
+                if (terminal)
+                    sessionTracker.markLoggedCompletion();
                 return txt(logSession(dataDir, params, logger));
             },
         });
@@ -2543,6 +2687,15 @@ const _plugin = definePluginEntry({
                 const bound = sessionTracker.getBoundProject(sk);
                 if (!bound)
                     return txt({ ok: false, error: "No project binding to release." });
+                // ═══ ENFORCE TASK COMPLETION LOGGING ═══
+                if (!sessionTracker.loggedTaskCompletion) {
+                    return txt({
+                        ok: false,
+                        error: `❌ Task not logged. Session is bound to project "${bound}" but hasn't logged completion. ` +
+                            `Call orchestrator_log_session with status="complete" first to document what was done ` +
+                            `before releasing the binding. Use force=true to override this check.`,
+                    });
+                }
                 const released = sessionTracker.releaseProjectBinding(sk);
                 sessionTracker.trackAction(`released_project: ${released}`);
                 writeLiveAgents("release_project", sessionTracker, logger);
@@ -2706,6 +2859,103 @@ const _plugin = definePluginEntry({
                     logger.error("subagent", `Spawn failed for ${taskName}: ${err.message}`);
                     return txt({ ok: false, error: `Failed to spawn subagent: ${err.message}` });
                 }
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  NEW TOOL — Create Project
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_create_project",
+            label: "Orchestrator Create Project",
+            description: "Create a new project in orchestrator-data. Sets up the project directory, STATE.md, and dashboard-config.json entry. Returns the project info and a session spawn link.",
+            parameters: Type.Object({
+                name: Type.String({ description: "Project name (lowercase, hyphens/underscores only)." }),
+                directory: Type.Optional(Type.String({ description: "Absolute path to the project directory on disk." })),
+                description: Type.Optional(Type.String({ description: "Short description of what the project is for." })),
+                spawn: Type.Optional(Type.Boolean({ description: "If true, also schedule an immediate isolated session for this project." })),
+                spawn_task: Type.Optional(Type.String({ description: "Initial task description for the spawned session." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                const projectName = (params.name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+                if (!projectName || projectName.length < 2) {
+                    return txt({ ok: false, error: "Invalid project name. Use lowercase letters, numbers, hyphens, or underscores." });
+                }
+                const projDir2 = path.join(dataDir, "projects", projectName);
+                if (fs.existsSync(projDir2)) {
+                    return txt({ ok: false, error: `Project "${projectName}" already exists in orchestrator-data.` });
+                }
+                fs.mkdirSync(projDir2, { recursive: true });
+                // Create STATE.md
+                const stateContent = [
+                    `# STATE: ${projectName} — v0.0.1`,
+                    "",
+                    "## Overview",
+                    "",
+                    params.description || "No description yet.",
+                    "",
+                    "## Status",
+                    "",
+                    "🟢 Active",
+                    "",
+                    params.directory ? `**Location:** \`${params.directory}\`` : "*Location not configured*",
+                    "",
+                    "## Sessions",
+                    "",
+                    "No sessions logged yet.",
+                ].join("\n");
+                fs.writeFileSync(path.join(projDir2, "STATE.md"), stateContent, "utf-8");
+                // Create dashboard-config.json entry
+                const configPath = path.join(dataDir, "dashboard-config.json");
+                let cfg = {};
+                try {
+                    if (fs.existsSync(configPath)) {
+                        cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+                    }
+                }
+                catch { /* */ }
+                if (!cfg.projects)
+                    cfg.projects = {};
+                cfg.projects[projectName] = {
+                    location: params.directory || null,
+                    workflow: { enabled: true },
+                };
+                writeJSON(configPath, cfg);
+                logger.info("project", `Created project: ${projectName}${params.directory ? " @ " + params.directory : ""}`);
+                // If spawn requested, schedule an immediate isolated session
+                let spawnInfo = null;
+                if (params.spawn) {
+                    const spawnTask = params.spawn_task || `Start working on project "${projectName}" — set up the environment, understand the codebase, and begin development.`;
+                    try {
+                        // Create an immediate cron job that spawns an isolated session
+                        const spawnMarker = path.join(projDir2, ".SPAWN_PENDING");
+                        fs.writeFileSync(spawnMarker, JSON.stringify({
+                            project: projectName,
+                            task: spawnTask,
+                            created_at: new Date().toISOString(),
+                            spawned: false,
+                        }), "utf-8");
+                        spawnInfo = {
+                            scheduled: true,
+                            task: spawnTask,
+                            note: "Session spawn marker created. A dedicated session will be available shortly. Use orchestrator_join_project to start working.",
+                        };
+                    }
+                    catch (e) {
+                        logger.warn("project", `Spawn scheduling failed: ${e.message}`);
+                    }
+                }
+                return txt({
+                    ok: true,
+                    project: projectName,
+                    directory: params.directory || null,
+                    description: params.description || null,
+                    state_md: path.join(projDir2, "STATE.md"),
+                    spawn: spawnInfo,
+                    message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call orchestrator_set_context to start working, or orchestrator_join_project if you're in a different session.`,
+                });
             },
         });
         // ═══════════════════════════════════════════════════════════
