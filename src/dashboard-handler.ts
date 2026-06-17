@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
@@ -140,12 +141,18 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
   const liveSessions = readJSON(path.join(DATA_DIR, "live-sessions.json"));
   const liveAgents = readJSON(path.join(DATA_DIR, "live-agents.json"));
-  const models = readJSON(path.join(DATA_DIR, "models.json"));
+  const modelsData = readJSON(path.join(DATA_DIR, "models.json"));
 
   const sessions = liveSessions?.sessions || [];
   const meta = liveSessions?._meta || {};
   const agents = liveAgents?.agents || [];
   const state = agents[0] || {};
+
+  // Normalize models: models.json has nested { version, schema, models: [...] }
+  // Frontend expects { total, active } at the top level
+  const models = modelsData || { models: [] };
+  const modelList = models.models || [];
+  const activeModelCount = modelList.filter((m: any) => m.agent_ready !== false && m.status !== "removed").length;
 
   sendJSON(res, {
     sessions,
@@ -154,7 +161,7 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
     live_updated: meta.updatedAt || null,
     live_agents: liveAgents || { agents: [], agent_count: 0, active_count: 0 },
     state,
-    models: models || { models: [], total: 0, active: 0 },
+    models: { ...models, total: modelList.length, active: activeModelCount },
     config: cfg,
   });
 }
@@ -248,6 +255,21 @@ function handleConfigPOST(req: IncomingMessage, res: ServerResponse): Promise<vo
     fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
     sendJSON(res, { ok: true });
   });
+}
+
+async function handleAutoPopulate(_req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  try {
+    const dataDir = DATA_DIR;
+    const scriptPath = path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "scripts", "auto-populate-models.py");
+    const out = execSync(
+      `ORCHESTRATOR_DATA_DIR="${dataDir}" python3 "${scriptPath}" 2>&1`,
+      { encoding: "utf-8", timeout: 30000 }
+    ).trim();
+    sendJSON(res, { ok: true, output: out });
+  } catch (err: any) {
+    sendJSON(res, { ok: false, error: err.message || "Auto-populate failed" });
+  }
+  return true;
 }
 
 function handleProjects(_req: IncomingMessage, res: ServerResponse): void {
@@ -385,6 +407,7 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
       if (method === "POST") {
         switch (pathname) {
           case "/api/config": return handleConfigPOST(req, res).then(() => true);
+          case "/api/auto-populate": return handleAutoPopulate(req, res);
         }
       }
 
