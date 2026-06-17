@@ -960,7 +960,9 @@ function syncProjectToOrchestrator(project: string, dataDir: string, logger: Orc
 }
 
 function normalizeSessionsJson(project: string, dataDir: string): void {
-  const sf = path.join(projDir(project, dataDir), "sessions.json");
+  const p = getProjDir(project, dataDir);
+  if (!p) return;
+  const sf = path.join(p, "sessions.json");
   if (!fs.existsSync(sf)) return;
   try {
     const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
@@ -977,7 +979,8 @@ function normalizeSessionsJson(project: string, dataDir: string): void {
 }
 
 function generateRecoveryDoc(project: string, dataDir: string, logger: OrchestratorLogger): void {
-  const pd = projDir(project, dataDir);
+  const pd = getProjDir(project, dataDir);
+  if (!pd) return; // Skip if project dir doesn't exist (archived/cleaned up)
   const loc = getProjectLocation(project, dataDir);
   const context = readFileContent(path.join(pd, "CONTEXT.md")) || "";
   const blPath = path.join(pd, "BACKLOG.json");
@@ -1003,7 +1006,9 @@ function generateRecoveryDoc(project: string, dataDir: string, logger: Orchestra
 }
 
 function readRecentSessions(project: string, dataDir: string, n: number): any[] {
-  const sf = path.join(projDir(project, dataDir), "sessions.json");
+  const p = getProjDir(project, dataDir);
+  if (!p) return [];
+  const sf = path.join(p, "sessions.json");
   if (!fs.existsSync(sf)) return [];
   try {
     const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
@@ -1152,7 +1157,7 @@ class MaintenanceService {
       const projDirPath = path.join(this.dataDir, "projects");
       if (!fs.existsSync(projDirPath)) return;
       const projects = fs.readdirSync(projDirPath).filter(f =>
-        fs.statSync(path.join(projDirPath, f)).isDirectory()
+        !f.startsWith(".") && fs.statSync(path.join(projDirPath, f)).isDirectory()
       );
       for (const p of projects) {
         try {
@@ -1343,6 +1348,13 @@ function projDir(name: string, dd: string): string {
   const p = path.join(dd, "projects", name);
   fs.mkdirSync(p, { recursive: true });
   return p;
+}
+
+/** Get the project data dir WITHOUT creating it. Returns null if it doesn't exist. */
+function getProjDir(name: string, dd: string): string | null {
+  const p = path.join(dd, "projects", name);
+  if (fs.existsSync(p)) return p;
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1703,9 +1715,10 @@ function syncProject(dataDir: string, project: string, logger: OrchestratorLogge
 }
 
 function getProjectDocsFn(dataDir: string, project: string, logger: OrchestratorLogger) {
-  const pd = projDir(project, dataDir);
+  const pd = getProjDir(project, dataDir) || projDir(project, dataDir);
+  // GetProjDir first (no create), fall back to projDir if we need to create for new projects
   const docs: string[] = [];
-  if (fs.existsSync(pd)) {
+  if (pd && fs.existsSync(pd)) {
     for (const f of fs.readdirSync(pd)) {
       if (f.endsWith(".md") || f.endsWith(".json")) docs.push(f);
     }
