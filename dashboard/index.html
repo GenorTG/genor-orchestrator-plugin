@@ -299,6 +299,8 @@ body{
 .proj-detail .agent-tree .node .icon.r{color:var(--red)}
 .proj-detail .agent-tree .node .icon.y{color:var(--yellow)}
 .proj-detail .agent-tree .node .icon.dim{color:var(--text-dim)}
+.proj-detail .backlog-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;transition:background .15s}
+.proj-detail .backlog-item:hover{background:rgba(255,255,255,.03)}
 
 /* ═══════════════════════════════════════════════════════════════
    MODELS TAB (preserved from v3, tightened)
@@ -614,6 +616,12 @@ input.search:focus{border-color:var(--blue);outline:none}
       <div class="proj-actions">
         <button class="btn btn-sm btn-warning" data-tip="Toggle free-only mode for this project" onclick="projToggleFree()">Toggle Free-Only</button>
         <button class="btn btn-sm" data-tip="Configure model allowlist and routing rules for this project" onclick="projOpenConfig()">Model Config</button>
+        <span style="display:inline-flex;align-items:center;gap:4px;border-left:1px solid var(--border);padding-left:8px;margin-left:4px">
+          <span style="font-size:10px;color:var(--text-dim)">Model:</span>
+          <select class="model-select inp" style="font-size:11px;max-width:180px" onchange="projSetModel(this.value)">
+            <option value="">auto</option>
+          </select>
+        </span>
       </div>
     </div>
     <div class="tabs-secondary">
@@ -624,6 +632,7 @@ input.search:focus{border-color:var(--blue);outline:none}
       <span class="stab" data-stab="sessions" data-tip="Session history — all logged agent sessions for this project" onclick="switchProjTab('sessions')">📝 Session Log</span>
       <span class="stab" data-stab="files" data-tip="Project file management — create and edit documentation files" onclick="switchProjTab('files')">📁 FILES</span>
       <span class="stab" data-stab="manager" data-tip="Agent tree — sub-agent hierarchy, tasks, and distribution" onclick="switchProjTab('manager')">🤖 MANAGER</span>
+      <span class="stab" data-stab="backlog" data-tip="Backlog — task tracking, priorities, and status for this project" onclick="switchProjTab('backlog')">🎯 BACKLOG</span>
     </div>
     <div class="doc-area show" id="projDocArea">
       <div class="doc-toolbar">
@@ -649,6 +658,9 @@ input.search:focus{border-color:var(--blue);outline:none}
     </div>
     <div class="doc-area" id="projManagerArea">
       <div class="agent-tree" id="projAgentTree"></div>
+    </div>
+    <div class="doc-area" id="projBacklogArea">
+      <div class="backlog-widget" id="projBacklog"></div>
     </div>
   </div>
 </div>
@@ -1438,15 +1450,19 @@ function renderProjects() {
     const allowlist = p.allowlist_count||0;
     const freeOnly = p.free_only||false;
     const liveCt = p.live_count||0;
+    // Active model display (Phase 3a)
+    const activeModelHtml = p.active_model
+      ? '<span style="font-size:9px;color:var(--yellow);display:block;margin-top:2px">⚡ ' + esc(p.active_model) + '</span>'
+      : '';
     html += '<div class="proj-card" onclick="openProjDetail(\'' + esc(p.name) + '\')">' +
       '<div class="top"><span class="proj-name">📁 ' + esc(p.name) + '</span>' +
       (liveCt ? '<span style="font-size:9px;color:var(--green)">● ' + liveCt + ' active</span>' : '') +
       '</div>' +
       '<div class="proj-meta">' +
-      '<span>' + (p.session_count||0) + ' sessions logged</span>' +
-      '<span>' + (p.task_count||0) + ' tasks</span>' +
+      '<span>' + (p.session_count||0) + ' sessions</span>' +
       (lastDate ? '<span>Last: ' + esc(lastDate) + '</span>' : '') +
       '</div>' +
+      activeModelHtml +
       '<div class="proj-badges">' +
       (freeOnly ? '<span class="badge" style="background:rgba(88,166,255,.15);color:var(--blue)">FREE ONLY</span>' : '') +
       (allowlist ? '<span class="badge" style="background:rgba(63,185,80,.15);color:var(--green)">' + allowlist + ' whitelisted</span>' : '') +
@@ -1474,10 +1490,13 @@ async function openProjDetail(name) {
   const r = await api('/api/project-state?name=' + encodeURIComponent(name));
   if (r.error) { toast('Error: ' + r.error, 'error'); return; }
   DS.projectState = r;
+  // Populate model dropdown (Phase 3b)
+  await populateModelSelect(name);
   renderProjDocTab();
   renderProjSessions();
   renderProjFiles();
   renderProjManager();
+  renderProjBacklog();
 }
 
 function closeProjDetail() {
@@ -1759,6 +1778,77 @@ async function projCreateFile() {
   else toast('Failed', 'error');
 }
 
+// ═══ Backlog Widget (Phase 3c) ═══
+async function renderProjBacklog() {
+  if (!CUR_PROJ) return;
+  const el = $('projBacklog');
+  if (!el) return;
+  const r = await api('/api/project-backlog?project=' + encodeURIComponent(CUR_PROJ));
+  const tasks = r.tasks || [];
+  window._cachedBacklogTasks = tasks;
+  
+  const done = tasks.filter(t => t.status === 'done').length;
+  const inProg = tasks.filter(t => t.status === 'in_progress').length;
+  const todo = tasks.filter(t => t.status === 'todo' || t.status === 'backlog').length;
+  const blocked = tasks.filter(t => t.status === 'blocked').length;
+  
+  let html = '<div style="display:flex;gap:12px;margin-bottom:12px;font-size:11px">' +
+    '<span style="color:var(--green)">✅ ' + done + ' done</span>' +
+    '<span style="color:var(--yellow)">🔄 ' + inProg + ' in progress</span>' +
+    '<span style="color:var(--text-dim)">📋 ' + todo + ' todo</span>' +
+    (blocked ? '<span style="color:var(--red)">🚫 ' + blocked + ' blocked</span>' : '') +
+    '<span style="flex:1;text-align:right;color:var(--text-dim)">' + tasks.length + ' total</span></div>';
+  
+  // Filters
+  html += '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+    '<input class="search" id="blSearch" placeholder="Filter tasks..." style="flex:1" oninput="filterBacklog()">' +
+    '<select id="blStatusFilter" class="btn btn-sm" onchange="filterBacklog()">' +
+    '<option value="">All</option><option value="todo">Todo</option><option value="in_progress">Active</option><option value="done">Done</option><option value="blocked">Blocked</option>' +
+    '</select>' +
+    '<select id="blPriFilter" class="btn btn-sm" onchange="filterBacklog()">' +
+    '<option value="">All Pri</option><option value="p0">P0</option><option value="p1">P1</option><option value="p2">P2</option><option value="p3">P3</option>' +
+    '</select></div>';
+  
+  html += '<div class="backlog-list" id="blList">' + renderBacklogTasks(tasks) + '</div>';
+  el.innerHTML = html;
+}
+
+function renderBacklogTasks(tasks) {
+  const sf = ($('blStatusFilter')?.value) || '';
+  const pf = ($('blPriFilter')?.value) || '';
+  const sq = ($('blSearch')?.value || '').toLowerCase();
+  const priO = { p0:0, p1:1, p2:2, p3:3, high:0.5, medium:1.5, low:3.5 };
+  const statO = { in_progress:0, todo:1, backlog:2, blocked:3, done:4 };
+  const sorted = [...tasks].sort((a,b) => {
+    const pa = priO[a.priority]??2, pb = priO[b.priority]??2;
+    if (pa !== pb) return pa - pb;
+    return (statO[a.status]??9) - (statO[b.status]??9);
+  });
+  let html = '';
+  for (const t of sorted) {
+    if (sf && t.status !== sf) continue;
+    if (pf && t.priority !== pf) continue;
+    if (sq && !(t.title||t.id||'').toLowerCase().includes(sq)) continue;
+    const icons = t.status==='done'?'✅':t.status==='in_progress'?'🔄':t.status==='blocked'?'🚫':'📋';
+    const priI = t.priority==='p0'?'🔴':t.priority==='p1'?'🟡':t.priority==='p2'?'🟢':t.priority==='p3'?'⚪':'';
+    const lbs = (t.labels||[]).map(l => '<span class="badge" style="background:rgba(88,166,255,.12);color:var(--blue);font-size:9px">' + esc(l) + '</span>').join('');
+    html += '<div class="backlog-item">' +
+      '<span style="font-size:14px;width:20px">' + icons + '</span>' +
+      '<span style="font-size:11px;width:24px;text-align:center">' + priI + '</span>' +
+      '<span style="flex:1;font-size:12px">' + esc(t.title||t.id||'') + '</span>' +
+      (lbs ? '<span style="display:flex;gap:3px;flex-wrap:wrap">' + lbs + '</span>' : '') +
+      '<span style="font-size:10px;color:var(--text-dim);font-family:monospace">#' + (t.id||'').slice(-6) + '</span></div>';
+  }
+  return html || '<div style="padding:20px;text-align:center;color:var(--text-dim);font-size:12px">No matching tasks.</div>';
+}
+
+function filterBacklog() {
+  const t = window._cachedBacklogTasks;
+  if (!t) return;
+  const list = $('blList');
+  if (list) list.innerHTML = renderBacklogTasks(t);
+}
+
 function renderProjManager() {
   const s = DS.projectState;
   const tree = $('projAgentTree');
@@ -1830,6 +1920,55 @@ function renderProjManager() {
   }
   
   tree.innerHTML = h;
+}
+
+// ═══ Model Selection (Phase 3a/3b) ═══
+async function populateModelSelect(projName) {
+  const sel = document.querySelector('.model-select');
+  if (!sel) return;
+  // Fetch models and all data
+  const allData = await api('/api/all');
+  const models = (allData?.models?.models) || [];
+  const project = (allData?.projects?.projects || []).find(p => p.name === projName);
+  const currentModel = project?.active_model || '';
+  
+  // Preserve current selection
+  sel.innerHTML = '<option value="">— auto —</option>';
+  for (const m of models) {
+    if (m.status === 'removed') continue;
+    const label = (m.name || m.id) + ' [' + (m.provider || '?') + ']' + (m.tier !== undefined ? ' (T' + m.tier + ')' : '');
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = label;
+    if (m.id === currentModel) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+async function projSetModel(modelId) {
+  if (!CUR_PROJ) return;
+  if (!modelId) {
+    // Clear assignment: set empty allowlist
+    const pc = DS.config?.projects?.[CUR_PROJ] || {};
+    const r = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ projects: { [CUR_PROJ]: { model_allowlist: [], free_only: pc.free_only || false } } })
+    });
+    if (r.ok) { toast('Model cleared for ' + CUR_PROJ); } else { toast('Error: ' + r.error, 'error'); }
+    return;
+  }
+  const r = await api('/api/set-project-model', {
+    method: 'POST',
+    body: JSON.stringify({ project: CUR_PROJ, model_id: modelId })
+  });
+  if (r.ok) {
+    toast('✅ Model set: ' + r.model);
+    // Refresh
+    await populateModelSelect(CUR_PROJ);
+    renderProjects();
+  } else {
+    toast('Error: ' + r.error, 'error');
+  }
 }
 
 async function projToggleFree() {
