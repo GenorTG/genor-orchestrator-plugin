@@ -39,7 +39,7 @@ openclaw plugins enable genor-orchestrator
 
 | Metric | Value |
 |--------|-------|
-| **Version** | 0.5.29 (package.json) / v0.6.0-dev (features) |
+| **Version** | 0.6.0 |
 | **Tools** | 22 tools + 5 slash commands |
 | **Hooks** | 8 lifecycle hooks |
 | **Models tracked** | 24 total, 11 agent-ready |
