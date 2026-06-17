@@ -983,6 +983,8 @@ function normalizeSessionsJson(project: string, dataDir: string): void {
     sessions = sessions.map(s => {
       const ns = { ...s };
       const now = new Date().toISOString();
+      // Phase 4b: Per-entry schema version tracking
+      if (!ns.schema_version) { ns.schema_version = 2; changed = true; }
       // Legacy: timestamp → date
       if (ns.timestamp && !ns.date) { ns.date = ns.timestamp.split("T")[0]; changed = true; }
       // Phase 3d: Ensure all timestamp fields
@@ -2013,6 +2015,7 @@ const TOOL_NAMES = [
   "orchestrator_backlog_add",
   "orchestrator_backlog_list",
   "orchestrator_backlog_update",
+  "orchestrator_backlog_dispatch",
 ] as const;
 
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
@@ -2045,6 +2048,7 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
   { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
   { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
+  { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Respects dependencies, labels, priority ordering, and auto-claim support.", parameters: { type: "object", properties: { project: { type: "string", description: "Override project." }, task_id: { type: "string", description: "Specific task ID. Omit for auto-pick." }, auto_claim: { type: "boolean", description: "Auto-mark task in_progress." }, filter_labels: { type: "string", description: "Comma-separated label filter." } } } },
 ];
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -3584,7 +3588,93 @@ const _plugin: Record<string, any> = definePluginEntry({
     });
 
     // ═══════════════════════════════════════════════════════════
-    //  NEW TOOL — Create Project
+    //  NEW TOOL — Backlog Dispatch (Phase 2b)
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_backlog_dispatch",
+      label: "Backlog Dispatch",
+      description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Use this to automate task assignment. Respects dependencies, labels, and priority ordering.",
+      parameters: Type.Object({
+        project: Type.Optional(Type.String({ description: "Override project. Default: current project from orchestrator context." })),
+        task_id: Type.Optional(Type.String({ description: "Specific task ID to dispatch. If omitted, picks the highest-priority todo task with all dependencies resolved." })),
+        auto_claim: Type.Optional(Type.Boolean({ description: "Auto-mark the task as in_progress (default: false)." })),
+        filter_labels: Type.Optional(Type.String({ description: "Comma-separated label filter. Only dispatch tasks matching ANY of these labels." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        const project = params.project || sessionTracker.currentProject;
+        if (!project) return txt({ ok: false, error: "No project selected. Set context via orchestrator_set_context or pass project param." });
+        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
+        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json found for project "${project}".` });
+        let backlog: any;
+        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
+        const tasks = backlog.tasks || [];
+        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
+        if (params.filter_labels) {
+          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
+          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
+        }
+        if (params.task_id) {
+          candidates = candidates.filter((t: any) => t.id === params.task_id);
+          if (!candidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
+        }
+        // Resolve dependencies
+        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
+        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
+        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
+        // Sort: priority then creation time
+        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+        candidates.sort((a: any, b: any) => {
+          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+          if (pa !== pb) return pa - pb;
+          return (a.created || "").localeCompare(b.created || "");
+        });
+        const task = candidates[0];
+        // Auto-claim
+        if (params.auto_claim) {
+          for (const t of tasks) { if (t.id === task.id) t.status = "in_progress"; }
+          backlog.tasks = tasks;
+          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+          logger.info("dispatch", `Backlog task claimed: ${task.id} — ${task.title}`);
+        }
+        const loc = getProjectLocation(project, dataDir);
+        const labels = (task.labels || []).join(", ");
+        const deps = (task.depends_on || []).map((d: string) => {
+          const dt = tasks.find((t2: any) => t2.id === d);
+          return dt ? `${d} — ${dt.title}` : d;
+        });
+        return txt({
+          ok: true,
+          task_id: task.id,
+          title: task.title,
+          description: task.description || "",
+          priority: task.priority || "p2",
+          labels,
+          status: task.status,
+          project,
+          location: loc || "not configured",
+          depends_on: deps,
+          available_tasks: candidates.length,
+          total_backlog: tasks.length,
+          spawn_instructions: [
+            `🎯 Dispatch: ${task.title}`,
+            `Project: ${project}`,
+            `Task ID: ${task.id}`,
+            task.description ? `Description: ${task.description}` : "",
+            `Priority: ${task.priority || "p2"}`,
+            labels ? `Labels: ${labels}` : "",
+            loc ? `Location: ${loc}` : "",
+            deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+            `📋 Use orchestrator_spawn_subagent(task="${task.title}") or sessions_spawn to dispatch to a sub-agent.`,
+          ].filter(Boolean).join("\n"),
+        });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  NEXT TOOL — Create Project
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
