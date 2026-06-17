@@ -423,8 +423,7 @@ async function handleProjectDocSave(req: IncomingMessage, res: ServerResponse): 
 
 async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const body = await readBody(req);
-    const params = JSON.parse(body);
+    const params = await readBody(req);
     const projectName = (params.name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
     if (!projectName || projectName.length < 2) {
       return sendJSON(res, { ok: false, error: "Invalid project name." });
