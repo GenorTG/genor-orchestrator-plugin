@@ -2617,8 +2617,9 @@ const _plugin: Record<string, any> = definePluginEntry({
     });
 
     // ── Dashboard HTTP handler — serve dashboard through gateway ──
+    // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
+    const dashHandler = createDashboardHandler(api);
     try {
-      const dashHandler = createDashboardHandler(api);
       api.registerHttpRoute({
         path: "/orchestrator",
         auth: "plugin",
@@ -2627,7 +2628,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       });
       logger.info("plugin", "Dashboard handler registered at /orchestrator");
     } catch (dhErr: any) {
-      logger.warn("plugin", "Dashboard handler not loaded: " + dhErr.message);
+      logger.warn("plugin", "Dashboard route registration failed: " + (dhErr?.message || String(dhErr)));
     }
 
     logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
