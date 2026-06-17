@@ -479,21 +479,21 @@ function handleGateway(req, res) {
     sendJSON(res, { live: false, sessions: [], session_count: 0 });
 }
 function handleSessions(req, res) {
-    const sf = path.join(DATA_DIR, "session_log.md");
-    if (!fs.existsSync(sf))
-        return sendJSON(res, { sessions: [], count: 0 });
-    const content = fs.readFileSync(sf, "utf-8");
-    const sessions = [];
-    for (const line of content.split("\n")) {
-        const tr = line.trim();
-        if (tr.startsWith("|") && !tr.startsWith("|---") && !tr.startsWith("| Date")) {
-            const parts = tr.split("|").slice(1, -1).map((p) => p.trim());
-            if (parts.length >= 5) {
-                sessions.push({ date: parts[0], project: parts[1], task: parts[2], model: parts[3], agent: parts[4] });
-            }
+    // Return live gateway sessions (used by Gateway tab)
+    const lf = path.join(DATA_DIR, "live-sessions.json");
+    if (fs.existsSync(lf)) {
+        try {
+            const live = JSON.parse(fs.readFileSync(lf, "utf-8"));
+            return sendJSON(res, {
+                sessions: live.sessions || [],
+                count: live.sessions?.length || 0,
+                session_count: live._meta?.sessionCount || 0,
+                updated: live._meta?.updatedAt || null,
+            });
         }
+        catch { /* fall through */ }
     }
-    sendJSON(res, { sessions, count: sessions.length });
+    sendJSON(res, { sessions: [], count: 0 });
 }
 function handleSafeguardLog(_req, res) {
     const sl = path.join(DATA_DIR, "safeguard-log.md");

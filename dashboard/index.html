@@ -995,7 +995,7 @@ const GATEWAY = { sessions: [], filtered: [] };
 async function loadGateway() {
   const el = $('gatewayList');
   try {
-    const r = await fetch('/api/sessions');
+    const r = await fetch(BASE + '/api/sessions');
     const data = await r.json();
     const sessions = data.sessions || [];
     
