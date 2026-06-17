@@ -1,58 +1,107 @@
-# Setup Instructions for AI Agents
+# 🚀 Setup Guide — Genor's Orchestrator Plugin
 
-> **Tell your agent:** *"Install Genor's Orchestrator from [this repo](https://github.com/GenorTG/genor-orchestrator-plugin.git)."*
+> **Tell your agent:** *"Install Genor's Orchestrator from https://github.com/GenorTG/genor-orchestrator-plugin.git"*
 
-## Agent: execute these steps
+---
 
-### 1. Clone
+## 📦 Quick Install
+
+### Step 1 — Clone & Build
+
 ```bash
 git clone --recurse-submodules https://github.com/GenorTG/genor-orchestrator-plugin.git
 cd genor-orchestrator-plugin
-```
-
-### 2. Build and install the plugin
-```bash
 npm install
 npm run build
+```
+
+### Step 2 — Install Plugin
+
+```bash
 openclaw plugins install --force .
 openclaw plugins enable genor-orchestrator
 ```
 
-### 3. Install the companion skill
+### Step 3 — Populate Models
+
 ```bash
-clawhub install ./skill/
+npx tsx scripts/auto-populate-models.ts
 ```
 
-### 4. Populate models
-```bash
-npx tsx skill/scripts/auto-populate-models.ts
-```
+### Step 4 — Restart Gateway
 
-### 5. Restart gateway
 ```bash
 openclaw gateway restart
 ```
 
-### 6. Verify
+### Step 5 — Verify
+
 ```bash
 openclaw plugins list | grep orchestrator
 openclaw plugins inspect genor-orchestrator
 ```
 
-The dashboard is available at the `/orchestrator` route after gateway restart (e.g. `http://localhost:18789/orchestrator`). No separate server process needed — the dashboard handler is bundled into the plugin via `src/dashboard-handler.ts`.
+### Step 6 — Open Dashboard
+
+The dashboard lives at your gateway's `/orchestrator` route — no separate server needed:
+
+```bash
+# Local:
+open http://localhost:18789/orchestrator
+
+# Or via your tailscale domain:
+open https://genorbox1.tailxxx.ts.net/orchestrator
+```
+
+That's it. **6 tabs, 22 tools, 8 hooks** — all running inside your gateway.
 
 ---
 
-**The plugin handles everything else automatically:**
-- Data directories created on startup
-- Nightly model sync scheduled via cron (3 AM)
-- Log rotation and maintenance on 30-min interval
-- Session auto-logging, routing enforcement, context injection via hooks
-- **21 tools** for model management, project tracking, and agent orchestration
+## 🔄 What Happens Automatically
 
-## Or install from ClawHub (plugin only)
+| What | When |
+|------|------|
+| 📁 Data dirs created | On first plugin load |
+| 🌙 Nightly model sync | 3 AM via cron |
+| 🔧 Maintenance tick | Every 30 min (log rotation, session normalization, recovery docs) |
+| 📝 Session auto-logging | On every session_end hook |
+| 🚦 Model routing | On every before_model_resolve (per-project allowlists & free-only) |
+| 📍 Context injection | On every before_prompt_build (STATE.md, ROADMAP.md) |
+
+---
+
+## 🧪 Checking It Works
+
 ```bash
-openclaw plugins install genor-orchestrator-plugin
+# Quick status
+openclaw plugins inspect genor-orchestrator | grep -E "tools|hooks"
+
+# Dashboard API
+curl http://localhost:18789/orchestrator/api/status
+
+# See all tools
+curl http://localhost:18789/orchestrator/api/config | python3 -m json.tool
+```
+
+---
+
+## 🐛 Common Issues
+
+| Problem | Fix |
+|---------|-----|
+| Plugin not found after install | Check `openclaw plugins list` — enable if disabled |
+| Dashboard 404 | Plugin may need restart. Check `openclaw gateway status` |
+| Auto-populate fails | Temp file rename issue. Run `orchestrator_auto_populate` manually |
+| Stale sessions in dashboard | Doctor (`orchestrator_doctor check=data fix=true`) auto-fixes |
+| Binding violation error | Call `orchestrator_release_project` first, then `set_context` to new project |
+
+---
+
+## 📦 ClawHub Install (Plugin Only)
+
+```bash
+clawhub package install genor-orchestrator-plugin
 openclaw plugins enable genor-orchestrator
 ```
-Then follow steps 3-6 for the skill.
+
+Then skip to Step 3 (model population). The dashboard is bundled — no extra steps needed.
