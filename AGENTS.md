@@ -1,7 +1,7 @@
 # 📋 AGENTS.md — Genor's Orchestrator Plugin
 
 ## 🧠 What It Does
-A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **22 tools** for model routing, session tracking, project context injection, a live dashboard, subagent management, and automated project health — all without a separate process.
+A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **28 tools** for model routing, session tracking, project context injection, a live dashboard, subagent management, backlog management, and automated project health — all without a separate process.
 
 ---
 
@@ -9,9 +9,9 @@ A full-featured OpenClaw plugin that turns your gateway into a coordinated agent
 
 | File | What It Does |
 |------|-------------|
-| `src/index.ts` | 🧩 Main plugin — 22 tools, 5 slash commands, 8 hooks, SessionTracker, MaintenanceService |
+| `src/index.ts` | 🧩 Main plugin — 28 tools, 5 slash commands, 8 hooks, SessionTracker, MaintenanceService |
 | `src/dashboard-handler.ts` | 🖥️ HTTP handler serving the dashboard at `/orchestrator` |
-| `src/index.test.ts` | 🧪 Test suite |
+| `src/index.test.ts` | 🧪 Test suite (116 tests) |
 | `dashboard/index.html` | 🎨 Single-file SPA frontend (Tailwind, zero build) |
 | `openclaw.plugin.json` | 📄 Plugin manifest |
 | `scripts/auto-populate-models.py` | 🤖 Nightly model discovery script |
@@ -39,13 +39,24 @@ openclaw plugins enable genor-orchestrator
 
 | Metric | Value |
 |--------|-------|
-| **Version** | 0.6.1 |
-| **Tools** | 22 tools + 5 slash commands |
+| **Version** | 0.7.0 |
+| **Tools** | 28 tools + 5 slash commands |
 | **Hooks** | 8 lifecycle hooks |
 | **Models tracked** | 24 total, 11 agent-ready |
 | **Providers** | google, lmstudio, ollama, opencode-go, openrouter |
-| **Projects** | 1 active (genor-orchestrator-plugin) |
+| **Projects** | 2 active |
 | **Data dir** | `~/.openclaw/workspace/orchestrator-data/` |
+
+---
+
+## 🔬 v0.7.0 Features
+
+1. **🧠 Routing Presets** — 5 presets: Custom Chains, No Steering, Free Only, Single Provider, Custom Fallbacks Only. Dashboard preset selector with live descriptions.
+2. **📋 Backlog Tools** — 6 new tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog management.
+3. **🔗 Routing Chains** — Per-task-type model preference lists with fallback chain. Dashboard-editable, persisted to config.
+4. **🧠 Enhanced Routing Brain** — `get_routing` returns model quality metadata (tier, speed, context). Task category auto-inferred. Blocked chain detection. Preset-aware hook resolution.
+5. **🖥️ Agent Cards** — Stop and Recover buttons on agent cards in home tab.
+6. **🛡️ Safeguards Tab** — Dashboard safeguards viewer with config, event log, and agent health.
 
 ---
 
@@ -57,44 +68,3 @@ openclaw plugins enable genor-orchestrator
 4. **🔍 Active Project Discovery** — `list_active_projects` + `join_project` for ad-hoc session contributions.
 5. **📋 Project Health Enforcement** — STATE.md required. Doctor reports gaps, auto-creates, flags stale sessions.
 6. **🤖 Subagent Spawning** — `spawn_subagent` routes models, injects context, auto-logs under parent project.
-
----
-
-## 🏗️ Architecture
-
-```
-OpenClaw Gateway
-  ├── /orchestrator (dashboard route)
-  │
-  ├── Plugin Hooks (8)
-  │   ├── session_start        → Track begin, bypass background sessions
-  │   ├── session_end          → Auto-log, recovery doc, binding release
-  │   ├── subagent_spawned     → Register subagent with parent context
-  │   ├── subagent_ended       → Cleanup tracking
-  │   ├── before_model_resolve → Auto-route best model per project
-  │   ├── before_prompt_build  → Inject project context into prompt
-  │   ├── agent_end            → Final live-agent flush
-  │   └── gateway_stop         → Clean shutdown
-  │
-  ├── Tools (22)
-  │   ├── Core: register, unregister, set_context, clear_context
-  │   ├── Status: get_status, get_config, get_models, check_models
-  │   ├── Logging: log_session, log_decision, get_logs
-  │   ├── Projects: sync_project, get_project_docs, advance_phase
-  │   ├── Routing: get_routing, get_registered_sessions
-  │   ├── New v0.6.0: release_project, list_active_projects, join_project, spawn_subagent
-  │   └── Health: doctor, auto_populate
-  │
-  └── Data: ~/.openclaw/workspace/orchestrator-data/
-      ├── models.json, dashboard-config.json, live-agents.json
-      ├── logs/orchestrator.jsonl
-      └── projects/{name}/{STATE.md, CONTEXT.md, sessions.json, ...}
-```
-
----
-
-## 🔗 Related
-
-- Project repo: `https://github.com/GenorTG/genor-orchestrator-plugin`
-- Workspace skill: `~/.openclaw/workspace/skills/genor-orchestrator/SKILL.md`
-- Daily logs: `~/.openclaw/workspace/memory/2026-06-17.md`

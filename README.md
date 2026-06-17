@@ -3,28 +3,28 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.6.1-blue)
-![Tools](https://img.shields.io/badge/tools-22-success)
+![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Tools](https://img.shields.io/badge/tools-28-success)
 ![Hooks](https://img.shields.io/badge/hooks-8-ff69b4)
 
-> **✨ 22 tools + 8 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing, session logging, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, a built-in dashboard — all inside OpenClaw with zero external processes.
+> **✨ 28 tools + 8 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, a built-in dashboard — all inside OpenClaw with zero external processes.
 
 The orchestrator doesn't take over your thinking. It handles the scaffolding so your LLM can focus on what matters: **coding, solving problems, and building cool stuff.** 🚀
 
 ---
 
-## 🚀 What's New in v0.6.0
+## 🚀 What's New in v0.7.0
 
-The jump from 12 → 22 tools brings **six major features** that make the orchestrator smarter about *who* is working on *what* and *why*:
+The jump from 22 → 28 tools brings **six major features** that supercharge the orchestrator's routing brain and project workflow:
 
 | # | Feature | What It Does |
 |---|---------|-------------|
-| 🔒 | **Session-Project Binding** | Once a session sets context on project X, it's **locked**. Switch projects? Call `release_project` first. One session, one project. No cross-contamination. |
-| 🚫 | **Hook Scoping** | Unregistered sessions are *invisible* to the plugin — no live-agent bleed, no unwanted context injection, no routing noise. |
-| 🧹 | **Orphaned Project Cleanup** | `orchestrator_doctor` detects dead/empty projects (0 sessions) and archives them to `.archived/` automatically. |
-| 🔍 | **Active Project Discovery** | `list_active_projects` + `join_project` let ad-hoc sessions discover and contribute to running work. |
-| 📋 | **Project Health Enforcement** | Every project needs `STATE.md`. Doctor reports gaps, auto-creates with metadata, flags stale sessions. |
-| 🤖 | **Subagent Spawning** | `spawn_subagent` routes model choice, injects full project context, and logs subagent sessions under the parent project. |
+| 🧠 | **Routing Presets** | 5 presets: Custom Chains, No Steering, Free Only, Single Provider, Custom Fallbacks Only. Dashboard preset selector with live descriptions. Dynamic provider input for Single Provider mode. |
+| 📋 | **Backlog Tools** | 6 new tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog CRUD with dependency resolution and parallel dispatch. |
+| 🔗 | **Routing Chains** | Per-task-type (coding, fixing, research, q&a, documentation) model preference lists with fallback chain. Dashboard-editable, persisted to config via `POST /api/set-project-routing`. |
+| 🧩 | **Enhanced Routing Brain** | `get_routing` returns model quality metadata (tier, speed, context, status). Task category auto-inferred from task description. Blocked chain detection. Preset-aware `before_model_resolve` hook with chain fallthrough logic. |
+| 🖥️ | **Dashboard Agent Cards** | Stop and Recover buttons on agent cards. Safeguards tab with event log viewer, agent health indicators (healthy/warning/stale). |
+| 🛡️ | **Safeguards Dashboard** | Configuration card, workflow enforcement per project, agent phase display, phase timeline, safeguard event log. |
 
 ---
 
@@ -72,7 +72,7 @@ openclaw plugins list | grep orchestrator
 
 ## 🔧 Tool Reference
 
-Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **22** of them:
+Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **28** of them:
 
 ### 📋 Registration & Lifecycle
 
@@ -269,6 +269,175 @@ orchestrator_get_routing(category: "coding", project: "my-project")
 
 ---
 
+### 📁 Project Management (7 tools)
+
+#### `orchestrator_create_project`
+> 🏗️ **Create a new project** with STATE.md, dashboard config entry, and optional spawn marker for immediate work.
+
+```typescript
+orchestrator_create_project(
+  name: "my-project",
+  directory: "/home/user/projects/my-project",
+  description: "A web app for managing tasks",
+  spawn: true,
+  spawn_task: "Set up the project structure"
+)
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | ✅ | Project name (lowercase, hyphens/underscores only). |
+| `directory` | `string` | ❌ | Absolute path to the project directory on disk. |
+| `description` | `string` | ❌ | Short description of what the project is for. |
+| `spawn` | `boolean` | ❌ | If true, schedule an immediate isolated session for this project. |
+| `spawn_task` | `string` | ❌ | Initial task description for the spawned session. |
+
+**When to use:** Starting a new project. Creates STATE.md, dashboard config, and optionally kicks off a work session.
+
+---
+
+#### `orchestrator_sync_project`
+> 🔗 **Sync a project's files from disk into orchestrator-data.** Regenerates `CONTEXT.md` and `KEY_FILES.md` from the project source. Requires project location to be configured in `dashboard-config.json`.
+
+```typescript
+orchestrator_sync_project(project: "my-project")
+// → { ok: true, project: "my-project", location: "/home/user/projects/my-project" }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ✅ | Project name to sync. |
+
+**When to use:** After major project changes, or when you want the orchestrator to regenerate its understanding of the codebase. Also runs automatically during maintenance ticks.
+
+---
+
+#### `orchestrator_get_project_docs`
+> 📂 **List all orchestrator-managed documents** for a project: `CONTEXT.md`, `STATE.md`, `ROADMAP.md`, `RECOVERY.md`, `sessions.json`, `BACKLOG.json`, and more.
+
+```typescript
+orchestrator_get_project_docs(project: "my-project")
+// → { project: "my-project", doc_count: 7, docs: ["CONTEXT.md", "STATE.md", "RECOVERY.md", ...] }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ✅ | Project name. |
+
+**When to use:** Check what documentation exists for a project, or confirm that the required docs are generated.
+
+---
+
+### 📋 Backlog Management (5 tools)
+
+#### `orchestrator_backlog_add`
+> ➕ **Add a task to a project's backlog.** Supports priority, labels, and dependencies.
+
+```typescript
+orchestrator_backlog_add(
+  project: "my-project",
+  title: "Add user authentication",
+  description: "Implement JWT-based login with refresh tokens",
+  priority: "p1",
+  labels: ["feature", "auth"],
+  depends_on: ["TASK-001"]
+)
+// → { ok: true, id: "TASK-003", title: "Add user authentication" }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ✅ | Project name. |
+| `title` | `string` | ✅ | Task title. |
+| `description` | `string` | ❌ | Task description. |
+| `priority` | `string` | ❌ | `p0` (urgent), `p1` (high), `p2` (normal), `p3` (low). Default: `p2`. |
+| `labels` | `string[]` | ❌ | Labels/tags. |
+| `depends_on` | `string[]` | ❌ | Task IDs this depends on. |
+
+**When to use:** Adding new work items to a project's backlog. The task is assigned a unique ID and persisted to `BACKLOG.json`.
+
+---
+
+#### `orchestrator_backlog_list`
+> 📋 **List backlog tasks** with optional filters by status, priority, or label.
+
+```typescript
+orchestrator_backlog_list(project: "my-project")
+orchestrator_backlog_list(project: "my-project", status: "todo", priority: "p1")
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ✅ | Project name. |
+| `status` | `string` | ❌ | `todo`, `in_progress`, `done`, `blocked`. |
+| `priority` | `string` | ❌ | `p0`, `p1`, `p2`, `p3`. |
+| `label` | `string` | ❌ | Filter by label. |
+
+**When to use:** See what's in the backlog, find tasks by state or priority.
+
+---
+
+#### `orchestrator_backlog_update`
+> ✏️ **Update a backlog task's** status, priority, assignment, or labels.
+
+```typescript
+orchestrator_backlog_update(
+  project: "my-project",
+  id: "TASK-003",
+  status: "in_progress",
+  assigned_to: "Amy"
+)
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ✅ | Project name. |
+| `id` | `string` | ✅ | Task ID. |
+| `status` | `string` | ❌ | `todo`, `in_progress`, `done`, `blocked`. |
+| `priority` | `string` | ❌ | `p0`, `p1`, `p2`, `p3`. |
+| `assigned_to` | `string` | ❌ | Assign to agent or user. |
+| `labels` | `string[]` | ❌ | Replace labels. |
+
+**When to use:** Mark tasks in progress, block stuck tasks, change priorities, assign work.
+
+---
+
+#### `orchestrator_backlog_dispatch`
+> 📤 **Pick the highest-priority available backlog task** and return dispatch instructions for sub-agent execution. Respects dependencies, labels, and priority ordering.
+
+```typescript
+orchestrator_backlog_dispatch(project: "my-project")
+orchestrator_backlog_dispatch(project: "my-project", auto_claim: true, filter_labels: "auth,backend")
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ❌ | Default: current project from orchestrator context. |
+| `task_id` | `string` | ❌ | Specific task ID to dispatch. Omit for highest-priority. |
+| `auto_claim` | `boolean` | ❌ | Auto-mark as in_progress (default: `false`). |
+| `filter_labels` | `string` | ❌ | Only dispatch tasks matching ANY of these labels. |
+| `max_dispatch` | `number` | ❌ | Max parallel tasks to dispatch (default: 1). |
+
+**When to use:** Automating task assignment — let the orchestrator pick the most important next task and prepare spawn instructions.
+
+---
+
+#### `orchestrator_backlog_dispatch_all`
+> 🚀 **Dispatch ALL currently available backlog tasks** up to `max_dispatch` for parallel sub-agent execution. Auto-claims by default.
+
+```typescript
+orchestrator_backlog_dispatch_all(project: "my-project", max_dispatch: 5)
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ❌ | Default: current project. |
+| `max_dispatch` | `number` | ❌ | Max tasks to dispatch (default: 5, max: 20). |
+| `auto_claim` | `boolean` | ❌ | Auto-mark as in_progress (default: `true`). |
+| `filter_labels` | `string` | ❌ | Only dispatch tasks matching ANY label. |
+
+**When to use:** Fan-out parallel work — dispatch all ready tasks at once for sub-agent processing.
+
 ---
 
 ### 📝 Session & Decision Logging
@@ -346,40 +515,6 @@ orchestrator_get_logs(limit: 20, level: "info", source: "routing")
 | `since` | `string` | ❌ | ISO timestamp filter. |
 
 **When to use:** Debugging what happened — why a certain model was chosen, when a session ended, what config changed.
-
----
-
-### 📁 Project Management
-
-#### `orchestrator_sync_project`
-> 🔗 **Sync a project's files from disk into orchestrator-data.** Regenerates `CONTEXT.md` and `KEY_FILES.md` from the project source. Requires project location to be configured in `dashboard-config.json`.
-
-```typescript
-orchestrator_sync_project(project: "my-project")
-// → { ok: true, project: "my-project", location: "/home/user/projects/my-project" }
-```
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `project` | `string` | ✅ | Project name to sync. |
-
-**When to use:** After major project changes, or when you want the orchestrator to regenerate its understanding of the codebase. Also runs automatically during maintenance ticks.
-
----
-
-#### `orchestrator_get_project_docs`
-> 📂 **List all orchestrator-managed documents** for a project: `CONTEXT.md`, `STATE.md`, `ROADMAP.md`, `RECOVERY.md`, `sessions.json`, `BACKLOG.json`, and more.
-
-```typescript
-orchestrator_get_project_docs(project: "my-project")
-// → { project: "my-project", doc_count: 7, docs: ["CONTEXT.md", "STATE.md", "RECOVERY.md", ...] }
-```
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `project` | `string` | ✅ | Project name. |
-
-**When to use:** Check what documentation exists for a project, or confirm that the required docs are generated.
 
 ---
 
@@ -551,16 +686,17 @@ https://your-gateway/orchestrator
 
 The dashboard handler is registered via `api.registerHttpRoute({ path: "/orchestrator", auth: "plugin", match: "prefix" })` — same pattern as built-in plugins like canvas and webhooks.
 
-### 6 Tabs
+### 7 Tabs
 
 | Tab | What You See |
 |-----|-------------|
-| **🏠 Home** | Model stats (24 total, 11 agent-ready), active projects, recent sessions, routable models, quick glance at everything |
-| **📁 Projects** | Per-project deep dive: session history, generated docs (`CONTEXT.md`, `STATE.md`, `RECOVERY.md`, `KEY_FILES.md`), health status, active session list |
+| **🏠 Home** | Model stats (24 total, 11 agent-ready), active projects, recent sessions, routable models, agent card buttons (Stop/Recover/Details) |
+| **📁 Projects** | Per-project deep dive: session history, generated docs, health status, active session list, Model Config with routing presets |
 | **🧠 Models** | Full CRUD model inventory. Edit tier ratings, speed ratings, status, agent-ready flags. All changes persist to `models.json` |
 | **🌐 Gateway** | Live OpenClaw gateway sessions — see every active session on the gateway |
 | **📜 Logs** | Orchestration log with level filtering. Drill into routing decisions, session events, config changes |
-| **🛡️ Safeguards** | Idle/stuck agent detection dashboard, error tracking, auto-recovery controls. All driven by the safeguard config |
+| **🛡️ Safeguards** | Idle/stuck agent detection dashboard, error tracking, auto-recovery controls, event log viewer, agent health indicators |
+| **⚙ Settings** | Orchestrator configuration — dashboard settings and preferences |
 
 ### Live Agent Monitoring
 
@@ -598,7 +734,9 @@ All project routing, workflow, and safeguard settings live in `~/.openclaw/works
         "research": ["openrouter/auto"],
         "q&a": ["opencode-go/deepseek-v4-flash", "openrouter/free"],
         "documentation": ["opencode-go/deepseek-v4-flash"]
-      }
+      },
+      "routing_preset": "custom",
+      "routing_single_provider": null
     }
   },
   "safeguards": {
@@ -627,6 +765,8 @@ All project routing, workflow, and safeguard settings live in `~/.openclaw/works
 | `projects.{name}.workflow.qa_retries` | `number` | Max QA attempts before escalation. |
 | `projects.{name}.workflow.skip_phases` | `string[]` | Phases to skip in the workflow. |
 | `projects.{name}.model_routing` | `object` | Per-category model routing. Keys: `coding`, `fixing`, `research`, `q&a`, `documentation`. |
+| `projects.{name}.routing_preset` | `string` | Routing preset: `custom`, `no-steering`, `free-only`, `single-provider`, `custom-fallbacks-only`. |
+| `projects.{name}.routing_single_provider` | `string` | Provider slug when preset is `single-provider` (e.g. `"openrouter"`). |
 | `safeguards.enabled` | `boolean` | Enable idle/stuck agent detection. |
 | `safeguards.idle_timeout_ms` | `number` | Mark agent idle after this long without activity. |
 | `safeguards.stuck_timeout_ms` | `number` | Mark agent stuck if no update for this long. |
@@ -830,7 +970,7 @@ orchestrator-data/
 
 | Version | Highlights |
 |---------|-----------|
-| **v0.6.1** | 🛠️ **Process & infrastructure.** GitFlow branching (`dev`/`main`), GitHub Actions CI (build + type-check + tests on every PR), branch protection rules, VERSIONING.md with MAJOR.MINOR.PATCH scheme, all versions normalized to 0.6.1. `openclaw.plugin.json` contracts rebuilt. |
+| **v0.7.0** | 🧠 **Routing presets system.** 5 presets (custom, no-steering, free-only, single-provider, custom-fallbacks-only), 28 tools (+6 backlog tools), set-project-routing API, enhanced routing brain with model quality metadata, preset selector UI, task category inference in hooks, agent card buttons (Stop/Recover), safeguards tab with event log viewer. 116 tests passing. |
 | **v0.6.0** | 🎯 **22 tools, 8 hooks, 6 new features.** Session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, project health enforcement (`STATE.md`), subagent spawning. Dashboard migrated to native `/orchestrator` route — **no PM2 needed**. `orchestrator_doctor` with 5 check categories + auto-fix. Safeguard auto-recovery writes recovery actions. Hidden-dir filter across all listings (`.archived` excluded). All 8 hooks fully operational: `session_start`, `session_end`, `subagent_spawned`, `subagent_ended`, `before_model_resolve`, `before_prompt_build`, `agent_end`, `gateway_stop`. |
 | **v0.5.0** | 🗺️ Slash commands restructured — monolithic `/genor` replaced with `/genor-COMMAND` pattern. Added `/genor-git-commit` (auto-commit + version bump). Session key filter for background/dreaming/cron sessions. |
 | **v0.4.4** | 🔧 Session key fix — filter background/dreaming/cron/subagent sessions from `session_start` hook. Prevents key overwrites. |
@@ -983,15 +1123,15 @@ npm test
 ```
 genor-orchestrator-plugin/
 ├── src/
-│   ├── index.ts                    # Main plugin — 22 tools, 8 hooks, all logic
+│   ├── index.ts                    # Main plugin — 28 tools, 8 hooks, all logic
 │   ├── dashboard-handler.ts        # Dashboard HTTP handler
-│   └── index.test.ts              # Tests
+│   └── index.test.ts              # Tests (116)
 ├── dashboard/
 │   └── index.html                  # Dashboard single-page HTML
 ├── openclaw.plugin.json           # Plugin metadata + config schema
 ├── SETUP.md                       # Step-by-step installation guide
 ├── README.md                      # You are here 📍
-└── package.json                   # v0.6.1
+└── package.json                   # v0.7.0
 ```
 
 ---

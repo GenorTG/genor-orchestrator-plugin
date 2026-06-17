@@ -146,6 +146,26 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const sessions = liveSessions?.sessions || [];
   const meta = liveSessions?._meta || {};
   const agents = liveAgents?.agents || [];
+  // Phase 5a: Enrich agents with health status
+  const healthThresholds = cfg?.safeguards || {};
+  const staleThreshold = healthThresholds.stuck_timeout_ms || 30 * 60 * 1000;
+  const warnThreshold = healthThresholds.idle_timeout_ms || 10 * 60 * 1000;
+  const now = Date.now();
+  for (const agent of agents) {
+    const lastActivity = agent.last_activity_at ? new Date(agent.last_activity_at).getTime() : 0;
+    const lastUpdate = agent.timestamp ? new Date(agent.timestamp).getTime() : 0;
+    const elapsed = lastActivity ? now - lastActivity : (lastUpdate ? now - lastUpdate : 0);
+    if (!elapsed || elapsed < 0) {
+      agent.health_status = "unknown";
+    } else if (elapsed < warnThreshold) {
+      agent.health_status = "healthy";
+    } else if (elapsed < staleThreshold) {
+      agent.health_status = "warning";
+    } else {
+      agent.health_status = "stale";
+    }
+    agent.last_active_at = lastActivity ? new Date(lastActivity).toISOString() : agent.timestamp || null;
+  }
   const state = agents[0] || {};
 
   // Normalize models: models.json has nested { version, schema, models: [...] }
@@ -154,22 +174,48 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const modelList = models.models || [];
   const activeModelCount = modelList.filter((m: any) => m.agent_ready !== false && m.status !== "removed").length;
 
-  // Build projects list (same data as handleProjects)
+  // Build projects list with active model info (Phase 3a)
   const projDir = path.join(DATA_DIR, "projects");
   const projectsList: any[] = [];
   if (fs.existsSync(projDir)) {
     for (const name of fs.readdirSync(projDir).sort()) {
-      if (name.startsWith(".")) continue; // Skip hidden dirs (.archived)
+      if (name.startsWith(".")) continue;
       const p = path.join(projDir, name);
       if (!fs.statSync(p).isDirectory()) continue;
-      let sessions: any[] = [];
-      try { sessions = JSON.parse(fs.readFileSync(path.join(p, "sessions.json"), "utf-8")).sessions || []; } catch {}
+      let projectSessions: any[] = [];
+      try { projectSessions = JSON.parse(fs.readFileSync(path.join(p, "sessions.json"), "utf-8")).sessions || []; } catch {}
       const pc = cfg?.projects?.[name] || {};
+      
+      // Find active model from live agents
+      const matchingAgent = agents.find((a: any) => a.project === name || a.project === name);
+      const activeModel = matchingAgent?.model || null;
+      const activeModelProvider = matchingAgent?.model_provider || null;
+      
+      // Find model details from inventory
+      let modelDetails = null;
+      if (activeModel) {
+        const found = modelList.find((m: any) => m.id === activeModel);
+        if (found) {
+          modelDetails = {
+            name: found.name || found.id,
+            provider: found.provider,
+            tier: found.tier || 3,
+            cost: found.cost || {},
+          };
+        }
+      }
+      
       projectsList.push({
-        name, session_count: sessions.length,
-        created: sessions[0]?.logged_at || "N/A",
+        name, session_count: projectSessions.length,
+        created: projectSessions[0]?.logged_at || "N/A",
         model_allowlist: pc.model_allowlist || [],
         free_only: pc.free_only || false,
+        active_model: activeModel,
+        active_model_provider: activeModelProvider,
+        active_model_details: modelDetails,
+        model_routing: pc.model_routing || null,
+        routing_preset: pc.routing_preset || 'custom',
+        routing_single_provider: pc.routing_single_provider || null,
       });
     }
   }
@@ -706,6 +752,98 @@ function handleValidateSessions(req: IncomingMessage, res: ServerResponse): void
   sendJSON(res, result);
 }
 
+// ═══ Model Assignment (Phase 3b) ═══
+async function handleSetProjectModel(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const { project, model_id } = body;
+    if (!project || !model_id) {
+      sendJSON(res, { ok: false, error: "Missing project or model_id" });
+      return;
+    }
+    // Validate model exists in inventory
+    const modelsData = readJSON(path.join(DATA_DIR, "models.json"));
+    const models = (modelsData?.models || []);
+    const model = models.find((m: any) => m.id === model_id);
+    if (!model) {
+      sendJSON(res, { ok: false, error: `Model "${model_id}" not found in inventory` });
+      return;
+    }
+    // Update project config
+    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    if (!cfg.projects) cfg.projects = {};
+    if (!cfg.projects[project]) cfg.projects[project] = {};
+    cfg.projects[project].model_allowlist = [model_id];
+    cfg.projects[project].free_only = model.tier === "free" || model.tier === 0 ? true : false;
+    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    sendJSON(res, {
+      ok: true,
+      model: model.id,
+      provider: model.provider,
+    });
+  } catch (e: any) {
+    console.error("[handleSetProjectModel] Error:", e, "Message:", e?.message, "Stack:", e?.stack);
+    sendJSON(res, { ok: false, error: typeof e === 'string' ? e : (e?.message || String(e)) });
+  }
+}
+
+// ═══ Set Project Routing (Phase 3b) ═══
+async function handleSetProjectRouting(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const { project, routing, preset, free_only, model_allowlist, routing_single_provider } = body;
+    if (!project) {
+      sendJSON(res, { ok: false, error: "Missing project" });
+      return;
+    }
+    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    if (!cfg.projects) cfg.projects = {};
+    if (!cfg.projects[project]) cfg.projects[project] = {};
+
+    if (routing !== undefined) {
+      cfg.projects[project].model_routing = routing;
+    }
+    if (preset !== undefined) {
+      cfg.projects[project].routing_preset = preset;
+    }
+    if (free_only !== undefined) {
+      cfg.projects[project].free_only = free_only;
+    }
+    if (model_allowlist !== undefined) {
+      cfg.projects[project].model_allowlist = model_allowlist;
+    }
+    if (routing_single_provider !== undefined) {
+      cfg.projects[project].routing_single_provider = routing_single_provider;
+    }
+
+    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    sendJSON(res, {
+      ok: true,
+      message: `Routing updated for ${project}`,
+      preset: cfg.projects[project].routing_preset || null,
+      chains: Object.keys(cfg.projects[project].model_routing || {}).length,
+    });
+  } catch (e: any) {
+    console.error("[handleSetProjectRouting] Error:", e);
+    sendJSON(res, { ok: false, error: e?.message || String(e) });
+  }
+}
+
+// ═══ Phase 3c: Backlog API ═══
+function handleProjectBacklog(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url || "/", "http://localhost");
+  const project = url.searchParams.get("project");
+  if (!project) return sendJSON(res, { ok: false, error: "Missing project" });
+  const bp = path.join(DATA_DIR, "projects", project, "BACKLOG.json");
+  if (!fs.existsSync(bp)) return sendJSON(res, { tasks: [] });
+  try {
+    const data = JSON.parse(fs.readFileSync(bp, "utf-8"));
+    sendJSON(res, { tasks: data.tasks || [] });
+  } catch {
+    sendJSON(res, { tasks: [] });
+  }
+}
+
 function handleProjectErrors(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || "/", "http://localhost");
   const project = url.searchParams.get("project") || "";
@@ -784,6 +922,7 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/project-doc": return handleProjectDoc(req, res);
           case "/api/project-errors": handleProjectErrors(req, res); return true;
           case "/api/global-errors": handleGlobalErrors(req, res); return true;
+          case "/api/project-backlog": handleProjectBacklog(req, res); return true;
           case "/api/validate-sessions": handleValidateSessions(req, res); return true;
         }
       }
@@ -796,6 +935,8 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/project-state": return handleProjectState(req, res);
           case "/api/project-doc": return handleProjectDocSave(req, res);
           case "/api/create-project": handleCreateProject(req, res); return true;
+          case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
+          case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
         }
       }
 

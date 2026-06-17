@@ -801,6 +801,11 @@ function normalizeSessionsJson(project, dataDir) {
         sessions = sessions.map(s => {
             const ns = { ...s };
             const now = new Date().toISOString();
+            // Phase 4b: Per-entry schema version tracking
+            if (!ns.schema_version) {
+                ns.schema_version = 2;
+                changed = true;
+            }
             // Legacy: timestamp → date
             if (ns.timestamp && !ns.date) {
                 ns.date = ns.timestamp.split("T")[0];
@@ -1801,6 +1806,8 @@ const TOOL_NAMES = [
     "orchestrator_backlog_add",
     "orchestrator_backlog_list",
     "orchestrator_backlog_update",
+    "orchestrator_backlog_dispatch",
+    "orchestrator_backlog_dispatch_all",
 ];
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
 // Each entry matches an api.registerTool({...}) call in register() below.
@@ -1832,6 +1839,8 @@ const TOOL_METADATA = [
     { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
     { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
     { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
+    { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
+    { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -1970,7 +1979,21 @@ const _plugin = definePluginEntry({
                     logger.debug("hooks", `session_start (skipped background): ${sk}`);
                     return;
                 }
-                sessionTracker.start(sk || "unknown", event.reason || "new");
+                // ═══ SESSION ISOLATION: Don't reset tracker for unregistered sessions ═══
+                // Calling start() on an unregistered session would nuke the registered
+                // session's context (project, task, model) from the singleton tracker.
+                // Only start() if this session is explicitly registered, or if there
+                // are ZERO registered sessions (first-time setup).
+                const hasRegisteredSessions = sessionTracker.getRegisteredSessions().length > 0;
+                if (sessionTracker.isSessionRegistered(sk) || !hasRegisteredSessions) {
+                    sessionTracker.start(sk || "unknown", event.reason || "new");
+                }
+                else {
+                    // Unregistered session starting alongside an active registered session.
+                    // Don't touch the tracker state — just log it.
+                    sessionTracker.trackAction("session_started");
+                    logger.debug("hooks", `session_start (unregistered, skipped tracker reset): ${sk}`);
+                }
                 sessionTracker.trackAction("session_started");
                 writeLiveAgents("session_start", sessionTracker, logger);
                 logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);
@@ -2198,79 +2221,171 @@ const _plugin = definePluginEntry({
                 if (isUnregistered && !hasSynthetic) {
                     return;
                 }
-                // Resolve session key from hook context - the REAL gateway key.
-                // Bridge synthetic fallback keys (from orchestrator_register)
-                // with the real key so before_prompt_build injection works.
+                // ═══ SESSION ISOLATION: Resolve session key from hook context NOT tracker singleton ═══
+                // The hookCtx.sessionKey is the REAL gateway-provided key for THIS session.
+                // sessionTracker.sessionKey is a singleton and may have been overwritten by
+                // another session's hooks. Always use ctxSessionKey for lookups.
+                //
+                // Bridge synthetic fallback keys (from orchestrator_register) with the real
+                // key so before_prompt_build injection works. CRITICAL: Only bridge from
+                // synthetic fallback keys (agent:main:auto:...) to real keys. NEVER bridge
+                // from one real key to another — that would cross-contaminate sessions.
                 if (ctxSessionKey) {
                     const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
                     if (!isBackground) {
-                        // Bridge: register the real key alongside any synthetic one
-                        // so before_prompt_build finds the registration.
-                        // CRITICAL: Only bridge from synthetic fallback keys
-                        // (agent:main:auto:...) to real keys. NEVER bridge from one
-                        // real key to another — that would cross-contaminate sessions.
+                        // ── Synthetic-to-real bridge ──
+                        // If the tracker was given a synthetic fallback key (agent:main:auto:...)
+                        // by a prior tool call, bridge it to the real gateway key now.
                         const regSk = sessionTracker.sessionKey;
-                        if (regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:")) {
+                        const isSyntheticToReal = regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:");
+                        if (isSyntheticToReal) {
                             sessionTracker.registerSession(ctxSessionKey);
                             const existingCtx = sessionTracker.getSessionContext(regSk);
                             if (existingCtx) {
-                                // start() resets context, so capture first then restore
                                 const { project, task } = existingCtx;
                                 sessionTracker.sessionKey = ctxSessionKey;
                                 sessionTracker.setContext(project, task || "");
                                 sessionTracker.setStatus("prompting");
                             }
+                            logger.info("hooks", `before_model_resolve: bridged synthetic→real: ${regSk} → ${ctxSessionKey}`);
                         }
-                        // Always adopt the real key as tracker primary key
-                        if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
-                            sessionTracker.start(ctxSessionKey, "resumed");
+                        // ── Session-scoped primary key adoption ──
+                        // ONLY set sessionTracker.sessionKey and start() for the session that
+                        // is actually registered. If a different session's hooks fire here,
+                        // don't overwrite the tracker — use ctxSessionKey locally instead.
+                        const isRegisteredForThisSession = sessionTracker.isSessionRegistered(ctxSessionKey);
+                        if (isRegisteredForThisSession) {
+                            if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
+                                sessionTracker.start(ctxSessionKey, "resumed");
+                            }
+                            logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
                         }
-                        logger.info("hooks", "before_model_resolve: active session key=" + ctxSessionKey);
+                        else {
+                            // Unregistered session — still update status but don't pollute tracker key
+                            logger.debug("hooks", `before_model_resolve: skippping tracker adoption for unregistered session: ${ctxSessionKey}`);
+                        }
                     }
                 }
+                // Always update status but scope to the actual hook session
                 sessionTracker.setStatus("resolving");
                 sessionTracker.trackAction("resolving_model");
                 writeLiveAgents("before_model_resolve", sessionTracker, logger);
+                // ═══ SESSION-GATED: Only resolve models for the registered session ═══
+                // Don't enter model resolution if this session isn't registered.
+                if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
+                    return;
+                }
                 if (!sessionTracker.currentProject)
                     return;
                 const md = readJSON(path.join(dataDir, "models.json"));
                 const allModels = md?.models || [];
                 const cfg2 = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
                 const pc = cfg2.projects?.[sessionTracker.currentProject];
+                // ── Resolve routing preset ──
+                const routingPreset = pc?.routing_preset || "custom";
+                // Preset: "no-steering" — skip entirely, let OpenClaw's default resolution run
+                if (routingPreset === "no-steering") {
+                    logger.debug("routing", `no-steering preset for ${sessionTracker.currentProject} — skipping model override`);
+                    sessionTracker.trackModel(event?.resolvedModel || "default", "default", 0);
+                    return;
+                }
                 let eligible = [...allModels];
                 const filters = [];
-                if (cfg2.free_only_mode) {
+                const globalDisabled = cfg2.disabled_models || [];
+                // ── Preset: "free-only" — force free models ──
+                if (routingPreset === "free-only") {
                     eligible = eligible.filter(m => !isPaid(m));
-                    filters.push("global_free_only");
+                    filters.push("preset_free_only");
                 }
-                const disabled = cfg2.disabled_models || [];
-                if (disabled.length) {
-                    eligible = eligible.filter(m => !disabled.includes(m.id));
+                // ── Preset: "single-provider" — filter to one provider ──
+                const singleProvider = pc?.routing_single_provider;
+                if (routingPreset === "single-provider" && singleProvider) {
+                    eligible = eligible.filter(m => m.provider === singleProvider);
+                    filters.push(`preset_single_provider:${singleProvider}`);
+                }
+                // ── Global & project filters (apply to all presets except no-steering) ──
+                if (globalDisabled.length) {
+                    eligible = eligible.filter(m => !globalDisabled.includes(m.id));
                     filters.push("global_disabled");
+                }
+                if (cfg2.free_only_mode || (pc?.free_only && routingPreset !== "free-only")) {
+                    eligible = eligible.filter(m => !isPaid(m));
+                    filters.push(cfg2.free_only_mode ? "global_free_only" : "project_free_only");
                 }
                 if (pc) {
                     if (pc.model_allowlist?.length) {
                         eligible = eligible.filter(m => pc.model_allowlist.includes(m.id));
                         filters.push("project_allowlist");
                     }
-                    if (pc.free_only) {
-                        eligible = eligible.filter(m => !isPaid(m));
-                        filters.push("project_free_only");
-                    }
                 }
-                if (filters.length > 0 && eligible.length > 0) {
+                // ── Preset: "custom" or "custom-fallbacks-only" — try model_routing chains ──
+                // Determine the task category (infer from task name when possible)
+                const ctx2 = sessionTracker.getSessionContext(ctxSessionKey);
+                const taskStr = ctx2?.task || "";
+                const taskLower = taskStr.toLowerCase();
+                let taskCategory = "coding"; // default
+                if (taskLower.includes("fix") || taskLower.includes("bug") || taskLower.includes("error") || taskLower.includes("broken"))
+                    taskCategory = "fixing";
+                else if (taskLower.includes("research") || taskLower.includes("investigat") || taskLower.includes("explore") || taskLower.includes("learn") || taskLower.includes("find out"))
+                    taskCategory = "research";
+                else if (taskLower.includes("q&a") || taskLower.includes("question") || taskLower.includes("answer") || taskLower.includes("what is") || taskLower.includes("how do"))
+                    taskCategory = "qa";
+                else if (taskLower.includes("doc") || taskLower.includes("readme") || taskLower.includes("adr") || taskLower.includes("manual") || taskLower.includes("write up"))
+                    taskCategory = "documentation";
+                const modelRouting = pc?.model_routing || {};
+                const chain = modelRouting[taskCategory];
+                if (chain && Array.isArray(chain) && chain.length > 0) {
+                    // Try models in chain order until we find an active one
+                    let selected = null;
+                    for (const chainModelId of chain) {
+                        // Expand known shorthand prefixes
+                        const expandedId = chainModelId.startsWith("openrouter/")
+                            ? chainModelId
+                            : chainModelId.startsWith("opencode-go/")
+                                ? chainModelId
+                                : !chainModelId.includes("/")
+                                    ? `openrouter/${chainModelId}` // bare name → openrouter namespace
+                                    : chainModelId;
+                        const found = eligible.find(m => m.id === expandedId || m.id === chainModelId);
+                        if (found && found.agent_ready !== false && found.status === "active") {
+                            selected = found;
+                            break;
+                        }
+                    }
+                    if (selected) {
+                        sessionTracker.trackModel(selected.id, selected.provider, selected.tier);
+                        logger.info("routing", `[${routingPreset}] Routed ${sessionTracker.currentProject}/${taskCategory} → ${selected.id} (${selected.provider})`);
+                        // For custom-fallbacks-only: still let OpenClaw resolve primary,
+                        // but set modelOverride so it uses our chain if primary resolution fails
+                        if (routingPreset === "custom-fallbacks-only" && event?.resolvedModel && !eligible.find(m => m.id === event.resolvedModel)) {
+                            // Primary resolved model is blocked — use fallback
+                            return { modelOverride: selected.id };
+                        }
+                        return { modelOverride: selected.id };
+                    }
+                    // All chain models unavailable — log warning and fall through to tier-based
+                    const chainInfo = chain.map(id => {
+                        const m = eligible.find(e => e.id === id);
+                        return m ? `${id}(${m.status})` : `${id}(not-found)`;
+                    }).join(", ");
+                    logger.warn("routing", `Chain for ${taskCategory} unavailable: ${chainInfo} — falling back to tier-based`);
+                }
+                // ── Fallback: tier-based model selection ──
+                if (eligible.length > 0) {
                     const best = eligible
-                        .filter(m => m.agent_ready && m.status === "active")
+                        .filter(m => m.agent_ready !== false && m.status === "active")
                         .sort((a, b) => (b.tier || 0) - (a.tier || 0))[0];
                     if (best) {
                         sessionTracker.trackModel(best.id, best.provider, best.tier);
-                        logger.debug("routing", `Auto-routed to ${best.id} for ${sessionTracker.currentProject}`);
+                        logger.info("routing", `[tier-fallback] Routed ${sessionTracker.currentProject} → ${best.id} (T${best.tier})`);
                         return { modelOverride: best.id };
                     }
                 }
+                // ── Last resort: track whatever OpenClaw resolved ──
                 if (event?.resolvedModel) {
                     const resolvedInfo = allModels.find((m) => m.id === event.resolvedModel);
                     sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider, resolvedInfo?.tier);
+                    logger.info("routing", `[pass-through] No eligible models for ${sessionTracker.currentProject}, using resolved: ${event.resolvedModel}`);
                 }
             }
             catch (err) {
@@ -2279,37 +2394,30 @@ const _plugin = definePluginEntry({
         });
         api.on("before_prompt_build", async (event, hookCtx) => {
             try {
+                // ═══ SESSION ISOLATION: Use hook context key, NOT tracker singleton ═══
+                // sessionTracker.sessionKey is shared across all sessions and may have
+                // been set by a different session's hooks. Always use hookCtx.sessionKey.
+                const hk = hookCtx?.sessionKey || "";
                 sessionTracker.setStatus("prompting");
                 sessionTracker.trackAction("building_prompt");
                 writeLiveAgents("before_prompt_build", sessionTracker, logger);
-                // Scope project context injection to the session that registered it.
-                const hk = hookCtx?.sessionKey || "";
-                // Safety net: if hook context has a real gateway key that differs
-                // from the synthetic fallback, register it so the context check
-                // still passes. This handles the case where before_model_resolve
-                // was skipped or didn't bridge.
-                // Safety net bridge: if hookCtx has a real key that differs from
-                // the synthetic fallback, register it and copy context across.
-                // CRITICAL: Only bridge from synthetic to real. Never bridge
-                // from one real key to another (cross-session pollution).
-                if (hk) {
-                    const skVal = sessionTracker.sessionKey;
-                    if (skVal && hk !== skVal && skVal.startsWith("agent:main:auto:") && sessionTracker.isSessionRegistered(skVal)) {
-                        const existingCtx = sessionTracker.getSessionContext(skVal);
-                        sessionTracker.registerSession(hk);
-                        if (existingCtx) {
-                            const { project, task } = existingCtx;
-                            sessionTracker.sessionKey = hk;
-                            sessionTracker.setContext(project, task || "");
-                            sessionTracker.setStatus("resolving");
-                        }
-                    }
-                }
-                const sk = hk || sessionTracker.sessionKey;
-                // ONLY inject project context for explicitly registered sessions.
-                // A session must call orchestrator_register() to opt in — no
-                // chat/logging session ever gets context unless it registered.
-                if (!sk || !sessionTracker.isSessionRegistered(sk))
+                // ═══ NO MUTATION: This hook NEVER modifies sessionTracker.sessionKey ═══
+                // Previous code had a "safety net" that mutated sessionTracker.sessionKey
+                // when a real key appeared alongside a synthetic fallback. This caused
+                // cross-session pollution: if Session A registered with a synthetic key
+                // and Session B fired before_prompt_build, Session B's real key would
+                // overwrite Session A's registered key+context in the tracker singleton.
+                // 
+                // The synthetic-to-real bridge now ONLY happens in before_model_resolve,
+                // which reliably fires before this hook. If the bridge didn't happen,
+                // the registered synthetic key still works correctly for context lookup
+                // via isSessionRegistered() + getSessionContext().
+                // NEVER use sessionTracker.sessionKey as fallback — it's singletons-tainted.
+                // If hk (hook context key) is empty or not registered, NO injection.
+                if (!hk)
+                    return;
+                const sk = hk;
+                if (!sessionTracker.isSessionRegistered(sk))
                     return;
                 const pc = sessionTracker.getSessionContext(sk);
                 if (!pc)
@@ -2464,16 +2572,35 @@ const _plugin = definePluginEntry({
                 const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
                 if (!sk)
                     return txt("error: no session key available");
+                // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
+                // If this session key doesn't match tracker's current key and there's
+                // already an active registration with a different project context,
+                // warn prominently to surface unintended LLM tool calls.
+                const existingSessions = sessionTracker.getRegisteredSessions();
+                const hasActiveRegistration = existingSessions.length > 0 && !existingSessions.includes(sk);
+                if (hasActiveRegistration) {
+                    const otherCtxs = existingSessions
+                        .map(s => ({ key: s, ctx: sessionTracker.getSessionContext(s) }))
+                        .filter(s => s.ctx && s.ctx.project);
+                    if (otherCtxs.length > 0) {
+                        logger.warn("registration", `Session "${sk}" registering while other sessions active: ${otherCtxs.map(s => s.key).join(", ")}. Possible hallucinated registration.`);
+                    }
+                }
                 const newly = sessionTracker.registerSession(sk);
                 if (newly) {
-                    // If no real session key was set yet, use this synthetic one
-                    // as the tracker's current key so requireRegistration() works.
                     if (!sessionTracker.sessionKey)
                         sessionTracker.sessionKey = sk;
                     sessionTracker.trackAction("session_registered");
                     writeLiveAgents("register", sessionTracker, logger);
-                    logger.info("hooks", `session registered: ${sk}`);
-                    return txt("registered");
+                    logger.info("registration", `session registered: ${sk} (total: ${existingSessions.length + 1})`);
+                    // Return descriptive message so LLM + user can see what happened
+                    return txt({
+                        ok: true,
+                        message: "registered",
+                        session_key: sk,
+                        total_registered: existingSessions.length + 1,
+                        warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
+                    });
                 }
                 return txt("already registered");
             },
@@ -2853,22 +2980,105 @@ const _plugin = definePluginEntry({
                 if (!pc) {
                     return txt({ ok: false, error: `Project '${proj}' not found in dashboard-config.json` });
                 }
+                // Load model inventory for quality data
+                const md = readJSON(path.join(dataDir, "models.json"));
+                const allModels = md?.models || [];
+                const preset = pc.routing_preset || "custom";
+                const singleProvider = pc.routing_single_provider || null;
                 const routing = pc.model_routing;
-                if (!routing) {
-                    return txt({ ok: false, error: `No model_routing configured for project '${proj}'` });
-                }
                 const cat = params.category.toLowerCase().trim();
+                // ── Preset: no-steering ──
+                if (preset === "no-steering") {
+                    return txt({
+                        ok: true,
+                        project: proj,
+                        category: cat,
+                        preset: "no-steering",
+                        note: "Routing disabled for this project — OpenClaw will use default model resolution.",
+                    });
+                }
+                // ── Preset: free-only ──
+                if (preset === "free-only") {
+                    const freeModels = allModels
+                        .filter(m => !isPaid(m) && m.agent_ready !== false && m.status === "active")
+                        .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+                    return txt({
+                        ok: true,
+                        project: proj,
+                        category: cat,
+                        preset: "free-only",
+                        recommended: freeModels[0]?.id || null,
+                        fallbacks: freeModels.slice(1, 5).map(m => m.id),
+                        all: freeModels.map(m => m.id),
+                        source: "free-only preset",
+                        model_quality: freeModels.slice(0, 5).map(m => ({
+                            id: m.id,
+                            provider: m.provider,
+                            tier: m.tier,
+                            speed: m.speed_rating || 0,
+                            context: m.context_window || 0,
+                            cost_type: m.cost_type || null,
+                        })),
+                    });
+                }
+                // ── Preset: single-provider ──
+                if (preset === "single-provider" && singleProvider) {
+                    const provModels = allModels
+                        .filter(m => m.provider === singleProvider && m.agent_ready !== false && m.status === "active")
+                        .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+                    return txt({
+                        ok: true,
+                        project: proj,
+                        category: cat,
+                        preset: "single-provider",
+                        provider: singleProvider,
+                        recommended: provModels[0]?.id || null,
+                        fallbacks: provModels.slice(1, 5).map(m => m.id),
+                        all: provModels.map(m => m.id),
+                        source: `single-provider: ${singleProvider}`,
+                        model_quality: provModels.slice(0, 5).map(m => ({
+                            id: m.id,
+                            provider: m.provider,
+                            tier: m.tier,
+                            speed: m.speed_rating || 0,
+                            context: m.context_window || 0,
+                        })),
+                    });
+                }
+                // ── Custom routing chains ──
+                if (!routing) {
+                    return txt({ ok: false, error: `No model_routing configured for project '${proj}'.` });
+                }
                 const models = routing[cat];
                 if (!models || models.length === 0) {
                     return txt({ ok: false, error: `No models routed for category '${cat}' in project '${proj}'. Available categories: ${Object.keys(routing).join(", ")}` });
                 }
+                // Enrich with model quality data
+                const enriched = models.map(id => {
+                    const found = allModels.find(m => m.id === id);
+                    return found ? {
+                        id: found.id,
+                        provider: found.provider,
+                        tier: found.tier,
+                        speed: found.speed_rating || 0,
+                        context: found.context_window || 0,
+                        status: found.status || "unknown",
+                        agent_ready: found.agent_ready !== false,
+                    } : { id, provider: "?", tier: 0, speed: 0, context: 0, status: "unknown", agent_ready: false };
+                });
+                const available = enriched.filter(m => m.status === "active" && m.agent_ready);
+                const blocked = enriched.filter(m => m.status !== "active" || !m.agent_ready);
                 return txt({
                     ok: true,
                     project: proj,
                     category: cat,
-                    recommended: models[0],
-                    fallbacks: models.slice(1),
+                    preset,
+                    routing_preset: preset,
+                    recommended: available[0]?.id || enriched[0]?.id || models[0],
+                    fallbacks: available.slice(1).map(m => m.id),
+                    blocked_chain: blocked.length > 0 ? blocked.map(m => m.id) : undefined,
                     all: models,
+                    model_quality: enriched,
                     source: "dashboard-config.json projects." + proj + ".model_routing",
                 });
             },
@@ -3340,7 +3550,226 @@ const _plugin = definePluginEntry({
             },
         });
         // ═══════════════════════════════════════════════════════════
-        //  NEW TOOL — Create Project
+        //  NEW TOOL — Backlog Dispatch (Phase 2b)
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_backlog_dispatch",
+            label: "Backlog Dispatch",
+            description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Use this to automate task assignment. Respects dependencies, labels, and priority ordering.",
+            parameters: Type.Object({
+                project: Type.Optional(Type.String({ description: "Override project. Default: current project from orchestrator context." })),
+                task_id: Type.Optional(Type.String({ description: "Specific task ID to dispatch. If omitted, picks the highest-priority todo task with all dependencies resolved." })),
+                auto_claim: Type.Optional(Type.Boolean({ description: "Auto-mark the task as in_progress (default: false)." })),
+                filter_labels: Type.Optional(Type.String({ description: "Comma-separated label filter. Only dispatch tasks matching ANY of these labels." })),
+                max_dispatch: Type.Optional(Type.Number({ description: "Max parallel tasks to dispatch (Phase 2c). Returns up to N dispatchable tasks. Default: 1." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                const project = params.project || sessionTracker.currentProject;
+                if (!project)
+                    return txt({ ok: false, error: "No project selected. Set context via orchestrator_set_context or pass project param." });
+                const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
+                if (!fs.existsSync(bp))
+                    return txt({ ok: false, error: `No BACKLOG.json found for project "${project}".` });
+                let backlog;
+                try {
+                    backlog = JSON.parse(fs.readFileSync(bp, "utf-8"));
+                }
+                catch (e) {
+                    return txt({ ok: false, error: `Failed to read backlog: ${e.message}` });
+                }
+                const tasks = backlog.tasks || [];
+                let candidates = tasks.filter((t) => t.status === "todo" || t.status === "backlog");
+                if (params.filter_labels) {
+                    const fl = params.filter_labels.split(",").map((l) => l.trim().toLowerCase());
+                    candidates = candidates.filter((t) => (t.labels || []).some((l) => fl.includes(l.toLowerCase())));
+                }
+                if (params.task_id) {
+                    candidates = candidates.filter((t) => t.id === params.task_id);
+                    if (!candidates.length)
+                        return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
+                }
+                // Resolve dependencies — only tasks whose deps are done
+                const doneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => t.id));
+                candidates = candidates.filter((t) => (t.depends_on || []).every((d) => doneIds.has(d)));
+                if (!candidates.length)
+                    return txt({ ok: false, message: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
+                // Sort: priority then creation time
+                const priO = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+                candidates.sort((a, b) => {
+                    const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+                    if (pa !== pb)
+                        return pa - pb;
+                    return (a.created || "").localeCompare(b.created || "");
+                });
+                // Phase 2c: Support parallel dispatch — take up to max_dispatch tasks
+                const maxD = Math.max(1, Math.min(params.max_dispatch || 1, 10));
+                const selected = candidates.slice(0, maxD);
+                // Auto-claim selected tasks
+                if (params.auto_claim) {
+                    const claimedIds = [];
+                    for (const task of selected) {
+                        for (const t of tasks) {
+                            if (t.id === task.id) {
+                                t.status = "in_progress";
+                                claimedIds.push(task.id);
+                                break;
+                            }
+                        }
+                    }
+                    backlog.tasks = tasks;
+                    fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+                    logger.info("dispatch", `Claimed ${claimedIds.length} tasks: ${claimedIds.join(", ")}`);
+                }
+                const loc = getProjectLocation(project, dataDir);
+                const dispatchList = selected.map((task) => {
+                    const labels = (task.labels || []).join(", ");
+                    const deps = (task.depends_on || []).map((d) => {
+                        const dt = tasks.find((t2) => t2.id === d);
+                        return dt ? `${d} — ${dt.title}` : d;
+                    });
+                    return {
+                        task_id: task.id,
+                        title: task.title,
+                        description: task.description || "",
+                        priority: task.priority || "p2",
+                        labels,
+                        depends_on: deps,
+                        spawn: [
+                            `🎯 Task: ${task.title}`,
+                            `ID: ${task.id}`,
+                            task.description ? `Description: ${task.description}` : "",
+                            `Priority: ${task.priority || "p2"}`,
+                            labels ? `Labels: ${labels}` : "",
+                            deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+                        ].filter(Boolean).join("\n"),
+                    };
+                });
+                const result = {
+                    ok: true,
+                    project,
+                    location: loc || "not configured",
+                    dispatched_count: selected.length,
+                    total_available: candidates.length,
+                    total_backlog: tasks.length,
+                    tasks: dispatchList,
+                };
+                // Single-task mode: backward-compatible top-level fields
+                if (selected.length === 1) {
+                    const task = selected[0];
+                    const labels = (task.labels || []).join(", ");
+                    const deps = (task.depends_on || []).map((d) => {
+                        const dt = tasks.find((t2) => t2.id === d);
+                        return dt ? `${d} — ${dt.title}` : d;
+                    });
+                    Object.assign(result, {
+                        task_id: task.id,
+                        title: task.title,
+                        description: task.description || "",
+                        priority: task.priority || "p2",
+                        labels,
+                        status: task.status,
+                        depends_on: deps,
+                        spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use orchestrator_spawn_subagent or sessions_spawn to dispatch this task.`,
+                    });
+                }
+                return txt(result);
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  NEW TOOL — Backlog Dispatch All (Phase 2c: Parallel dispatch)
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_backlog_dispatch_all",
+            label: "Backlog Dispatch All",
+            description: "Dispatch ALL currently available backlog tasks up to a max count, for parallel sub-agent execution. Returns spawn instructions for each task. Respects dependency resolution — only returns tasks whose dependencies are complete.",
+            parameters: Type.Object({
+                project: Type.Optional(Type.String({ description: "Override project. Default: current project." })),
+                max_dispatch: Type.Optional(Type.Number({ description: "Maximum tasks to dispatch (default: 5, max: 20)." })),
+                auto_claim: Type.Optional(Type.Boolean({ description: "Auto-mark tasks as in_progress (default: true)." })),
+                filter_labels: Type.Optional(Type.String({ description: "Comma-separated label filter. Only dispatch tasks matching ANY label." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                const project = params.project || sessionTracker.currentProject;
+                if (!project)
+                    return txt({ ok: false, error: "No project selected." });
+                const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
+                if (!fs.existsSync(bp))
+                    return txt({ ok: false, error: `No BACKLOG.json for "${project}".` });
+                let backlog;
+                try {
+                    backlog = JSON.parse(fs.readFileSync(bp, "utf-8"));
+                }
+                catch (e) {
+                    return txt({ ok: false, error: `Failed to read backlog: ${e.message}` });
+                }
+                const tasks = backlog.tasks || [];
+                let candidates = tasks.filter((t) => t.status === "todo" || t.status === "backlog");
+                if (params.filter_labels) {
+                    const fl = params.filter_labels.split(",").map((l) => l.trim().toLowerCase());
+                    candidates = candidates.filter((t) => (t.labels || []).some((l) => fl.includes(l.toLowerCase())));
+                }
+                // Resolve dependencies
+                const doneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => t.id));
+                candidates = candidates.filter((t) => (t.depends_on || []).every((d) => doneIds.has(d)));
+                if (!candidates.length)
+                    return txt({ ok: false, message: "No available tasks to dispatch." });
+                // Sort
+                const priO = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+                candidates.sort((a, b) => {
+                    const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+                    if (pa !== pb)
+                        return pa - pb;
+                    return (a.created || "").localeCompare(b.created || "");
+                });
+                const maxD = Math.max(1, Math.min(params.max_dispatch || 5, 20));
+                const selected = candidates.slice(0, maxD);
+                // Auto-claim
+                const autoClaim = params.auto_claim !== false;
+                if (autoClaim) {
+                    for (const task of selected) {
+                        for (const t of tasks) {
+                            if (t.id === task.id) {
+                                t.status = "in_progress";
+                                break;
+                            }
+                        }
+                    }
+                    backlog.tasks = tasks;
+                    fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+                }
+                const loc = getProjectLocation(project, dataDir);
+                const dispatchList = selected.map((task) => ({
+                    task_id: task.id,
+                    title: task.title,
+                    description: task.description || "",
+                    priority: task.priority || "p2",
+                    labels: (task.labels || []).join(", "),
+                    depends_on: (task.depends_on || []).map((d) => {
+                        const dt = tasks.find((t2) => t2.id === d);
+                        return dt ? `${d} — ${dt.title}` : d;
+                    }),
+                    spawn_key: `task_${task.id.replace(/[^a-z0-9]/gi, "_")}`,
+                }));
+                return txt({
+                    ok: true,
+                    project,
+                    location: loc || "not configured",
+                    dispatched_count: selected.length,
+                    total_available: candidates.length,
+                    total_backlog: tasks.length,
+                    tasks: dispatchList,
+                    instructions: `Use sessions_spawn for each task above. Spawn sub-agents with taskName=spawn_key for traceability.`,
+                });
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  NEXT TOOL — Create Project
         // ═══════════════════════════════════════════════════════════
         api.registerTool({
             name: "orchestrator_create_project",

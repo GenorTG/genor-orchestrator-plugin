@@ -293,12 +293,17 @@ body{
 .proj-detail .file-item{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid rgba(48,54,61,.3);font-size:11px}
 .proj-detail .file-item:hover{background:rgba(88,166,255,.03)}
 .proj-detail .agent-tree{font-size:11px;font-family:var(--font);line-height:1.8}
+.routing-input{min-width:200px}
+.routing-input:focus{border-color:var(--blue);outline:none}
+.routing-cat-select{min-width:120px}
 .proj-detail .agent-tree .node{display:flex;gap:6px;padding:2px 0}
 .proj-detail .agent-tree .node .icon{flex-shrink:0;width:16px;text-align:center}
 .proj-detail .agent-tree .node .icon.g{color:var(--green)}
 .proj-detail .agent-tree .node .icon.r{color:var(--red)}
 .proj-detail .agent-tree .node .icon.y{color:var(--yellow)}
 .proj-detail .agent-tree .node .icon.dim{color:var(--text-dim)}
+.proj-detail .backlog-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;transition:background .15s}
+.proj-detail .backlog-item:hover{background:rgba(255,255,255,.03)}
 
 /* ═══════════════════════════════════════════════════════════════
    MODELS TAB (preserved from v3, tightened)
@@ -614,6 +619,12 @@ input.search:focus{border-color:var(--blue);outline:none}
       <div class="proj-actions">
         <button class="btn btn-sm btn-warning" data-tip="Toggle free-only mode for this project" onclick="projToggleFree()">Toggle Free-Only</button>
         <button class="btn btn-sm" data-tip="Configure model allowlist and routing rules for this project" onclick="projOpenConfig()">Model Config</button>
+        <span style="display:inline-flex;align-items:center;gap:4px;border-left:1px solid var(--border);padding-left:8px;margin-left:4px">
+          <span style="font-size:10px;color:var(--text-dim)">Model:</span>
+          <select class="model-select inp" style="font-size:11px;max-width:180px" onchange="projSetModel(this.value)">
+            <option value="">auto</option>
+          </select>
+        </span>
       </div>
     </div>
     <div class="tabs-secondary">
@@ -624,6 +635,7 @@ input.search:focus{border-color:var(--blue);outline:none}
       <span class="stab" data-stab="sessions" data-tip="Session history — all logged agent sessions for this project" onclick="switchProjTab('sessions')">📝 Session Log</span>
       <span class="stab" data-stab="files" data-tip="Project file management — create and edit documentation files" onclick="switchProjTab('files')">📁 FILES</span>
       <span class="stab" data-stab="manager" data-tip="Agent tree — sub-agent hierarchy, tasks, and distribution" onclick="switchProjTab('manager')">🤖 MANAGER</span>
+      <span class="stab" data-stab="backlog" data-tip="Backlog — task tracking, priorities, and status for this project" onclick="switchProjTab('backlog')">🎯 BACKLOG</span>
     </div>
     <div class="doc-area show" id="projDocArea">
       <div class="doc-toolbar">
@@ -649,6 +661,9 @@ input.search:focus{border-color:var(--blue);outline:none}
     </div>
     <div class="doc-area" id="projManagerArea">
       <div class="agent-tree" id="projAgentTree"></div>
+    </div>
+    <div class="doc-area" id="projBacklogArea">
+      <div class="backlog-widget" id="projBacklog"></div>
     </div>
   </div>
 </div>
@@ -1357,6 +1372,31 @@ function agentStatusLabel(s) {
   return s;
 }
 
+// ── Agent control actions ──
+async function stopAgent(name, project) {
+  if (!confirm(`Stop agent "${name}" on project "${project}"?`)) return;
+  const r = await api('/api/agent-action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'stop_agent', agent: name, project })
+  });
+  if (r.error) toast('Failed: ' + r.error, 'error');
+  else toast('⏹ Stop action queued for ' + name, 'info');
+  setTimeout(refreshAll, 1000);
+}
+
+async function recoverAgent(name, project) {
+  if (!confirm(`Attempt recovery of agent "${name}" on "${project}"?`)) return;
+  const r = await api('/api/recover-stuck', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timeout_seconds: 300 })
+  });
+  if (r.error) toast('Failed: ' + r.error, 'error');
+  else toast('🔄 Recovery action queued for ' + name, 'info');
+  setTimeout(refreshAll, 1000);
+}
+
 function renderAgents() {
   const grid = $('agentGrid');
   const agents = DS.agents || [];
@@ -1392,8 +1432,20 @@ function renderAgents() {
     // Badge for model tier if available
     const modelBadge = a.model_tier ? ' <span class="tier-badge t' + a.model_tier + '">T' + a.model_tier + '</span>' : '';
 
+    // Health status indicator (Phase 5a)
+    const hs = a.health_status || 'unknown';
+    const hsColors = { healthy: 'var(--green)', warning: 'var(--yellow)', stale: 'var(--red)', unknown: 'var(--text-dim)' };
+    const hsLabels = { healthy: 'Healthy', warning: 'Warning', stale: 'Stale', unknown: 'Unknown' };
+    const hsColor = hsColors[hs] || hsColors.unknown;
+    const hsLabel = hsLabels[hs] || hsLabels.unknown;
+    const lastActive = a.last_active_at ? timeAgo(a.last_active_at) : 'never';
+    const healthTip = hsLabel + ' — last active ' + lastActive;
+
     html += '<div class="agent-card">' +
-      '<div class="top" onclick="openAgentModal(\'' + esc(agentName) + '\')" style="cursor:pointer"><span class="name">' + esc(agentName) + '</span>' +
+      '<div class="top" onclick="openAgentModal(\'' + esc(agentName) + '\')" style="cursor:pointer">' +
+      '<span class="name">' +
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + hsColor + ';margin-right:6px;vertical-align:middle" title="' + esc(healthTip) + '"></span>' +
+      esc(agentName) + '</span>' +
       '<span class="status-badge ' + stCls + '">' + esc(stLbl) + '</span></div>' +
       (a.project ? '<div class="project-name">' + esc(a.project) + '</div>' : '') +
       '<div class="info">' +
@@ -1407,7 +1459,8 @@ function renderAgents() {
       '</div>' +
       '<div style="padding:4px 8px 6px;display:flex;gap:4px">' +
       '<button class="btn btn-xs" onclick="event.stopPropagation();openAgentModal(\'' + esc(agentName) + '\')" style="flex:1">📋 Details</button>' +
-
+      (a.project ? '<button class="btn btn-xs" onclick="event.stopPropagation();stopAgent(\'' + esc(agentName) + '\',\'' + esc(a.project) + '\')" style="flex:0" title="Stop agent">⏹</button>' : '') +
+      (a.project ? '<button class="btn btn-xs" onclick="event.stopPropagation();recoverAgent(\'' + esc(agentName) + '\',\'' + esc(a.project) + '\')" style="flex:0" title="Recover stuck agent">🔄</button>' : '') +
       '</div>' +
       depthHtml + '</div>';
   }
@@ -1438,15 +1491,19 @@ function renderProjects() {
     const allowlist = p.allowlist_count||0;
     const freeOnly = p.free_only||false;
     const liveCt = p.live_count||0;
+    // Active model display (Phase 3a)
+    const activeModelHtml = p.active_model
+      ? '<span style="font-size:9px;color:var(--yellow);display:block;margin-top:2px">⚡ ' + esc(p.active_model) + '</span>'
+      : '';
     html += '<div class="proj-card" onclick="openProjDetail(\'' + esc(p.name) + '\')">' +
       '<div class="top"><span class="proj-name">📁 ' + esc(p.name) + '</span>' +
       (liveCt ? '<span style="font-size:9px;color:var(--green)">● ' + liveCt + ' active</span>' : '') +
       '</div>' +
       '<div class="proj-meta">' +
-      '<span>' + (p.session_count||0) + ' sessions logged</span>' +
-      '<span>' + (p.task_count||0) + ' tasks</span>' +
+      '<span>' + (p.session_count||0) + ' sessions</span>' +
       (lastDate ? '<span>Last: ' + esc(lastDate) + '</span>' : '') +
       '</div>' +
+      activeModelHtml +
       '<div class="proj-badges">' +
       (freeOnly ? '<span class="badge" style="background:rgba(88,166,255,.15);color:var(--blue)">FREE ONLY</span>' : '') +
       (allowlist ? '<span class="badge" style="background:rgba(63,185,80,.15);color:var(--green)">' + allowlist + ' whitelisted</span>' : '') +
@@ -1474,10 +1531,13 @@ async function openProjDetail(name) {
   const r = await api('/api/project-state?name=' + encodeURIComponent(name));
   if (r.error) { toast('Error: ' + r.error, 'error'); return; }
   DS.projectState = r;
+  // Populate model dropdown (Phase 3b)
+  await populateModelSelect(name);
   renderProjDocTab();
   renderProjSessions();
   renderProjFiles();
   renderProjManager();
+  renderProjBacklog();
 }
 
 function closeProjDetail() {
@@ -1759,6 +1819,77 @@ async function projCreateFile() {
   else toast('Failed', 'error');
 }
 
+// ═══ Backlog Widget (Phase 3c) ═══
+async function renderProjBacklog() {
+  if (!CUR_PROJ) return;
+  const el = $('projBacklog');
+  if (!el) return;
+  const r = await api('/api/project-backlog?project=' + encodeURIComponent(CUR_PROJ));
+  const tasks = r.tasks || [];
+  window._cachedBacklogTasks = tasks;
+  
+  const done = tasks.filter(t => t.status === 'done').length;
+  const inProg = tasks.filter(t => t.status === 'in_progress').length;
+  const todo = tasks.filter(t => t.status === 'todo' || t.status === 'backlog').length;
+  const blocked = tasks.filter(t => t.status === 'blocked').length;
+  
+  let html = '<div style="display:flex;gap:12px;margin-bottom:12px;font-size:11px">' +
+    '<span style="color:var(--green)">✅ ' + done + ' done</span>' +
+    '<span style="color:var(--yellow)">🔄 ' + inProg + ' in progress</span>' +
+    '<span style="color:var(--text-dim)">📋 ' + todo + ' todo</span>' +
+    (blocked ? '<span style="color:var(--red)">🚫 ' + blocked + ' blocked</span>' : '') +
+    '<span style="flex:1;text-align:right;color:var(--text-dim)">' + tasks.length + ' total</span></div>';
+  
+  // Filters
+  html += '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+    '<input class="search" id="blSearch" placeholder="Filter tasks..." style="flex:1" oninput="filterBacklog()">' +
+    '<select id="blStatusFilter" class="btn btn-sm" onchange="filterBacklog()">' +
+    '<option value="">All</option><option value="todo">Todo</option><option value="in_progress">Active</option><option value="done">Done</option><option value="blocked">Blocked</option>' +
+    '</select>' +
+    '<select id="blPriFilter" class="btn btn-sm" onchange="filterBacklog()">' +
+    '<option value="">All Pri</option><option value="p0">P0</option><option value="p1">P1</option><option value="p2">P2</option><option value="p3">P3</option>' +
+    '</select></div>';
+  
+  html += '<div class="backlog-list" id="blList">' + renderBacklogTasks(tasks) + '</div>';
+  el.innerHTML = html;
+}
+
+function renderBacklogTasks(tasks) {
+  const sf = ($('blStatusFilter')?.value) || '';
+  const pf = ($('blPriFilter')?.value) || '';
+  const sq = ($('blSearch')?.value || '').toLowerCase();
+  const priO = { p0:0, p1:1, p2:2, p3:3, high:0.5, medium:1.5, low:3.5 };
+  const statO = { in_progress:0, todo:1, backlog:2, blocked:3, done:4 };
+  const sorted = [...tasks].sort((a,b) => {
+    const pa = priO[a.priority]??2, pb = priO[b.priority]??2;
+    if (pa !== pb) return pa - pb;
+    return (statO[a.status]??9) - (statO[b.status]??9);
+  });
+  let html = '';
+  for (const t of sorted) {
+    if (sf && t.status !== sf) continue;
+    if (pf && t.priority !== pf) continue;
+    if (sq && !(t.title||t.id||'').toLowerCase().includes(sq)) continue;
+    const icons = t.status==='done'?'✅':t.status==='in_progress'?'🔄':t.status==='blocked'?'🚫':'📋';
+    const priI = t.priority==='p0'?'🔴':t.priority==='p1'?'🟡':t.priority==='p2'?'🟢':t.priority==='p3'?'⚪':'';
+    const lbs = (t.labels||[]).map(l => '<span class="badge" style="background:rgba(88,166,255,.12);color:var(--blue);font-size:9px">' + esc(l) + '</span>').join('');
+    html += '<div class="backlog-item">' +
+      '<span style="font-size:14px;width:20px">' + icons + '</span>' +
+      '<span style="font-size:11px;width:24px;text-align:center">' + priI + '</span>' +
+      '<span style="flex:1;font-size:12px">' + esc(t.title||t.id||'') + '</span>' +
+      (lbs ? '<span style="display:flex;gap:3px;flex-wrap:wrap">' + lbs + '</span>' : '') +
+      '<span style="font-size:10px;color:var(--text-dim);font-family:monospace">#' + (t.id||'').slice(-6) + '</span></div>';
+  }
+  return html || '<div style="padding:20px;text-align:center;color:var(--text-dim);font-size:12px">No matching tasks.</div>';
+}
+
+function filterBacklog() {
+  const t = window._cachedBacklogTasks;
+  if (!t) return;
+  const list = $('blList');
+  if (list) list.innerHTML = renderBacklogTasks(t);
+}
+
 function renderProjManager() {
   const s = DS.projectState;
   const tree = $('projAgentTree');
@@ -1777,8 +1908,15 @@ function renderProjManager() {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--green);margin-bottom:4px">\u25cf Currently Active</div>';
     for (const ls of matched) {
       const stCls = ls.status === 'idle' ? 'var(--text-dim)' : ls.status === 'prompting' || ls.status === 'working' ? 'var(--green)' : 'var(--yellow)';
+      // Health indicator
+      const lh = ls.health_status || 'unknown';
+      const lhColors = { healthy: 'var(--green)', warning: 'var(--yellow)', stale: 'var(--red)', unknown: 'var(--text-dim)' };
+      const lhColor = lhColors[lh] || lhColors.unknown;
+      const lhLabels = { healthy: 'Healthy', warning: 'Warning', stale: 'Stale', unknown: 'Unknown' };
+      const lhTip = (lhLabels[lh] || 'Unknown') + ' — last active ' + (ls.last_active_at ? timeAgo(ls.last_active_at) : 'never');
       h += '<div style="display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;font-size:11px">';
       h += '<span style="width:6px;height:6px;border-radius:50%;background:' + stCls + '"></span>';
+      h += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + lhColor + ';margin-right:2px" title="' + esc(lhTip) + '"></span>';
       h += '<span style="color:var(--text-bright);font-weight:600">' + esc(ls.displayName||ls.key||'?') + '</span>';
       h += '<span style="color:var(--blue);font-size:10px">' + esc(ls.model||'') + '</span>';
       h += '<span style="color:' + stCls + ';font-size:10px">' + esc(ls.status||'idle') + '</span>';
@@ -1791,6 +1929,29 @@ function renderProjManager() {
     h += '\u25cf ' + agentsCt + ' agent(s) working on this project via current session</div>';
   }
   
+  // Phase 5b: Fallback chain display
+  const projCfg = (DS.config && DS.config.projects && DS.config.projects[CUR_PROJ]) || {};
+  const projRouting = projCfg.model_routing || (s.config && s.config.model_routing) || null;
+  if (projRouting && Object.keys(projRouting).length > 0) {
+    h += '<div style="margin-bottom:8px">';
+    h += '<div style="font-size:10px;text-transform:uppercase;color:var(--yellow);margin-bottom:4px">⬇ Fallback Chains</div>';
+    const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+    for (const [cat, models] of Object.entries(projRouting)) {
+      if (!Array.isArray(models) || models.length === 0) continue;
+      h += '<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 8px;margin-bottom:3px;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);font-size:10px">';
+      h += '<span style="min-width:90px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat] || '▸') + ' ' + esc(cat) + '</span>';
+      h += '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
+      for (let i = 0; i < models.length; i++) {
+        const isPrimary = i === 0;
+        const label = esc(models[i].split('/').pop() || models[i]);
+        h += '<span style="padding:1px 6px;border-radius:8px;background:' + (isPrimary ? 'rgba(63,185,80,0.15)' : 'rgba(139,148,158,0.1)') + ';color:' + (isPrimary ? 'var(--green)' : 'var(--text-dim)') + ';font-size:10px;font-weight:' + (isPrimary ? '600' : '400') + '" title="' + esc(models[i]) + '">' + label + '</span>';
+        if (i < models.length - 1) h += '<span style="color:var(--text-dim);font-size:8px">→</span>';
+      }
+      h += '</div></div>';
+    }
+    h += '</div>';
+  }
+
   // Logged sessions timeline
   if (logged.length > 0) {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">Session Timeline</div>';
@@ -1832,6 +1993,55 @@ function renderProjManager() {
   tree.innerHTML = h;
 }
 
+// ═══ Model Selection (Phase 3a/3b) ═══
+async function populateModelSelect(projName) {
+  const sel = document.querySelector('.model-select');
+  if (!sel) return;
+  // Fetch models and all data
+  const allData = await api('/api/all');
+  const models = (allData?.models?.models) || [];
+  const project = (allData?.projects?.projects || []).find(p => p.name === projName);
+  const currentModel = project?.active_model || '';
+  
+  // Preserve current selection
+  sel.innerHTML = '<option value="">— auto —</option>';
+  for (const m of models) {
+    if (m.status === 'removed') continue;
+    const label = (m.name || m.id) + ' [' + (m.provider || '?') + ']' + (m.tier !== undefined ? ' (T' + m.tier + ')' : '');
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = label;
+    if (m.id === currentModel) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+async function projSetModel(modelId) {
+  if (!CUR_PROJ) return;
+  if (!modelId) {
+    // Clear assignment: set empty allowlist
+    const pc = DS.config?.projects?.[CUR_PROJ] || {};
+    const r = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ projects: { [CUR_PROJ]: { model_allowlist: [], free_only: pc.free_only || false } } })
+    });
+    if (r.ok) { toast('Model cleared for ' + CUR_PROJ); } else { toast('Error: ' + r.error, 'error'); }
+    return;
+  }
+  const r = await api('/api/set-project-model', {
+    method: 'POST',
+    body: JSON.stringify({ project: CUR_PROJ, model_id: modelId })
+  });
+  if (r.ok) {
+    toast('✅ Model set: ' + r.model);
+    // Refresh
+    await populateModelSelect(CUR_PROJ);
+    renderProjects();
+  } else {
+    toast('Error: ' + r.error, 'error');
+  }
+}
+
 async function projToggleFree() {
   if (!CUR_PROJ) return;
   const pc = DS.config && DS.config.projects && DS.config.projects[CUR_PROJ];
@@ -1842,6 +2052,50 @@ async function projToggleFree() {
     body: JSON.stringify({ projects: { [CUR_PROJ]: { model_allowlist: (pc&&pc.model_allowlist)||[], free_only: !cur } } })
   });
   if (r.ok) { toast('Free-only ' + (!cur ? 'ON' : 'OFF'), 'success'); await initLoad(); }
+}
+
+// ── Routing chain editing ──
+function addRoutingChain() {
+  const sel = document.querySelector('.routing-cat-select');
+  if (!sel || !sel.value) return;
+  const cat = sel.value;
+  const container = sel.closest('div');
+  // Insert a new routing row before the add-row
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px';
+  const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+  row.innerHTML = '<span style="min-width:100px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat]||'▸') + ' ' + esc(cat) + '</span>' +
+    '<input class="routing-input" data-cat="' + esc(cat) + '" value="" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;font-family:var(--font);color:var(--text)" placeholder="model1, model2, ...">' +
+    '<button class="btn btn-xs" onclick="removeRoutingChain(\'' + esc(cat) + '\')" title="Remove chain">✕</button>';
+  container.parentNode.insertBefore(row, container);
+  // Remove the option from select
+  const opt = sel.querySelector('option[value="' + CSS.escape(cat) + '"]');
+  if (opt) opt.remove();
+  // If no more options, hide the add-row
+  if (sel.options.length === 0) {
+    container.style.display = 'none';
+  }
+}
+
+function removeRoutingChain(cat) {
+  // Find the routing input row with this category and remove it
+  const input = document.querySelector('.routing-input[data-cat="' + CSS.escape(cat) + '"]');
+  if (!input) return;
+  const row = input.closest('div');
+  if (row) row.remove();
+  // Show the add-row and re-add the option
+  const addContainer = document.querySelector('.routing-cat-select')?.closest('div');
+  if (addContainer) {
+    addContainer.style.display = 'flex';
+    const sel = addContainer.querySelector('.routing-cat-select');
+    if (sel) {
+      const opt = document.createElement('option');
+      opt.value = cat;
+      const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+      opt.textContent = (catIcons[cat]||'') + ' ' + cat;
+      sel.appendChild(opt);
+    }
+  }
 }
 
 async function projOpenConfig() {
@@ -1855,7 +2109,80 @@ async function projOpenConfig() {
   h += '<div style="margin-bottom:10px;display:flex;align-items:center;gap:10px">' +
     '<div class="toggle-sw' + (fo?' on':'') + '" id="mpFreeToggle" onclick="this.classList.toggle(\'on\')"></div>' +
     '<span style="font-size:11px;color:var(--text-dim)">Free-Only</span>' +
-    '<button class="btn btn-sm btn-success" onclick="saveProjConfig(\'' + esc(CUR_PROJ) + '\')" style="margin-left:auto">💾 Save</button></div>';
+    '<button class="btn btn-sm btn-success" onclick="saveProjConfig(\'' + esc(CUR_PROJ) + '\')" style="margin-left:auto">💾 Save Routing</button></div>';
+  
+  // ── Routing Preset Selector ──
+  const curPreset = pc.routing_preset || 'custom';
+  const curSingleProv = pc.routing_single_provider || '';
+  const presetDefs = {
+    'custom': { label: '🎯 Custom Chains', desc: 'Per-task-type model preference chains. Full control over which model handles each category.' },
+    'no-steering': { label: '⊘ No Steering', desc: 'Skip all model overrides — use OpenClaw\'s default model and fallback resolution.' },
+    'custom-fallbacks-only': { label: '🔁 Custom Fallbacks Only', desc: 'Let OpenClaw pick the primary model, but use custom chains as fallback if primary is unavailable.' },
+    'free-only': { label: '🆓 Free Only', desc: 'Enforce free-tier models only — filter out all subscription and pay-per-use models.' },
+    'single-provider': { label: '🏢 Single Provider', desc: 'Restrict routing to a single provider — select which one below.' },
+  };
+  
+  h += '<div style="margin-bottom:8px;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:var(--bg-alt)">';
+  h += '<div style="font-size:10px;text-transform:uppercase;color:var(--cyan);margin-bottom:6px">🧠 Routing Preset</div>';
+  h += '<select id="routingPreset" onchange="onPresetChange()" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:4px 6px;font-size:11px;color:var(--text);margin-bottom:4px">';
+  for (const [key, def] of Object.entries(presetDefs)) {
+    h += '<option value="' + key + '"' + (key === curPreset ? ' selected' : '') + '>' + esc(def.label) + '</option>';
+  }
+  h += '</select>';
+  h += '<div id="presetDesc" style="font-size:9px;color:var(--text-dim);line-height:1.4">' + esc(presetDefs[curPreset].desc) + '</div>';
+  
+  // Single-provider input (shown only when preset is single-provider)
+  const spVisible = curPreset === 'single-provider' ? '' : ' style="display:none"';
+  h += '<div id="singleProvGroup"' + spVisible + ' style="margin-top:6px">';
+  h += '<input id="singleProviderInput" value="' + esc(curSingleProv) + '" placeholder="Provider name, e.g. openrouter, opencode-go" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:10px;color:var(--text)">';
+  h += '<div style="margin-top:3px;font-size:9px;color:var(--text-dim)">Enter the provider slug (e.g. <code>openrouter</code>, <code>opencode-go</code>, <code>google-gla</code>)</div>';
+  h += '</div>';
+  h += '</div>';
+
+  // ── Routing chain editor ──
+  const routing = pc.model_routing || {};
+  const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+  const catOrder = ['coding','fixing','research','qa','documentation'];
+  h += '<div style="margin-bottom:10px;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:var(--bg-alt)">';
+  h += '<div style="font-size:10px;text-transform:uppercase;color:var(--yellow);margin-bottom:6px">⬇ Routing Chains</div>';
+  
+  // Existing routing chains
+  let hasRouting = false;
+  for (const cat of catOrder) {
+    const models = routing[cat];
+    if (!Array.isArray(models) || models.length === 0) continue;
+    hasRouting = true;
+    h += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px">';
+    h += '<span style="min-width:100px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat]||'▸') + ' ' + esc(cat) + '</span>';
+    h += '<input class="routing-input" data-cat="' + esc(cat) + '" value="' + esc(models.join(', ')) + '" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;font-family:var(--font);color:var(--text)" placeholder="model1, model2, ...">';
+    h += '<button class="btn btn-xs" onclick="removeRoutingChain(\'' + esc(cat) + '\')" title="Remove chain">✕</button></div>';
+  }
+  
+  // Add new chain dropdown
+  const unusedCats = catOrder.filter(c => !routing[c] || routing[c].length === 0);
+  if (unusedCats.length > 0) {
+    h += '<div style="display:flex;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">';
+    h += '<select class="routing-cat-select" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;color:var(--text)">';
+    for (const uc of unusedCats) {
+      h += '<option value="' + esc(uc) + '">' + (catIcons[uc]||'') + ' ' + esc(uc) + '</option>';
+    }
+    h += '</select>';
+    h += '<button class="btn btn-xs" onclick="addRoutingChain()">+ Add Chain</button></div>';
+  }
+  
+  if (!hasRouting && unusedCats.length === catOrder.length) {
+    h += '<div style="color:var(--text-dim);font-size:10px;padding:4px 0">No chains configured. Add one below:</div>';
+    h += '<div style="display:flex;gap:6px;margin-top:4px">';
+    h += '<select class="routing-cat-select" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;color:var(--text)">';
+    for (const uc of unusedCats) {
+      h += '<option value="' + esc(uc) + '">' + (catIcons[uc]||'') + ' ' + esc(uc) + '</option>';
+    }
+    h += '</select>';
+    h += '<button class="btn btn-xs" onclick="addRoutingChain()">+ Add Chain</button></div>';
+  }
+  
+  h += '</div>';
+
   h += '<input class="search" id="mpSearch" placeholder="Search models..." oninput="filterMp()" style="width:100%;margin-bottom:8px">';
   h += '<div style="max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:4px">';
   for (const m of all) {
@@ -1877,17 +2204,66 @@ function filterMp() {
   });
 }
 
+// ── Preset change handler ──
+function onPresetChange() {
+  const sel = $('routingPreset');
+  const desc = $('presetDesc');
+  if (!sel) return;
+  const v = sel.value;
+  const presetDefs = {
+    'custom': 'Per-task-type model preference chains. Full control over which model handles each category.',
+    'no-steering': 'Skip all model overrides — use OpenClaw\'s default model and fallback resolution.',
+    'custom-fallbacks-only': 'Let OpenClaw pick the primary model, but use custom chains as fallback if primary is unavailable.',
+    'free-only': 'Enforce free-tier models only — filter out all subscription and pay-per-use models.',
+    'single-provider': 'Restrict routing to a single provider — enter the provider slug below.',
+  };
+  if (desc) desc.textContent = presetDefs[v] || '';
+  
+  // Show/hide single-provider input
+  const spGroup = $('singleProvGroup');
+  if (spGroup) {
+    spGroup.style.display = v === 'single-provider' ? '' : 'none';
+  }
+}
+
 async function saveProjConfig(name) {
   const checks = document.querySelectorAll('.mpcb:checked');
   const wl = Array.from(checks).map(c => c.value);
   const fo = $('mpFreeToggle').classList.contains('on');
-  const r = await api('/api/config', {
+  
+  // Collect routing chains from the editor inputs
+  const routingInputs = document.querySelectorAll('.routing-input');
+  const routing = {};
+  for (const inp of routingInputs) {
+    const cat = inp.getAttribute('data-cat');
+    const models = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+    if (cat && models.length > 0) routing[cat] = models;
+  }
+  
+  // Collect routing preset
+  const presetSel = $('routingPreset');
+  const preset = presetSel ? presetSel.value : 'custom';
+  const singleProv = $('singleProviderInput') ? $('singleProviderInput').value.trim() : '';
+  
+  // Save via set-project-routing endpoint
+  const body = {
+    project: name,
+    preset: preset !== 'custom' ? preset : undefined,
+    routing: Object.keys(routing).length > 0 ? routing : undefined,
+    free_only: fo,
+    model_allowlist: wl,
+  };
+  if (preset === 'single-provider' && singleProv) {
+    body.routing_single_provider = singleProv;
+  }
+  
+  const r = await api('/api/set-project-routing', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ projects: { [name]: { model_allowlist: wl, free_only: fo } } })
+    body: JSON.stringify(body)
   });
-  if (r.ok) { toast('Saved ' + wl.length + ' models', 'success'); closeModal(); await initLoad(); }
-  else toast('Failed', 'error');
+  if (r.ok) { toast('Saved config + routing', 'success'); closeModal(); await initLoad(); }
+  else toast('Failed: ' + (r.error||'unknown'), 'error');
 }
 
 /* ═══════════════════════════════════════════════════════════════

@@ -2,7 +2,7 @@
   "id": "genor-orchestrator",
   "name": "Genor's Orchestrator",
   "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -63,7 +63,9 @@
       "orchestrator_create_project",
       "orchestrator_backlog_add",
       "orchestrator_backlog_list",
-      "orchestrator_backlog_update"
+      "orchestrator_backlog_update",
+      "orchestrator_backlog_dispatch",
+      "orchestrator_backlog_dispatch_all"
     ]
   }
 }
