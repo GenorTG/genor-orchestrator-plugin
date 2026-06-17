@@ -2016,6 +2016,7 @@ const TOOL_NAMES = [
   "orchestrator_backlog_list",
   "orchestrator_backlog_update",
   "orchestrator_backlog_dispatch",
+  "orchestrator_backlog_dispatch_all",
 ] as const;
 
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
@@ -2048,7 +2049,8 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
   { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
   { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
-  { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Respects dependencies, labels, priority ordering, and auto-claim support.", parameters: { type: "object", properties: { project: { type: "string", description: "Override project." }, task_id: { type: "string", description: "Specific task ID. Omit for auto-pick." }, auto_claim: { type: "boolean", description: "Auto-mark task in_progress." }, filter_labels: { type: "string", description: "Comma-separated label filter." } } } },
+  { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
+  { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
 ];
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -3600,6 +3602,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         task_id: Type.Optional(Type.String({ description: "Specific task ID to dispatch. If omitted, picks the highest-priority todo task with all dependencies resolved." })),
         auto_claim: Type.Optional(Type.Boolean({ description: "Auto-mark the task as in_progress (default: false)." })),
         filter_labels: Type.Optional(Type.String({ description: "Comma-separated label filter. Only dispatch tasks matching ANY of these labels." })),
+        max_dispatch: Type.Optional(Type.Number({ description: "Max parallel tasks to dispatch (Phase 2c). Returns up to N dispatchable tasks. Default: 1." })),
       }),
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
@@ -3620,7 +3623,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           candidates = candidates.filter((t: any) => t.id === params.task_id);
           if (!candidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
         }
-        // Resolve dependencies
+        // Resolve dependencies — only tasks whose deps are done
         const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
         candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
         if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
@@ -3631,44 +3634,160 @@ const _plugin: Record<string, any> = definePluginEntry({
           if (pa !== pb) return pa - pb;
           return (a.created || "").localeCompare(b.created || "");
         });
-        const task = candidates[0];
-        // Auto-claim
+
+        // Phase 2c: Support parallel dispatch — take up to max_dispatch tasks
+        const maxD = Math.max(1, Math.min(params.max_dispatch || 1, 10));
+        const selected = candidates.slice(0, maxD);
+
+        // Auto-claim selected tasks
         if (params.auto_claim) {
-          for (const t of tasks) { if (t.id === task.id) t.status = "in_progress"; }
+          const claimedIds: string[] = [];
+          for (const task of selected) {
+            for (const t of tasks) {
+              if (t.id === task.id) {
+                t.status = "in_progress";
+                claimedIds.push(task.id);
+                break;
+              }
+            }
+          }
           backlog.tasks = tasks;
           fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
-          logger.info("dispatch", `Backlog task claimed: ${task.id} — ${task.title}`);
+          logger.info("dispatch", `Claimed ${claimedIds.length} tasks: ${claimedIds.join(", ")}`);
+        }
+
+        const loc = getProjectLocation(project, dataDir);
+        const dispatchList = selected.map((task: any) => {
+          const labels = (task.labels || []).join(", ");
+          const deps = (task.depends_on || []).map((d: string) => {
+            const dt = tasks.find((t2: any) => t2.id === d);
+            return dt ? `${d} — ${dt.title}` : d;
+          });
+          return {
+            task_id: task.id,
+            title: task.title,
+            description: task.description || "",
+            priority: task.priority || "p2",
+            labels,
+            depends_on: deps,
+            spawn: [
+              `🎯 Task: ${task.title}`,
+              `ID: ${task.id}`,
+              task.description ? `Description: ${task.description}` : "",
+              `Priority: ${task.priority || "p2"}`,
+              labels ? `Labels: ${labels}` : "",
+              deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+            ].filter(Boolean).join("\n"),
+          };
+        });
+
+        const result: any = {
+          ok: true,
+          project,
+          location: loc || "not configured",
+          dispatched_count: selected.length,
+          total_available: candidates.length,
+          total_backlog: tasks.length,
+          tasks: dispatchList,
+        };
+
+        // Single-task mode: backward-compatible top-level fields
+        if (selected.length === 1) {
+          const task = selected[0];
+          const labels = (task.labels || []).join(", ");
+          const deps = (task.depends_on || []).map((d: string) => {
+            const dt = tasks.find((t2: any) => t2.id === d);
+            return dt ? `${d} — ${dt.title}` : d;
+          });
+          Object.assign(result, {
+            task_id: task.id,
+            title: task.title,
+            description: task.description || "",
+            priority: task.priority || "p2",
+            labels,
+            status: task.status,
+            depends_on: deps,
+            spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use orchestrator_spawn_subagent or sessions_spawn to dispatch this task.`,
+          });
+        }
+
+        return txt(result);
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  NEW TOOL — Backlog Dispatch All (Phase 2c: Parallel dispatch)
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_backlog_dispatch_all",
+      label: "Backlog Dispatch All",
+      description: "Dispatch ALL currently available backlog tasks up to a max count, for parallel sub-agent execution. Returns spawn instructions for each task. Respects dependency resolution — only returns tasks whose dependencies are complete.",
+      parameters: Type.Object({
+        project: Type.Optional(Type.String({ description: "Override project. Default: current project." })),
+        max_dispatch: Type.Optional(Type.Number({ description: "Maximum tasks to dispatch (default: 5, max: 20)." })),
+        auto_claim: Type.Optional(Type.Boolean({ description: "Auto-mark tasks as in_progress (default: true)." })),
+        filter_labels: Type.Optional(Type.String({ description: "Comma-separated label filter. Only dispatch tasks matching ANY label." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        const project = params.project || sessionTracker.currentProject;
+        if (!project) return txt({ ok: false, error: "No project selected." });
+        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
+        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json for "${project}".` });
+        let backlog: any;
+        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
+        const tasks = backlog.tasks || [];
+        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
+        if (params.filter_labels) {
+          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
+          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
+        }
+        // Resolve dependencies
+        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
+        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
+        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch." });
+        // Sort
+        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+        candidates.sort((a: any, b: any) => {
+          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+          if (pa !== pb) return pa - pb;
+          return (a.created || "").localeCompare(b.created || "");
+        });
+        const maxD = Math.max(1, Math.min(params.max_dispatch || 5, 20));
+        const selected = candidates.slice(0, maxD);
+        // Auto-claim
+        const autoClaim = params.auto_claim !== false;
+        if (autoClaim) {
+          for (const task of selected) {
+            for (const t of tasks) { if (t.id === task.id) { t.status = "in_progress"; break; } }
+          }
+          backlog.tasks = tasks;
+          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
         }
         const loc = getProjectLocation(project, dataDir);
-        const labels = (task.labels || []).join(", ");
-        const deps = (task.depends_on || []).map((d: string) => {
-          const dt = tasks.find((t2: any) => t2.id === d);
-          return dt ? `${d} — ${dt.title}` : d;
-        });
-        return txt({
-          ok: true,
+        const dispatchList = selected.map((task: any) => ({
           task_id: task.id,
           title: task.title,
           description: task.description || "",
           priority: task.priority || "p2",
-          labels,
-          status: task.status,
+          labels: (task.labels || []).join(", "),
+          depends_on: (task.depends_on || []).map((d: string) => {
+            const dt = tasks.find((t2: any) => t2.id === d);
+            return dt ? `${d} — ${dt.title}` : d;
+          }),
+          spawn_key: `task_${task.id.replace(/[^a-z0-9]/gi, "_")}`,
+        }));
+        return txt({
+          ok: true,
           project,
           location: loc || "not configured",
-          depends_on: deps,
-          available_tasks: candidates.length,
+          dispatched_count: selected.length,
+          total_available: candidates.length,
           total_backlog: tasks.length,
-          spawn_instructions: [
-            `🎯 Dispatch: ${task.title}`,
-            `Project: ${project}`,
-            `Task ID: ${task.id}`,
-            task.description ? `Description: ${task.description}` : "",
-            `Priority: ${task.priority || "p2"}`,
-            labels ? `Labels: ${labels}` : "",
-            loc ? `Location: ${loc}` : "",
-            deps.length ? `Dependencies: ${deps.join("; ")}` : "",
-            `📋 Use orchestrator_spawn_subagent(task="${task.title}") or sessions_spawn to dispatch to a sub-agent.`,
-          ].filter(Boolean).join("\n"),
+          tasks: dispatchList,
+          instructions: `Use sessions_spawn for each task above. Spawn sub-agents with taskName=spawn_key for traceability.`,
         });
       },
     });

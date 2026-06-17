@@ -193,6 +193,7 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
         active_model: activeModel,
         active_model_provider: activeModelProvider,
         active_model_details: modelDetails,
+        model_routing: pc.model_routing || null,
       });
     }
   }

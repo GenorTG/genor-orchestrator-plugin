@@ -1881,6 +1881,29 @@ function renderProjManager() {
     h += '\u25cf ' + agentsCt + ' agent(s) working on this project via current session</div>';
   }
   
+  // Phase 5b: Fallback chain display
+  const projCfg = (DS.config && DS.config.projects && DS.config.projects[CUR_PROJ]) || {};
+  const projRouting = projCfg.model_routing || (s.config && s.config.model_routing) || null;
+  if (projRouting && Object.keys(projRouting).length > 0) {
+    h += '<div style="margin-bottom:8px">';
+    h += '<div style="font-size:10px;text-transform:uppercase;color:var(--yellow);margin-bottom:4px">⬇ Fallback Chains</div>';
+    const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+    for (const [cat, models] of Object.entries(projRouting)) {
+      if (!Array.isArray(models) || models.length === 0) continue;
+      h += '<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 8px;margin-bottom:3px;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);font-size:10px">';
+      h += '<span style="min-width:90px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat] || '▸') + ' ' + esc(cat) + '</span>';
+      h += '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
+      for (let i = 0; i < models.length; i++) {
+        const isPrimary = i === 0;
+        const label = esc(models[i].split('/').pop() || models[i]);
+        h += '<span style="padding:1px 6px;border-radius:8px;background:' + (isPrimary ? 'rgba(63,185,80,0.15)' : 'rgba(139,148,158,0.1)') + ';color:' + (isPrimary ? 'var(--green)' : 'var(--text-dim)') + ';font-size:10px;font-weight:' + (isPrimary ? '600' : '400') + '" title="' + esc(models[i]) + '">' + label + '</span>';
+        if (i < models.length - 1) h += '<span style="color:var(--text-dim);font-size:8px">→</span>';
+      }
+      h += '</div></div>';
+    }
+    h += '</div>';
+  }
+
   // Logged sessions timeline
   if (logged.length > 0) {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">Session Timeline</div>';

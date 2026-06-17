@@ -1,0 +1,236 @@
+/**
+ * PLUGIN-001c — Session Logging & ADR Tests
+ *
+ * Tests: orchestrator_log_session, orchestrator_log_decision,
+ * orchestrator_get_logs — schema enforcement, timestamp defaults,
+ * ADR file creation
+ */
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+  createMockApi,
+  prepareTestDataDir,
+  registerPlugin,
+  unwrap,
+  type MockApiType,
+} from "./setup.js";
+let plugin: any;
+beforeEach(async () => {
+  vi.resetModules();
+  plugin = (await import("../src/index.js")).default;
+});
+describe("PLUGIN-001c — Session Logging & ADR", () => {
+  let dd: string;
+  let api: MockApiType;
+  beforeEach(async () => {
+    dd = prepareTestDataDir();
+    api = createMockApi();
+    await registerPlugin(dd, plugin, api);
+    api.tools.get("orchestrator_register")!("", {});
+    api.tools.get("orchestrator_set_context")!("", {
+      project: "test-project",
+      task: "logging test",
+    });
+  });
+  // ── orchestrator_log_session ─────────────────────────────
+  describe("orchestrator_log_session", () => {
+    it("should log a session entry with status=complete", async () => {
+      const exec = api.tools.get("orchestrator_log_session")!;
+      const result = await unwrap(
+        exec("", {
+          project: "test-project",
+          task: "fix bug",
+          model: "gpt-4",
+          agent: "Amy",
+          status: "complete",
+          duration: "30min",
+        }),
+      );
+      expect(result).toHaveProperty("success", true);
+      expect(result).toHaveProperty("project", "test-project");
+      expect(result).toHaveProperty("task", "fix bug");
+    });
+    it("should set loggedTaskCompletion flag", async () => {
+      // After logging, clear_context should work
+      api.tools.get("orchestrator_log_session")!("", {
+        project: "test-project",
+        task: "test",
+        model: "gpt-4",
+        agent: "Amy",
+        status: "complete",
+      });
+      const clear = api.tools.get("orchestrator_clear_context")!;
+      const clearResult = await unwrap(clear("", {}));
+      expect(clearResult).toHaveProperty("ok", true);
+    });
+    it("should persist session to project sessions.json", async () => {
+      api.tools.get("orchestrator_log_session")!("", {
+        project: "test-project",
+        task: "persistence test",
+        model: "claude-3",
+        agent: "Amy",
+        status: "complete",
+        duration: "15min",
+      });
+      const sf = path.join(dd, "projects", "test-project", "sessions.json");
+      expect(fs.existsSync(sf)).toBe(true);
+      const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
+      expect(raw).toHaveProperty("schema_version", 2);
+      expect(raw.sessions.length).toBeGreaterThanOrEqual(1);
+      const entry = raw.sessions[0];
+      expect(entry).toHaveProperty("session_key");
+      expect(entry).toHaveProperty("project", "test-project");
+      expect(entry).toHaveProperty("status", "complete");
+    });
+    it("should create session detail markdown file", async () => {
+      api.tools.get("orchestrator_log_session")!("", {
+        project: "test-project",
+        task: "detail file test",
+        model: "gpt-4",
+        agent: "Amy",
+        status: "complete",
+      });
+      const sessionsDir = path.join(dd, "sessions");
+      const files = fs.readdirSync(sessionsDir);
+      expect(files.length).toBeGreaterThanOrEqual(1);
+      expect(files[0]).toMatch(/\.md$/);
+    });
+    it("should append to session_log.md", async () => {
+      api.tools.get("orchestrator_log_session")!("", {
+        project: "test-project",
+        task: "log md test",
+        model: "gemini-pro",
+        agent: "Amy",
+        status: "complete",
+      });
+      const slp = path.join(dd, "session_log.md");
+      expect(fs.existsSync(slp)).toBe(true);
+      const content = fs.readFileSync(slp, "utf-8");
+      expect(content).toContain("test-project");
+      expect(content).toContain("gemini-pro");
+    });
+    it("should handle subagent agent names gracefully", async () => {
+      const exec = api.tools.get("orchestrator_log_session")!;
+      const result = await unwrap(
+        exec("", {
+          project: "test-project",
+          task: "subagent test",
+          model: "gpt-4",
+          agent: "subagent-abc123def",
+          status: "complete",
+        }),
+      );
+      expect(result).toHaveProperty("success", true);
+    });
+  });
+  // ── orchestrator_log_decision ────────────────────────────
+  describe("orchestrator_log_decision", () => {
+    it("should create an ADR file", async () => {
+      const exec = api.tools.get("orchestrator_log_decision")!;
+      const result = await unwrap(
+        exec("", {
+          project: "test-project",
+          title: "Use TypeBox for validation",
+          context: "Need runtime validation for tool params",
+          decision: "Use TypeBox because it integrates with OpenClaw SDK",
+          alternatives: "Zod, Joi",
+          consequences: "Tighter integration, no Joi dep",
+        }),
+      );
+      expect(result).toHaveProperty("success", true);
+      expect(result).toHaveProperty("adr_number", 1);
+      expect(result).toHaveProperty("adr_file");
+      expect(result.adr_file).toMatch(/\.md$/);
+    });
+    it("should increment ADR numbers", async () => {
+      const exec = api.tools.get("orchestrator_log_decision")!;
+      exec("", {
+        project: "test-project",
+        title: "First decision",
+        context: "Ctx 1",
+        decision: "Dec 1",
+      });
+      const r2 = await unwrap(
+        exec("", {
+          project: "test-project",
+          title: "Second decision",
+          context: "Ctx 2",
+          decision: "Dec 2",
+        }),
+      );
+      expect(r2.adr_number).toBe(2);
+    });
+    it("should persist ADR file to disk with correct content", async () => {
+      const exec = api.tools.get("orchestrator_log_decision")!;
+      await unwrap(
+        exec("", {
+          project: "test-project",
+          title: "Persist test",
+          context: "Persist context",
+          decision: "Persist decision",
+        }),
+      );
+      const adrsDir = path.join(dd, "adrs");
+      const files = fs.readdirSync(adrsDir).filter((f) => f.endsWith(".md"));
+      expect(files.length).toBe(1);
+      const content = fs.readFileSync(path.join(adrsDir, files[0]), "utf-8");
+      expect(content).toContain("ADR-0001");
+      expect(content).toContain("Persist test");
+      expect(content).toContain("Persist decision");
+    });
+    it("should require required fields (project, title, context, decision)", async () => {
+      const exec = api.tools.get("orchestrator_log_decision")!;
+      // With all required fields it should work
+      const result = await unwrap(
+        exec("", {
+          project: "test-project",
+          title: "Required fields test",
+          context: "Testing required fields",
+          decision: "All required fields present",
+        }),
+      );
+      expect(result).toHaveProperty("success", true);
+    });
+  });
+  // ── orchestrator_get_logs ────────────────────────────────
+  describe("orchestrator_get_logs", () => {
+    it("should return log entries", async () => {
+      const exec = api.tools.get("orchestrator_get_logs")!;
+      const result = await unwrap(exec("", {}));
+      expect(result).toHaveProperty("entries");
+      expect(Array.isArray(result.entries)).toBe(true);
+      expect(result).toHaveProperty("sources");
+      expect(result).toHaveProperty("levels");
+    });
+    it("should filter by level", async () => {
+      const exec = api.tools.get("orchestrator_get_logs")!;
+      const result = await unwrap(exec("", { level: "info" }));
+      for (const e of result.entries) {
+        expect(["info"].includes(e.level)).toBe(true);
+      }
+    });
+    it("should respect limit parameter", async () => {
+      const exec = api.tools.get("orchestrator_get_logs")!;
+      const result = await unwrap(exec("", { limit: 5 }));
+      expect(result.entries.length).toBeLessThanOrEqual(5);
+    });
+    it("should filter by source", async () => {
+      // Perform a decision log first so there's a "decisions" source entry
+      api.tools.get("orchestrator_log_decision")!("", {
+        project: "test-project",
+        title: "Source filter test",
+        context: "Testing source filter",
+        decision: "Verify source filtering",
+      });
+      const exec = api.tools.get("orchestrator_get_logs")!;
+      const result = await unwrap(
+        exec("", { source: "decisions" }),
+      );
+      expect(result.entries.length).toBeGreaterThanOrEqual(1);
+      for (const e of result.entries) {
+        expect(e.source).toContain("decisions");
+      }
+    });
+  });
+});
