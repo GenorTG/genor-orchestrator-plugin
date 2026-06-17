@@ -1357,6 +1357,7 @@ function getStatus(dataDir: string, logger: OrchestratorLogger) {
   const projects: string[] = [];
   if (fs.existsSync(pd)) {
     for (const e of fs.readdirSync(pd)) {
+      if (e.startsWith(".")) continue; // Skip hidden dirs (.archived)
       if (fs.statSync(path.join(pd, e)).isDirectory()) projects.push(e);
     }
   }

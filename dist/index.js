@@ -1176,6 +1176,8 @@ function getStatus(dataDir, logger) {
     const projects = [];
     if (fs.existsSync(pd)) {
         for (const e of fs.readdirSync(pd)) {
+            if (e.startsWith("."))
+                continue; // Skip hidden dirs (.archived)
             if (fs.statSync(path.join(pd, e)).isDirectory())
                 projects.push(e);
         }
