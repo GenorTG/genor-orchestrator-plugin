@@ -603,7 +603,7 @@ input.search:focus{border-color:var(--blue);outline:none}
   <div id="projListView">
     <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
       <div class="title" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim)">Projects</div>
-      <div style="display:flex;gap:6px"><input class="search" id="projSearch" placeholder="Search projects..." oninput="renderProjects()"></div>
+      <div style="display:flex;gap:6px"><input class="search" id="projSearch" placeholder="Search projects..." oninput="renderProjects()"><button class="btn btn-sm" onclick="showNewProjectModal()" data-tip="Create a new project — specify name, directory, and description">+ New Project</button></div>
     </div>
     <div class="proj-grid" id="projGrid"></div>
   </div>
@@ -2899,5 +2899,87 @@ if (document.readyState === 'loading') {
   initLoad();
 }
 </script>
+
+<!-- ─── NEW PROJECT MODAL ─── -->
+<div id="newProjectModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center" onclick="if(event.target===this)hideNewProjectModal()">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:24px;width:480px;max-width:90vw;max-height:90vh;overflow-y:auto">
+    <h3 style="margin:0 0 16px;font-size:14px;color:var(--text-bright)">➕ New Project</h3>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label><span style="font-size:11px;color:var(--text-dim)">Project Name *</span>
+        <input id="npName" class="search" placeholder="my-awesome-project" style="width:100%;margin-top:4px;font-size:12px" oninput="document.getElementById('npName').value=this.value.toLowerCase().replace(/[^a-z0-9_-]/g,'-')"></label>
+      <label><span style="font-size:11px;color:var(--text-dim)">Directory (absolute path)</span>
+        <input id="npDir" class="search" placeholder="/home/user/projects/my-project" style="width:100%;margin-top:4px;font-size:12px"></label>
+      <label><span style="font-size:11px;color:var(--text-dim)">Description</span>
+        <textarea id="npDesc" class="search" placeholder="What is this project for?" style="width:100%;margin-top:4px;font-size:12px;resize:vertical;min-height:60px;font-family:var(--font);padding:6px 10px"></textarea></label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim)">
+        <input type="checkbox" id="npSpawn" checked>
+        Spawn a dedicated session for this project
+      </label>
+    </div>
+    <div id="npResult" style="margin-top:12px;font-size:11px;display:none"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn" onclick="hideNewProjectModal()" style="font-size:11px">Cancel</button>
+      <button class="btn btn-primary" id="npSubmit" onclick="submitNewProject()" style="font-size:11px">Create Project</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══ NEW PROJECT MODAL ══
+function showNewProjectModal() {
+  document.getElementById('newProjectModal').style.display = 'flex';
+  document.getElementById('npResult').style.display = 'none';
+  document.getElementById('npName').value = '';
+  document.getElementById('npDir').value = '';
+  document.getElementById('npDesc').value = '';
+  document.getElementById('npSpawn').checked = true;
+  document.getElementById('npSubmit').disabled = false;
+  document.getElementById('npSubmit').textContent = 'Create Project';
+}
+function hideNewProjectModal() {
+  document.getElementById('newProjectModal').style.display = 'none';
+}
+async function submitNewProject() {
+  const name = document.getElementById('npName').value.trim();
+  if (!name) { showResult('Enter a project name.', 'error'); return; }
+  document.getElementById('npSubmit').disabled = true;
+  document.getElementById('npSubmit').textContent = 'Creating...';
+  try {
+    const r = await fetch('/orchestrator/api/create-project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        directory: document.getElementById('npDir').value.trim() || null,
+        description: document.getElementById('npDesc').value.trim() || null,
+        spawn: document.getElementById('npSpawn').checked,
+        spawn_task: 'Start working on project "' + name + '"'
+      })
+    });
+    const data = await r.json();
+    if (data.ok) {
+      showResult('✅ Project "' + data.project + '" created! ' + (data.spawn ? 'Session spawn requested.' : ''), 'success');
+      renderProjects();
+      // Auto-close after 2s
+      setTimeout(hideNewProjectModal, 2000);
+    } else {
+      showResult('❌ ' + (data.error || 'Unknown error'), 'error');
+      document.getElementById('npSubmit').disabled = false;
+      document.getElementById('npSubmit').textContent = 'Create Project';
+    }
+  } catch (e) {
+    showResult('❌ Network error: ' + e.message, 'error');
+    document.getElementById('npSubmit').disabled = false;
+    document.getElementById('npSubmit').textContent = 'Create Project';
+  }
+}
+function showResult(msg, type) {
+  const el = document.getElementById('npResult');
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.style.color = type === 'error' ? 'var(--red)' : 'var(--green)';
+}
+</script>
+
 </body>
 </html>
