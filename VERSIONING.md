@@ -1,6 +1,6 @@
 # Versioning — Genor's Orchestrator Plugin
 
-**Current: 0.6.1**
+**Current: 0.7.0**
 
 ## Scheme
 
@@ -9,13 +9,14 @@ We follow a simplified semver: `MAJOR.MINOR.PATCH`
 | Part | What changes it | Example |
 |------|----------------|---------|
 | **MAJOR** | Rare. Complete rewrite or breaking API changes. | `0.x.x` → `1.0.0` |
-| **MINOR** | Feature release. New tools, new hooks, major architecture changes. | `0.5.x` → `0.6.0` |
-| **PATCH** | Bug fixes, doc updates, process/infra changes, small tweaks, daily dev commits. Auto-incremented by `/genor-git-commit`. | `0.6.0` → `0.6.1` |
+| **MINOR** | Feature release. New tools, new hooks, major architecture changes. | `0.6.x` → `0.7.0` |
+| **PATCH** | Bug fixes, doc updates, process/infra changes, small tweaks, daily dev commits. Auto-incremented by `/genor-git-commit`. | `0.7.0` → `0.7.1` |
 
 ## History
 
 | Version | Date | What |
 |---------|------|------|
+| **0.7.0** | 2026-06-17 | Routing presets system (custom, no-steering, free-only, single-provider, custom-fallbacks-only), 28 tools (+6 backlog tools), set-project-routing API, enhanced routing brain with model quality metadata, preset selector UI, task category inference in hooks |
 | **0.6.1** | 2026-06-17 | GitFlow branching (dev/main), GitHub Actions CI pipeline, VERSIONING.md, version normalization, branch protection |
 | **0.6.0** | 2026-06-17 | 22 tools, session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, subagent spawning, dashboard migration |
 | 0.5.29 | 2026-06-17 | Pre-0.6.0 dev builds (22 builds from 0.5.0) |

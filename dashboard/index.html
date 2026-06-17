@@ -293,6 +293,9 @@ body{
 .proj-detail .file-item{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid rgba(48,54,61,.3);font-size:11px}
 .proj-detail .file-item:hover{background:rgba(88,166,255,.03)}
 .proj-detail .agent-tree{font-size:11px;font-family:var(--font);line-height:1.8}
+.routing-input{min-width:200px}
+.routing-input:focus{border-color:var(--blue);outline:none}
+.routing-cat-select{min-width:120px}
 .proj-detail .agent-tree .node{display:flex;gap:6px;padding:2px 0}
 .proj-detail .agent-tree .node .icon{flex-shrink:0;width:16px;text-align:center}
 .proj-detail .agent-tree .node .icon.g{color:var(--green)}
@@ -1369,6 +1372,31 @@ function agentStatusLabel(s) {
   return s;
 }
 
+// ── Agent control actions ──
+async function stopAgent(name, project) {
+  if (!confirm(`Stop agent "${name}" on project "${project}"?`)) return;
+  const r = await api('/api/agent-action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'stop_agent', agent: name, project })
+  });
+  if (r.error) toast('Failed: ' + r.error, 'error');
+  else toast('⏹ Stop action queued for ' + name, 'info');
+  setTimeout(refreshAll, 1000);
+}
+
+async function recoverAgent(name, project) {
+  if (!confirm(`Attempt recovery of agent "${name}" on "${project}"?`)) return;
+  const r = await api('/api/recover-stuck', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timeout_seconds: 300 })
+  });
+  if (r.error) toast('Failed: ' + r.error, 'error');
+  else toast('🔄 Recovery action queued for ' + name, 'info');
+  setTimeout(refreshAll, 1000);
+}
+
 function renderAgents() {
   const grid = $('agentGrid');
   const agents = DS.agents || [];
@@ -1431,7 +1459,8 @@ function renderAgents() {
       '</div>' +
       '<div style="padding:4px 8px 6px;display:flex;gap:4px">' +
       '<button class="btn btn-xs" onclick="event.stopPropagation();openAgentModal(\'' + esc(agentName) + '\')" style="flex:1">📋 Details</button>' +
-
+      (a.project ? '<button class="btn btn-xs" onclick="event.stopPropagation();stopAgent(\'' + esc(agentName) + '\',\'' + esc(a.project) + '\')" style="flex:0" title="Stop agent">⏹</button>' : '') +
+      (a.project ? '<button class="btn btn-xs" onclick="event.stopPropagation();recoverAgent(\'' + esc(agentName) + '\',\'' + esc(a.project) + '\')" style="flex:0" title="Recover stuck agent">🔄</button>' : '') +
       '</div>' +
       depthHtml + '</div>';
   }
@@ -2025,6 +2054,50 @@ async function projToggleFree() {
   if (r.ok) { toast('Free-only ' + (!cur ? 'ON' : 'OFF'), 'success'); await initLoad(); }
 }
 
+// ── Routing chain editing ──
+function addRoutingChain() {
+  const sel = document.querySelector('.routing-cat-select');
+  if (!sel || !sel.value) return;
+  const cat = sel.value;
+  const container = sel.closest('div');
+  // Insert a new routing row before the add-row
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px';
+  const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+  row.innerHTML = '<span style="min-width:100px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat]||'▸') + ' ' + esc(cat) + '</span>' +
+    '<input class="routing-input" data-cat="' + esc(cat) + '" value="" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;font-family:var(--font);color:var(--text)" placeholder="model1, model2, ...">' +
+    '<button class="btn btn-xs" onclick="removeRoutingChain(\'' + esc(cat) + '\')" title="Remove chain">✕</button>';
+  container.parentNode.insertBefore(row, container);
+  // Remove the option from select
+  const opt = sel.querySelector('option[value="' + CSS.escape(cat) + '"]');
+  if (opt) opt.remove();
+  // If no more options, hide the add-row
+  if (sel.options.length === 0) {
+    container.style.display = 'none';
+  }
+}
+
+function removeRoutingChain(cat) {
+  // Find the routing input row with this category and remove it
+  const input = document.querySelector('.routing-input[data-cat="' + CSS.escape(cat) + '"]');
+  if (!input) return;
+  const row = input.closest('div');
+  if (row) row.remove();
+  // Show the add-row and re-add the option
+  const addContainer = document.querySelector('.routing-cat-select')?.closest('div');
+  if (addContainer) {
+    addContainer.style.display = 'flex';
+    const sel = addContainer.querySelector('.routing-cat-select');
+    if (sel) {
+      const opt = document.createElement('option');
+      opt.value = cat;
+      const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+      opt.textContent = (catIcons[cat]||'') + ' ' + cat;
+      sel.appendChild(opt);
+    }
+  }
+}
+
 async function projOpenConfig() {
   const r = await api('/api/models?all=1');
   const all = r.models || [];
@@ -2036,7 +2109,80 @@ async function projOpenConfig() {
   h += '<div style="margin-bottom:10px;display:flex;align-items:center;gap:10px">' +
     '<div class="toggle-sw' + (fo?' on':'') + '" id="mpFreeToggle" onclick="this.classList.toggle(\'on\')"></div>' +
     '<span style="font-size:11px;color:var(--text-dim)">Free-Only</span>' +
-    '<button class="btn btn-sm btn-success" onclick="saveProjConfig(\'' + esc(CUR_PROJ) + '\')" style="margin-left:auto">💾 Save</button></div>';
+    '<button class="btn btn-sm btn-success" onclick="saveProjConfig(\'' + esc(CUR_PROJ) + '\')" style="margin-left:auto">💾 Save Routing</button></div>';
+  
+  // ── Routing Preset Selector ──
+  const curPreset = pc.routing_preset || 'custom';
+  const curSingleProv = pc.routing_single_provider || '';
+  const presetDefs = {
+    'custom': { label: '🎯 Custom Chains', desc: 'Per-task-type model preference chains. Full control over which model handles each category.' },
+    'no-steering': { label: '⊘ No Steering', desc: 'Skip all model overrides — use OpenClaw\'s default model and fallback resolution.' },
+    'custom-fallbacks-only': { label: '🔁 Custom Fallbacks Only', desc: 'Let OpenClaw pick the primary model, but use custom chains as fallback if primary is unavailable.' },
+    'free-only': { label: '🆓 Free Only', desc: 'Enforce free-tier models only — filter out all subscription and pay-per-use models.' },
+    'single-provider': { label: '🏢 Single Provider', desc: 'Restrict routing to a single provider — select which one below.' },
+  };
+  
+  h += '<div style="margin-bottom:8px;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:var(--bg-alt)">';
+  h += '<div style="font-size:10px;text-transform:uppercase;color:var(--cyan);margin-bottom:6px">🧠 Routing Preset</div>';
+  h += '<select id="routingPreset" onchange="onPresetChange()" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:4px 6px;font-size:11px;color:var(--text);margin-bottom:4px">';
+  for (const [key, def] of Object.entries(presetDefs)) {
+    h += '<option value="' + key + '"' + (key === curPreset ? ' selected' : '') + '>' + esc(def.label) + '</option>';
+  }
+  h += '</select>';
+  h += '<div id="presetDesc" style="font-size:9px;color:var(--text-dim);line-height:1.4">' + esc(presetDefs[curPreset].desc) + '</div>';
+  
+  // Single-provider input (shown only when preset is single-provider)
+  const spVisible = curPreset === 'single-provider' ? '' : ' style="display:none"';
+  h += '<div id="singleProvGroup"' + spVisible + ' style="margin-top:6px">';
+  h += '<input id="singleProviderInput" value="' + esc(curSingleProv) + '" placeholder="Provider name, e.g. openrouter, opencode-go" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:10px;color:var(--text)">';
+  h += '<div style="margin-top:3px;font-size:9px;color:var(--text-dim)">Enter the provider slug (e.g. <code>openrouter</code>, <code>opencode-go</code>, <code>google-gla</code>)</div>';
+  h += '</div>';
+  h += '</div>';
+
+  // ── Routing chain editor ──
+  const routing = pc.model_routing || {};
+  const catIcons = { coding: '💻', fixing: '🐛', research: '🔬', qa: '❓', documentation: '📝' };
+  const catOrder = ['coding','fixing','research','qa','documentation'];
+  h += '<div style="margin-bottom:10px;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:var(--bg-alt)">';
+  h += '<div style="font-size:10px;text-transform:uppercase;color:var(--yellow);margin-bottom:6px">⬇ Routing Chains</div>';
+  
+  // Existing routing chains
+  let hasRouting = false;
+  for (const cat of catOrder) {
+    const models = routing[cat];
+    if (!Array.isArray(models) || models.length === 0) continue;
+    hasRouting = true;
+    h += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px">';
+    h += '<span style="min-width:100px;font-weight:600;color:var(--text-bright)">' + (catIcons[cat]||'▸') + ' ' + esc(cat) + '</span>';
+    h += '<input class="routing-input" data-cat="' + esc(cat) + '" value="' + esc(models.join(', ')) + '" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;font-family:var(--font);color:var(--text)" placeholder="model1, model2, ...">';
+    h += '<button class="btn btn-xs" onclick="removeRoutingChain(\'' + esc(cat) + '\')" title="Remove chain">✕</button></div>';
+  }
+  
+  // Add new chain dropdown
+  const unusedCats = catOrder.filter(c => !routing[c] || routing[c].length === 0);
+  if (unusedCats.length > 0) {
+    h += '<div style="display:flex;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">';
+    h += '<select class="routing-cat-select" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;color:var(--text)">';
+    for (const uc of unusedCats) {
+      h += '<option value="' + esc(uc) + '">' + (catIcons[uc]||'') + ' ' + esc(uc) + '</option>';
+    }
+    h += '</select>';
+    h += '<button class="btn btn-xs" onclick="addRoutingChain()">+ Add Chain</button></div>';
+  }
+  
+  if (!hasRouting && unusedCats.length === catOrder.length) {
+    h += '<div style="color:var(--text-dim);font-size:10px;padding:4px 0">No chains configured. Add one below:</div>';
+    h += '<div style="display:flex;gap:6px;margin-top:4px">';
+    h += '<select class="routing-cat-select" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;font-size:10px;color:var(--text)">';
+    for (const uc of unusedCats) {
+      h += '<option value="' + esc(uc) + '">' + (catIcons[uc]||'') + ' ' + esc(uc) + '</option>';
+    }
+    h += '</select>';
+    h += '<button class="btn btn-xs" onclick="addRoutingChain()">+ Add Chain</button></div>';
+  }
+  
+  h += '</div>';
+
   h += '<input class="search" id="mpSearch" placeholder="Search models..." oninput="filterMp()" style="width:100%;margin-bottom:8px">';
   h += '<div style="max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:4px">';
   for (const m of all) {
@@ -2058,17 +2204,66 @@ function filterMp() {
   });
 }
 
+// ── Preset change handler ──
+function onPresetChange() {
+  const sel = $('routingPreset');
+  const desc = $('presetDesc');
+  if (!sel) return;
+  const v = sel.value;
+  const presetDefs = {
+    'custom': 'Per-task-type model preference chains. Full control over which model handles each category.',
+    'no-steering': 'Skip all model overrides — use OpenClaw\'s default model and fallback resolution.',
+    'custom-fallbacks-only': 'Let OpenClaw pick the primary model, but use custom chains as fallback if primary is unavailable.',
+    'free-only': 'Enforce free-tier models only — filter out all subscription and pay-per-use models.',
+    'single-provider': 'Restrict routing to a single provider — enter the provider slug below.',
+  };
+  if (desc) desc.textContent = presetDefs[v] || '';
+  
+  // Show/hide single-provider input
+  const spGroup = $('singleProvGroup');
+  if (spGroup) {
+    spGroup.style.display = v === 'single-provider' ? '' : 'none';
+  }
+}
+
 async function saveProjConfig(name) {
   const checks = document.querySelectorAll('.mpcb:checked');
   const wl = Array.from(checks).map(c => c.value);
   const fo = $('mpFreeToggle').classList.contains('on');
-  const r = await api('/api/config', {
+  
+  // Collect routing chains from the editor inputs
+  const routingInputs = document.querySelectorAll('.routing-input');
+  const routing = {};
+  for (const inp of routingInputs) {
+    const cat = inp.getAttribute('data-cat');
+    const models = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+    if (cat && models.length > 0) routing[cat] = models;
+  }
+  
+  // Collect routing preset
+  const presetSel = $('routingPreset');
+  const preset = presetSel ? presetSel.value : 'custom';
+  const singleProv = $('singleProviderInput') ? $('singleProviderInput').value.trim() : '';
+  
+  // Save via set-project-routing endpoint
+  const body = {
+    project: name,
+    preset: preset !== 'custom' ? preset : undefined,
+    routing: Object.keys(routing).length > 0 ? routing : undefined,
+    free_only: fo,
+    model_allowlist: wl,
+  };
+  if (preset === 'single-provider' && singleProv) {
+    body.routing_single_provider = singleProv;
+  }
+  
+  const r = await api('/api/set-project-routing', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ projects: { [name]: { model_allowlist: wl, free_only: fo } } })
+    body: JSON.stringify(body)
   });
-  if (r.ok) { toast('Saved ' + wl.length + ' models', 'success'); closeModal(); await initLoad(); }
-  else toast('Failed', 'error');
+  if (r.ok) { toast('Saved config + routing', 'success'); closeModal(); await initLoad(); }
+  else toast('Failed: ' + (r.error||'unknown'), 'error');
 }
 
 /* ═══════════════════════════════════════════════════════════════

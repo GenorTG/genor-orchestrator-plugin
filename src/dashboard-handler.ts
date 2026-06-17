@@ -214,6 +214,8 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
         active_model_provider: activeModelProvider,
         active_model_details: modelDetails,
         model_routing: pc.model_routing || null,
+        routing_preset: pc.routing_preset || 'custom',
+        routing_single_provider: pc.routing_single_provider || null,
       });
     }
   }
@@ -785,6 +787,48 @@ async function handleSetProjectModel(req: IncomingMessage, res: ServerResponse):
   }
 }
 
+// ═══ Set Project Routing (Phase 3b) ═══
+async function handleSetProjectRouting(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const { project, routing, preset, free_only, model_allowlist, routing_single_provider } = body;
+    if (!project) {
+      sendJSON(res, { ok: false, error: "Missing project" });
+      return;
+    }
+    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    if (!cfg.projects) cfg.projects = {};
+    if (!cfg.projects[project]) cfg.projects[project] = {};
+
+    if (routing !== undefined) {
+      cfg.projects[project].model_routing = routing;
+    }
+    if (preset !== undefined) {
+      cfg.projects[project].routing_preset = preset;
+    }
+    if (free_only !== undefined) {
+      cfg.projects[project].free_only = free_only;
+    }
+    if (model_allowlist !== undefined) {
+      cfg.projects[project].model_allowlist = model_allowlist;
+    }
+    if (routing_single_provider !== undefined) {
+      cfg.projects[project].routing_single_provider = routing_single_provider;
+    }
+
+    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    sendJSON(res, {
+      ok: true,
+      message: `Routing updated for ${project}`,
+      preset: cfg.projects[project].routing_preset || null,
+      chains: Object.keys(cfg.projects[project].model_routing || {}).length,
+    });
+  } catch (e: any) {
+    console.error("[handleSetProjectRouting] Error:", e);
+    sendJSON(res, { ok: false, error: e?.message || String(e) });
+  }
+}
+
 // ═══ Phase 3c: Backlog API ═══
 function handleProjectBacklog(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || "/", "http://localhost");
@@ -892,6 +936,7 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/project-doc": return handleProjectDocSave(req, res);
           case "/api/create-project": handleCreateProject(req, res); return true;
           case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
+          case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
         }
       }
 

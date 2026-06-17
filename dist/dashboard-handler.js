@@ -135,6 +135,29 @@ function handleAll(_req, res) {
     const sessions = liveSessions?.sessions || [];
     const meta = liveSessions?._meta || {};
     const agents = liveAgents?.agents || [];
+    // Phase 5a: Enrich agents with health status
+    const healthThresholds = cfg?.safeguards || {};
+    const staleThreshold = healthThresholds.stuck_timeout_ms || 30 * 60 * 1000;
+    const warnThreshold = healthThresholds.idle_timeout_ms || 10 * 60 * 1000;
+    const now = Date.now();
+    for (const agent of agents) {
+        const lastActivity = agent.last_activity_at ? new Date(agent.last_activity_at).getTime() : 0;
+        const lastUpdate = agent.timestamp ? new Date(agent.timestamp).getTime() : 0;
+        const elapsed = lastActivity ? now - lastActivity : (lastUpdate ? now - lastUpdate : 0);
+        if (!elapsed || elapsed < 0) {
+            agent.health_status = "unknown";
+        }
+        else if (elapsed < warnThreshold) {
+            agent.health_status = "healthy";
+        }
+        else if (elapsed < staleThreshold) {
+            agent.health_status = "warning";
+        }
+        else {
+            agent.health_status = "stale";
+        }
+        agent.last_active_at = lastActivity ? new Date(lastActivity).toISOString() : agent.timestamp || null;
+    }
     const state = agents[0] || {};
     // Normalize models: models.json has nested { version, schema, models: [...] }
     // Frontend expects { total, active } at the top level
@@ -182,6 +205,9 @@ function handleAll(_req, res) {
                 active_model: activeModel,
                 active_model_provider: activeModelProvider,
                 active_model_details: modelDetails,
+                model_routing: pc.model_routing || null,
+                routing_preset: pc.routing_preset || 'custom',
+                routing_single_provider: pc.routing_single_provider || null,
             });
         }
     }
@@ -786,6 +812,48 @@ async function handleSetProjectModel(req, res) {
         sendJSON(res, { ok: false, error: typeof e === 'string' ? e : (e?.message || String(e)) });
     }
 }
+// ═══ Set Project Routing (Phase 3b) ═══
+async function handleSetProjectRouting(req, res) {
+    try {
+        const body = await readBody(req);
+        const { project, routing, preset, free_only, model_allowlist, routing_single_provider } = body;
+        if (!project) {
+            sendJSON(res, { ok: false, error: "Missing project" });
+            return;
+        }
+        const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+        if (!cfg.projects)
+            cfg.projects = {};
+        if (!cfg.projects[project])
+            cfg.projects[project] = {};
+        if (routing !== undefined) {
+            cfg.projects[project].model_routing = routing;
+        }
+        if (preset !== undefined) {
+            cfg.projects[project].routing_preset = preset;
+        }
+        if (free_only !== undefined) {
+            cfg.projects[project].free_only = free_only;
+        }
+        if (model_allowlist !== undefined) {
+            cfg.projects[project].model_allowlist = model_allowlist;
+        }
+        if (routing_single_provider !== undefined) {
+            cfg.projects[project].routing_single_provider = routing_single_provider;
+        }
+        fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+        sendJSON(res, {
+            ok: true,
+            message: `Routing updated for ${project}`,
+            preset: cfg.projects[project].routing_preset || null,
+            chains: Object.keys(cfg.projects[project].model_routing || {}).length,
+        });
+    }
+    catch (e) {
+        console.error("[handleSetProjectRouting] Error:", e);
+        sendJSON(res, { ok: false, error: e?.message || String(e) });
+    }
+}
 // ═══ Phase 3c: Backlog API ═══
 function handleProjectBacklog(req, res) {
     const url = new URL(req.url || "/", "http://localhost");
@@ -926,6 +994,7 @@ export function createDashboardHandler(_api) {
                         handleCreateProject(req, res);
                         return true;
                     case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
+                    case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
                 }
             }
             // ── 404 ──
