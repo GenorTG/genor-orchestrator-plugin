@@ -1404,8 +1404,20 @@ function renderAgents() {
     // Badge for model tier if available
     const modelBadge = a.model_tier ? ' <span class="tier-badge t' + a.model_tier + '">T' + a.model_tier + '</span>' : '';
 
+    // Health status indicator (Phase 5a)
+    const hs = a.health_status || 'unknown';
+    const hsColors = { healthy: 'var(--green)', warning: 'var(--yellow)', stale: 'var(--red)', unknown: 'var(--text-dim)' };
+    const hsLabels = { healthy: 'Healthy', warning: 'Warning', stale: 'Stale', unknown: 'Unknown' };
+    const hsColor = hsColors[hs] || hsColors.unknown;
+    const hsLabel = hsLabels[hs] || hsLabels.unknown;
+    const lastActive = a.last_active_at ? timeAgo(a.last_active_at) : 'never';
+    const healthTip = hsLabel + ' — last active ' + lastActive;
+
     html += '<div class="agent-card">' +
-      '<div class="top" onclick="openAgentModal(\'' + esc(agentName) + '\')" style="cursor:pointer"><span class="name">' + esc(agentName) + '</span>' +
+      '<div class="top" onclick="openAgentModal(\'' + esc(agentName) + '\')" style="cursor:pointer">' +
+      '<span class="name">' +
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + hsColor + ';margin-right:6px;vertical-align:middle" title="' + esc(healthTip) + '"></span>' +
+      esc(agentName) + '</span>' +
       '<span class="status-badge ' + stCls + '">' + esc(stLbl) + '</span></div>' +
       (a.project ? '<div class="project-name">' + esc(a.project) + '</div>' : '') +
       '<div class="info">' +
@@ -1867,8 +1879,15 @@ function renderProjManager() {
     h += '<div style="font-size:10px;text-transform:uppercase;color:var(--green);margin-bottom:4px">\u25cf Currently Active</div>';
     for (const ls of matched) {
       const stCls = ls.status === 'idle' ? 'var(--text-dim)' : ls.status === 'prompting' || ls.status === 'working' ? 'var(--green)' : 'var(--yellow)';
+      // Health indicator
+      const lh = ls.health_status || 'unknown';
+      const lhColors = { healthy: 'var(--green)', warning: 'var(--yellow)', stale: 'var(--red)', unknown: 'var(--text-dim)' };
+      const lhColor = lhColors[lh] || lhColors.unknown;
+      const lhLabels = { healthy: 'Healthy', warning: 'Warning', stale: 'Stale', unknown: 'Unknown' };
+      const lhTip = (lhLabels[lh] || 'Unknown') + ' — last active ' + (ls.last_active_at ? timeAgo(ls.last_active_at) : 'never');
       h += '<div style="display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;font-size:11px">';
       h += '<span style="width:6px;height:6px;border-radius:50%;background:' + stCls + '"></span>';
+      h += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + lhColor + ';margin-right:2px" title="' + esc(lhTip) + '"></span>';
       h += '<span style="color:var(--text-bright);font-weight:600">' + esc(ls.displayName||ls.key||'?') + '</span>';
       h += '<span style="color:var(--blue);font-size:10px">' + esc(ls.model||'') + '</span>';
       h += '<span style="color:' + stCls + ';font-size:10px">' + esc(ls.status||'idle') + '</span>';

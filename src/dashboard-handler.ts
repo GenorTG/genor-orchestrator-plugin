@@ -146,6 +146,26 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const sessions = liveSessions?.sessions || [];
   const meta = liveSessions?._meta || {};
   const agents = liveAgents?.agents || [];
+  // Phase 5a: Enrich agents with health status
+  const healthThresholds = cfg?.safeguards || {};
+  const staleThreshold = healthThresholds.stuck_timeout_ms || 30 * 60 * 1000;
+  const warnThreshold = healthThresholds.idle_timeout_ms || 10 * 60 * 1000;
+  const now = Date.now();
+  for (const agent of agents) {
+    const lastActivity = agent.last_activity_at ? new Date(agent.last_activity_at).getTime() : 0;
+    const lastUpdate = agent.timestamp ? new Date(agent.timestamp).getTime() : 0;
+    const elapsed = lastActivity ? now - lastActivity : (lastUpdate ? now - lastUpdate : 0);
+    if (!elapsed || elapsed < 0) {
+      agent.health_status = "unknown";
+    } else if (elapsed < warnThreshold) {
+      agent.health_status = "healthy";
+    } else if (elapsed < staleThreshold) {
+      agent.health_status = "warning";
+    } else {
+      agent.health_status = "stale";
+    }
+    agent.last_active_at = lastActivity ? new Date(lastActivity).toISOString() : agent.timestamp || null;
+  }
   const state = agents[0] || {};
 
   // Normalize models: models.json has nested { version, schema, models: [...] }
