@@ -55,7 +55,11 @@
       "orchestrator_advance_phase",
       "orchestrator_get_routing",
       "orchestrator_get_registered_sessions",
-      "orchestrator_doctor"
+      "orchestrator_doctor",
+      "orchestrator_release_project",
+      "orchestrator_list_active_projects",
+      "orchestrator_join_project",
+      "orchestrator_spawn_subagent"
     ]
   }
 }
