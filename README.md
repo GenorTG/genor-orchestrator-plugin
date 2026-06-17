@@ -3,7 +3,7 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.6.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.1-blue)
 ![Tools](https://img.shields.io/badge/tools-22-success)
 ![Hooks](https://img.shields.io/badge/hooks-8-ff69b4)
 
@@ -830,6 +830,7 @@ orchestrator-data/
 
 | Version | Highlights |
 |---------|-----------|
+| **v0.6.1** | 🛠️ **Process & infrastructure.** GitFlow branching (`dev`/`main`), GitHub Actions CI (build + type-check + tests on every PR), branch protection rules, VERSIONING.md with MAJOR.MINOR.PATCH scheme, all versions normalized to 0.6.1. `openclaw.plugin.json` contracts rebuilt. |
 | **v0.6.0** | 🎯 **22 tools, 8 hooks, 6 new features.** Session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, project health enforcement (`STATE.md`), subagent spawning. Dashboard migrated to native `/orchestrator` route — **no PM2 needed**. `orchestrator_doctor` with 5 check categories + auto-fix. Safeguard auto-recovery writes recovery actions. Hidden-dir filter across all listings (`.archived` excluded). All 8 hooks fully operational: `session_start`, `session_end`, `subagent_spawned`, `subagent_ended`, `before_model_resolve`, `before_prompt_build`, `agent_end`, `gateway_stop`. |
 | **v0.5.0** | 🗺️ Slash commands restructured — monolithic `/genor` replaced with `/genor-COMMAND` pattern. Added `/genor-git-commit` (auto-commit + version bump). Session key filter for background/dreaming/cron sessions. |
 | **v0.4.4** | 🔧 Session key fix — filter background/dreaming/cron/subagent sessions from `session_start` hook. Prevents key overwrites. |
@@ -990,7 +991,7 @@ genor-orchestrator-plugin/
 ├── openclaw.plugin.json           # Plugin metadata + config schema
 ├── SETUP.md                       # Step-by-step installation guide
 ├── README.md                      # You are here 📍
-└── package.json                   # v0.6.0
+└── package.json                   # v0.6.1
 ```
 
 ---
