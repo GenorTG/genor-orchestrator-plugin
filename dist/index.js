@@ -2673,7 +2673,7 @@ const _plugin = definePluginEntry({
                 const reg = requireRegistration();
                 if (reg)
                     return txt({ ok: false, error: reg });
-                return txt(backlogAdd(dataDir, params.project, params));
+                return txt(backlogAdd(params.project, dataDir, params));
             },
         });
         api.registerTool({
