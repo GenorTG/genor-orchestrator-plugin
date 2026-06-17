@@ -6,8 +6,16 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { createDashboardHandler } from "./dashboard-handler.js";
+
+// ═══════════════════════════════════════════════════════════════
+//  PLUGIN ROOT — all paths resolve from here (no skill dir dependency!)
+// ═══════════════════════════════════════════════════════════════
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PLUGIN_ROOT = path.resolve(__dirname, "..");
 
 // ═══════════════════════════════════════════════════════════════
 //  TABLE OF CONTENTS — for quick LLM & developer navigation
@@ -175,18 +183,13 @@ function getDataDir(cfgDir?: string): string {
 }
 
 function getDashboardDir(): string {
-  const candidates = [
-    process.env.DASHBOARD_DIR,
-    path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator/dashboard"),
-    path.join(os.homedir(), ".openclaw/extensions/genor-orchestrator/dashboard"),
-    path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "dashboard"),
-  ];
-  for (const c of candidates) {
-    if (c && fs.existsSync(c)) return c;
-  }
-  const dflt = path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator/dashboard");
-  fs.mkdirSync(dflt, { recursive: true });
-  return dflt;
+  // Dashboard is bundled INSIDE the plugin package — no skill dir needed!
+  const pluginDashboard = path.join(PLUGIN_ROOT, "dashboard");
+  if (fs.existsSync(pluginDashboard)) return pluginDashboard;
+  // fallback for development
+  const devPath = process.env.DASHBOARD_DIR;
+  if (devPath && fs.existsSync(devPath)) return devPath;
+  return pluginDashboard;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1487,15 +1490,9 @@ function checkModels(dataDir: string, project: string | undefined, logger: Orche
 }
 
 function autoPopulate(dataDir: string, logger: OrchestratorLogger) {
-  const dd = getDashboardDir();
-  const candidates = [
-    path.join(dd, "..", "scripts", "auto-populate-models.py"),
-    path.join(os.homedir(), ".openclaw/workspace/skills/genor-orchestrator", "scripts", "auto-populate-models.py"),
-    path.join(os.homedir(), ".openclaw/extensions/genor-orchestrator", "scripts", "auto-populate-models.py"),
-  ];
-  let script = "";
-  for (const c of candidates) { if (fs.existsSync(c)) { script = c; break; } }
-  if (!script) return { error: "Script not found. Checked: " + candidates.join(", "), skill_dir: dd };
+  // Script is bundled in the plugin package — no skill dir needed!
+  const script = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
+  if (!fs.existsSync(script)) return { error: `Script not found at ${script} — ensure the plugin package includes scripts/auto-populate-models.py` };
   try {
     logger.debug("populate", "Running...");
     const r = execSync(`python3 "${script}" 2>&1`, { cwd: path.dirname(script), encoding: "utf-8", timeout: 120_000 });
@@ -1909,7 +1906,7 @@ const _plugin: Record<string, any> = definePluginEntry({
 
     // Schedule nightly model population
     try {
-      const scriptDir = path.join(getDashboardDir(), "..", "scripts", "auto-populate-models.py");
+      const scriptDir = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
       if (fs.existsSync(scriptDir)) {
         const cronCmd = `python3 "${scriptDir}" 2>&1 >> "${path.join(dataDir, "logs", "auto-populate.log")}"`;
         const existing = execSync("crontab -l 2>/dev/null || true", { encoding: "utf-8", timeout: 5000 });
