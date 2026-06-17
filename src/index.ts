@@ -1461,7 +1461,7 @@ function backlogList(project: string, dataDir: string, opts?: {
   let tasks = readBacklog(project, dataDir);
   if (opts?.status) tasks = tasks.filter(t => t.status === opts.status);
   if (opts?.priority) tasks = tasks.filter(t => t.priority === opts.priority);
-  if (opts?.label) tasks = tasks.filter(t => t.labels.includes(opts.label!));
+  if (opts?.label) tasks = tasks.filter(t => (t.labels || []).includes(opts.label!));
   return { ok: true, tasks };
 }
 
