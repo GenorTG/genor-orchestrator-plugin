@@ -315,11 +315,21 @@ function handleSafeguardLog(_req, res) {
     sendJSON(res, { entries, count: entries.length });
 }
 // ── MAIN HTTP HANDLER ─────────────────────────────────────────
+const BASE_PATH = "/orchestrator";
+/** Strip the registered base path prefix from a URL pathname. */
+function stripBasePath(pathname) {
+    if (pathname === BASE_PATH || pathname === BASE_PATH + "/")
+        return "/";
+    if (pathname.startsWith(BASE_PATH + "/"))
+        return pathname.slice(BASE_PATH.length);
+    return pathname;
+}
 export function createDashboardHandler(_api) {
     return async (req, res) => {
         try {
             const method = req.method || "GET";
-            const pathname = parsePathname(req.url || "/");
+            const rawPathname = parsePathname(req.url || "/");
+            const pathname = stripBasePath(rawPathname);
             const qs = parseQuery(req.url || "");
             // CORS preflight
             if (method === "OPTIONS") {
@@ -384,7 +394,7 @@ export function createDashboardHandler(_api) {
                 }
             }
             // ── 404 ──
-            sendError(res, 404, `Not found: ${method} ${pathname}`);
+            sendError(res, 404, `Not found: ${method} ${rawPathname}`);
             return true;
         }
         catch (err) {
