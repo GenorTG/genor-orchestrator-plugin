@@ -495,7 +495,7 @@ orchestrator_spawn_subagent(
 ### 🩺 Diagnostics
 
 #### `orchestrator_doctor`
-> 🩺 **Diagnose and auto-fix common orchestrator issues.** Checks session keys, registration, stale data, PM2 processes, context inconsistencies, project health, and resurrects orphaned projects.
+> 🩺 **Diagnose and auto-fix common orchestrator issues.** Checks session keys, registration, stale data, context inconsistencies, orphaned projects, missing STATE.md docs, and project health. Includes auto-fix for most issues.
 
 ```typescript
 // Quick check — what's wrong?
@@ -513,7 +513,7 @@ orchestrator_doctor(check: "data")
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `check` | `string` | ❌ | Check scope: `all` (default), `sessions`, `context`, `data`, `pm2`. |
+| `check` | `string` | ❌ | Check scope: `all` (default), `sessions`, `context`, `data`, `pm2` (legacy). |
 | `fix` | `boolean` | ❌ | Auto-fix issues when possible (default: `false`). |
 
 **When to use:** Things feel off — registration fails, context injection isn't firing, models aren't updating. Doctor covers **5 areas**:
@@ -522,7 +522,7 @@ orchestrator_doctor(check: "data")
 | **sessions** | Missing/lost registration, synthetic key bridge issues | Registers sessions, bridges synthetic → real keys |
 | **context** | Missing project context, mismatched session keys | Copies context from other sessions |
 | **data** | Corrupt `models.json`, missing config, stale logs | Deletes corrupt files, removes stale live-agents |
-| **pm2** | Missing bridge process, offline status | Starts bridge if possible |
+| **pm2** | *(Legacy)* Bridge process for old dashboard | Auto-starts if bridge script still present |
 | **projects** | Orphaned 0-session projects, missing STATE.md | Archives orphans, auto-creates STATE.md |
 
 ---
