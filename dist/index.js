@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync, spawn } from "node:child_process";
+import { createDashboardHandler } from "./dashboard-handler.js";
 // ── Tool result helper ─────────────────────────────────────────
 function txt(data) {
     return {
@@ -2255,31 +2256,17 @@ const _plugin = definePluginEntry({
                         }
                     }
                 }
-                // -- 4. PM2 PROCESS HEALTH --
+                // -- 4. BRIDGE PROCESS HEALTH (gateway-ws-bridge) --
                 if (checks === "all" || checks === "pm2") {
                     try {
                         const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 5000 });
                         const processes = JSON.parse(pm2Out);
-                        const dashProc = processes.find((p) => p.name === "genor-dashboard" || p.name === "orchestration-dashboard" || (p.pm2_env?.name === "genor-dashboard") || (p.pm2_env?.name === "orchestration-dashboard"));
+                        // Dashboard is served via registerHttpRoute — no PM2 process needed
                         const bridgeProc = processes.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
-                        if (!dashProc)
-                            addIssue("Dashboard PM2 process not found (expected: genor-dashboard or orchestration-dashboard).");
-                        else if (dashProc.pm2_env?.status !== "online") {
-                            addIssue("Dashboard is " + (dashProc.pm2_env?.status || "unknown") + ".");
-                            if (autoFix) {
-                                try {
-                                    execSync("pm2 start " + path.join(getDashboardDir(), "server.py") + " --interpreter python3 --name orchestration-dashboard 2>&1", { timeout: 10000 });
-                                    addFix("Started orchestration-dashboard");
-                                }
-                                catch (e) {
-                                    addFix("Failed: " + e.message);
-                                }
-                            }
-                        }
                         if (!bridgeProc)
                             addIssue("WebSocket bridge PM2 process not found (expected: genor-bridge, gateway-ws-bridge, or gw-ws-bridge).");
                         else if (bridgeProc.pm2_env?.status !== "online") {
-                            addIssue("gateway-ws-bridge is " + (bridgeProc.pm2_env?.status || "unknown") + ".");
+                            addIssue("Bridge is " + (bridgeProc.pm2_env?.status || "unknown") + ".");
                             if (autoFix) {
                                 try {
                                     execSync("pm2 start " + path.join(getDashboardDir(), "gateway-ws-bridge.js") + " --name gateway-ws-bridge 2>&1", { timeout: 10000 });
@@ -2354,7 +2341,7 @@ const _plugin = definePluginEntry({
             handler: () => ({
                 text: [
                     "**\U0001f4ca Genor's Orchestrator \u2014 Status**",
-                    "**Dashboard:** http://${tailscaleHost}:${dashPort}",
+                    "**Dashboard:** https://${tailscaleHost}/__openclaw__/orchestrator (via gateway)",
                     "**Host:** ${hostname} (Tailscale: ${tailscaleHost})",
                     "**Port:** ${dashPort}",
                     "**Models:** ${modelCount}  **Sessions:** ${sessionCount}",
@@ -2377,7 +2364,7 @@ const _plugin = definePluginEntry({
                     "**/genor-status** \u2014 Quick status overview",
                     "**/genor-git-commit** \u2014 Commit project changes with versioning",
                     "",
-                    "Dashboard: http://${tailscaleHost}:${dashPort}",
+                    "Dashboard: https://${tailscaleHost}/__openclaw__/orchestrator (via gateway)",
                 ].join("\n"),
                 continueAgent: false,
             }),
@@ -2490,11 +2477,6 @@ const _plugin = definePluginEntry({
                     try {
                         const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 3000 });
                         const procs = JSON.parse(pm2Out);
-                        const ds = procs.find((p) => p.name === "genor-dashboard" || p.name === "orchestration-dashboard" || (p.pm2_env?.name === "genor-dashboard") || (p.pm2_env?.name === "orchestration-dashboard"));
-                        if (!ds)
-                            issues.push("Dashboard PM2 process missing (genor-dashboard or orchestration-dashboard).");
-                        else if (ds.pm2_env?.status !== "online")
-                            issues.push("Dashboard is " + (ds.pm2_env?.status || "unknown") + ".");
                         const br = procs.find((p) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
                         if (!br)
                             issues.push("gateway-ws-bridge PM2 process missing.");
@@ -2521,6 +2503,20 @@ const _plugin = definePluginEntry({
                 }
             },
         });
+        // ── Dashboard HTTP handler — serve dashboard through gateway ──
+        try {
+            const dashHandler = createDashboardHandler(api);
+            api.registerHttpRoute({
+                path: "/__openclaw__/orchestrator",
+                auth: "plugin",
+                match: "prefix",
+                handler: dashHandler,
+            });
+            logger.info("plugin", "Dashboard handler registered at /__openclaw__/orchestrator");
+        }
+        catch (dhErr) {
+            logger.warn("plugin", "Dashboard handler not loaded: " + dhErr.message);
+        }
         logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
     },
 });
