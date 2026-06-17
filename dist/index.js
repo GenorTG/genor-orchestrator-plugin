@@ -1970,7 +1970,21 @@ const _plugin = definePluginEntry({
                     logger.debug("hooks", `session_start (skipped background): ${sk}`);
                     return;
                 }
-                sessionTracker.start(sk || "unknown", event.reason || "new");
+                // ═══ SESSION ISOLATION: Don't reset tracker for unregistered sessions ═══
+                // Calling start() on an unregistered session would nuke the registered
+                // session's context (project, task, model) from the singleton tracker.
+                // Only start() if this session is explicitly registered, or if there
+                // are ZERO registered sessions (first-time setup).
+                const hasRegisteredSessions = sessionTracker.getRegisteredSessions().length > 0;
+                if (sessionTracker.isSessionRegistered(sk) || !hasRegisteredSessions) {
+                    sessionTracker.start(sk || "unknown", event.reason || "new");
+                }
+                else {
+                    // Unregistered session starting alongside an active registered session.
+                    // Don't touch the tracker state — just log it.
+                    sessionTracker.trackAction("session_started");
+                    logger.debug("hooks", `session_start (unregistered, skipped tracker reset): ${sk}`);
+                }
                 sessionTracker.trackAction("session_started");
                 writeLiveAgents("session_start", sessionTracker, logger);
                 logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);
@@ -2198,39 +2212,60 @@ const _plugin = definePluginEntry({
                 if (isUnregistered && !hasSynthetic) {
                     return;
                 }
-                // Resolve session key from hook context - the REAL gateway key.
-                // Bridge synthetic fallback keys (from orchestrator_register)
-                // with the real key so before_prompt_build injection works.
+                // ═══ SESSION ISOLATION: Resolve session key from hook context NOT tracker singleton ═══
+                // The hookCtx.sessionKey is the REAL gateway-provided key for THIS session.
+                // sessionTracker.sessionKey is a singleton and may have been overwritten by
+                // another session's hooks. Always use ctxSessionKey for lookups.
+                //
+                // Bridge synthetic fallback keys (from orchestrator_register) with the real
+                // key so before_prompt_build injection works. CRITICAL: Only bridge from
+                // synthetic fallback keys (agent:main:auto:...) to real keys. NEVER bridge
+                // from one real key to another — that would cross-contaminate sessions.
                 if (ctxSessionKey) {
                     const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
                     if (!isBackground) {
-                        // Bridge: register the real key alongside any synthetic one
-                        // so before_prompt_build finds the registration.
-                        // CRITICAL: Only bridge from synthetic fallback keys
-                        // (agent:main:auto:...) to real keys. NEVER bridge from one
-                        // real key to another — that would cross-contaminate sessions.
+                        // ── Synthetic-to-real bridge ──
+                        // If the tracker was given a synthetic fallback key (agent:main:auto:...)
+                        // by a prior tool call, bridge it to the real gateway key now.
                         const regSk = sessionTracker.sessionKey;
-                        if (regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:")) {
+                        const isSyntheticToReal = regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:");
+                        if (isSyntheticToReal) {
                             sessionTracker.registerSession(ctxSessionKey);
                             const existingCtx = sessionTracker.getSessionContext(regSk);
                             if (existingCtx) {
-                                // start() resets context, so capture first then restore
                                 const { project, task } = existingCtx;
                                 sessionTracker.sessionKey = ctxSessionKey;
                                 sessionTracker.setContext(project, task || "");
                                 sessionTracker.setStatus("prompting");
                             }
+                            logger.info("hooks", `before_model_resolve: bridged synthetic→real: ${regSk} → ${ctxSessionKey}`);
                         }
-                        // Always adopt the real key as tracker primary key
-                        if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
-                            sessionTracker.start(ctxSessionKey, "resumed");
+                        // ── Session-scoped primary key adoption ──
+                        // ONLY set sessionTracker.sessionKey and start() for the session that
+                        // is actually registered. If a different session's hooks fire here,
+                        // don't overwrite the tracker — use ctxSessionKey locally instead.
+                        const isRegisteredForThisSession = sessionTracker.isSessionRegistered(ctxSessionKey);
+                        if (isRegisteredForThisSession) {
+                            if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
+                                sessionTracker.start(ctxSessionKey, "resumed");
+                            }
+                            logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
                         }
-                        logger.info("hooks", "before_model_resolve: active session key=" + ctxSessionKey);
+                        else {
+                            // Unregistered session — still update status but don't pollute tracker key
+                            logger.debug("hooks", `before_model_resolve: skippping tracker adoption for unregistered session: ${ctxSessionKey}`);
+                        }
                     }
                 }
+                // Always update status but scope to the actual hook session
                 sessionTracker.setStatus("resolving");
                 sessionTracker.trackAction("resolving_model");
                 writeLiveAgents("before_model_resolve", sessionTracker, logger);
+                // ═══ SESSION-GATED: Only resolve models for the registered session ═══
+                // Don't enter model resolution if this session isn't registered.
+                if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
+                    return;
+                }
                 if (!sessionTracker.currentProject)
                     return;
                 const md = readJSON(path.join(dataDir, "models.json"));
@@ -2279,37 +2314,30 @@ const _plugin = definePluginEntry({
         });
         api.on("before_prompt_build", async (event, hookCtx) => {
             try {
+                // ═══ SESSION ISOLATION: Use hook context key, NOT tracker singleton ═══
+                // sessionTracker.sessionKey is shared across all sessions and may have
+                // been set by a different session's hooks. Always use hookCtx.sessionKey.
+                const hk = hookCtx?.sessionKey || "";
                 sessionTracker.setStatus("prompting");
                 sessionTracker.trackAction("building_prompt");
                 writeLiveAgents("before_prompt_build", sessionTracker, logger);
-                // Scope project context injection to the session that registered it.
-                const hk = hookCtx?.sessionKey || "";
-                // Safety net: if hook context has a real gateway key that differs
-                // from the synthetic fallback, register it so the context check
-                // still passes. This handles the case where before_model_resolve
-                // was skipped or didn't bridge.
-                // Safety net bridge: if hookCtx has a real key that differs from
-                // the synthetic fallback, register it and copy context across.
-                // CRITICAL: Only bridge from synthetic to real. Never bridge
-                // from one real key to another (cross-session pollution).
-                if (hk) {
-                    const skVal = sessionTracker.sessionKey;
-                    if (skVal && hk !== skVal && skVal.startsWith("agent:main:auto:") && sessionTracker.isSessionRegistered(skVal)) {
-                        const existingCtx = sessionTracker.getSessionContext(skVal);
-                        sessionTracker.registerSession(hk);
-                        if (existingCtx) {
-                            const { project, task } = existingCtx;
-                            sessionTracker.sessionKey = hk;
-                            sessionTracker.setContext(project, task || "");
-                            sessionTracker.setStatus("resolving");
-                        }
-                    }
-                }
-                const sk = hk || sessionTracker.sessionKey;
-                // ONLY inject project context for explicitly registered sessions.
-                // A session must call orchestrator_register() to opt in — no
-                // chat/logging session ever gets context unless it registered.
-                if (!sk || !sessionTracker.isSessionRegistered(sk))
+                // ═══ NO MUTATION: This hook NEVER modifies sessionTracker.sessionKey ═══
+                // Previous code had a "safety net" that mutated sessionTracker.sessionKey
+                // when a real key appeared alongside a synthetic fallback. This caused
+                // cross-session pollution: if Session A registered with a synthetic key
+                // and Session B fired before_prompt_build, Session B's real key would
+                // overwrite Session A's registered key+context in the tracker singleton.
+                // 
+                // The synthetic-to-real bridge now ONLY happens in before_model_resolve,
+                // which reliably fires before this hook. If the bridge didn't happen,
+                // the registered synthetic key still works correctly for context lookup
+                // via isSessionRegistered() + getSessionContext().
+                // NEVER use sessionTracker.sessionKey as fallback — it's singletons-tainted.
+                // If hk (hook context key) is empty or not registered, NO injection.
+                if (!hk)
+                    return;
+                const sk = hk;
+                if (!sessionTracker.isSessionRegistered(sk))
                     return;
                 const pc = sessionTracker.getSessionContext(sk);
                 if (!pc)
@@ -2464,16 +2492,35 @@ const _plugin = definePluginEntry({
                 const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
                 if (!sk)
                     return txt("error: no session key available");
+                // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
+                // If this session key doesn't match tracker's current key and there's
+                // already an active registration with a different project context,
+                // warn prominently to surface unintended LLM tool calls.
+                const existingSessions = sessionTracker.getRegisteredSessions();
+                const hasActiveRegistration = existingSessions.length > 0 && !existingSessions.includes(sk);
+                if (hasActiveRegistration) {
+                    const otherCtxs = existingSessions
+                        .map(s => ({ key: s, ctx: sessionTracker.getSessionContext(s) }))
+                        .filter(s => s.ctx && s.ctx.project);
+                    if (otherCtxs.length > 0) {
+                        logger.warn("registration", `Session "${sk}" registering while other sessions active: ${otherCtxs.map(s => s.key).join(", ")}. Possible hallucinated registration.`);
+                    }
+                }
                 const newly = sessionTracker.registerSession(sk);
                 if (newly) {
-                    // If no real session key was set yet, use this synthetic one
-                    // as the tracker's current key so requireRegistration() works.
                     if (!sessionTracker.sessionKey)
                         sessionTracker.sessionKey = sk;
                     sessionTracker.trackAction("session_registered");
                     writeLiveAgents("register", sessionTracker, logger);
-                    logger.info("hooks", `session registered: ${sk}`);
-                    return txt("registered");
+                    logger.info("registration", `session registered: ${sk} (total: ${existingSessions.length + 1})`);
+                    // Return descriptive message so LLM + user can see what happened
+                    return txt({
+                        ok: true,
+                        message: "registered",
+                        session_key: sk,
+                        total_registered: existingSessions.length + 1,
+                        warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
+                    });
                 }
                 return txt("already registered");
             },
