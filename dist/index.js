@@ -1898,6 +1898,13 @@ const TOOL_METADATA = [
     { name: "orchestrator_qa_approve", label: "QA Approve", description: "Approve the current work. Unblocks the work→log transition when QA gate is active.", parameters: { type: "object", properties: {} } },
     { name: "orchestrator_qa_reject", label: "QA Reject", description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.", parameters: { type: "object", properties: { reason: { type: "string", description: "Why the work was rejected. Describe what needs to be fixed." } }, required: ["reason"] } },
     { name: "orchestrator_generate_handoff", label: "Generate Handoff", description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.", parameters: { type: "object", properties: {} } },
+    // ── Quick Action Tools ────────────────────────────────────
+    { name: "orchestrator_grill_with_docs", label: "Grill Me With Docs", description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.", parameters: { type: "object", properties: { topic: { type: "string", description: "Optional focus topic." }, model: { type: "string", description: "Optional model override." } } } },
+    { name: "orchestrator_cleanup_docs", label: "Clean Up & Organize Docs", description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.", parameters: { type: "object", properties: { scope: { type: "string", description: "Scope: all, readme, adrs, docs, tests." }, model: { type: "string", description: "Optional model override." } } } },
+    { name: "orchestrator_setup_unit_tests", label: "Set Up Unit Tests", description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.", parameters: { type: "object", properties: { framework: { type: "string", description: "Test framework: vitest, jest, mocha, pytest, etc." }, model: { type: "string", description: "Optional model override." } } } },
+    { name: "orchestrator_setup_e2e_tests", label: "Set Up E2E Tests", description: "Spawns a subagent that sets up E2E test infrastructure and creates initial test scenarios.", parameters: { type: "object", properties: { framework: { type: "string", description: "Framework: playwright, cypress, puppeteer, etc." }, model: { type: "string", description: "Optional model override." } } } },
+    { name: "orchestrator_debug_issue", label: "Debug Issue", description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.", parameters: { type: "object", properties: { issue_description: { type: "string", description: "Describe the bug or issue in detail." }, model: { type: "string", description: "Optional model override." } }, required: ["issue_description"] } },
+    { name: "orchestrator_create_functionality", label: "Create New Functionality", description: "Spawns a subagent to design and implement new features or functionality in the project.", parameters: { type: "object", properties: { description: { type: "string", description: "Describe the new functionality — requirements and constraints." }, model: { type: "string", description: "Optional model override." } }, required: ["description"] } },
 ];
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -3927,16 +3934,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 sessionTracker.addQaFinding(params.finding);
                 logger.info("qa", `QA finding submitted: ${params.finding.substring(0, 100)}`);
                 // ── ENFORCED: Always spawn an independent QA review subagent ──
+                // Uses a unique session key so each QA review gets its own isolated session
                 let spawnResult = null;
                 const project = sessionTracker.currentProject;
                 const taskDesc = sessionTracker.currentTask || "Unknown task";
-                const sessionKey = sessionTracker.sessionKey;
-                if (sessionKey && project) {
+                const parentKey = sessionTracker.sessionKey;
+                if (parentKey && project) {
                     try {
                         const reviewTask = [
                             `[QA Review - Auto-spawned by Orchestrator Plugin]`,
                             `Project: ${project}`,
-                            `Parent Session: ${sessionKey}`,
+                            `Parent Session: ${parentKey}`,
                             `Task under review: ${taskDesc}`,
                             ``,
                             `You are a QA reviewer. Independently review the work done for this task.`,
@@ -3947,15 +3955,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                             ``,
                             `Return PASS or FAIL with specific findings.`,
                         ].filter(Boolean).join("\n");
+                        // Generate a UNIQUE session key so each QA review is a separate subagent session
+                        const qaSessionKey = `agent:main:subagent:orch-qa-${crypto.randomUUID()}`;
                         const reviewModel = params.review_model || undefined;
-                        logger.info("qa", `Auto-spawning QA review subagent for project=${project}`);
+                        logger.info("qa", `Auto-spawning QA review subagent (${qaSessionKey}) for project=${project}`);
                         const result = await api.runtime.subagent.run({
-                            sessionKey,
+                            sessionKey: qaSessionKey,
                             message: reviewTask,
                             model: reviewModel,
                             lightContext: true,
                         });
-                        spawnResult = { runId: result.runId };
+                        spawnResult = { runId: result.runId, sessionKey: qaSessionKey };
                         logger.info("qa", `QA review subagent spawned: runId=${result.runId}`);
                     }
                     catch (spawnErr) {
@@ -3970,6 +3980,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     findings_count: sessionTracker.qaFindings.length,
                     review_spawned: spawnResult?.runId ? true : false,
                     review_run_id: spawnResult?.runId || null,
+                    review_session_key: spawnResult?.sessionKey || null,
                 });
             },
         });
@@ -4195,6 +4206,313 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     state_md: path.join(projDir2, "STATE.md"),
                     spawn: spawnInfo,
                     message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call orchestrator_set_context to start working, or orchestrator_join_project if you're in a different session.`,
+                });
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  QUICK ACTION TOOLS — spawn isolated subagent sessions with
+        //  preset prompts for common project tasks
+        // ═══════════════════════════════════════════════════════════
+        // ── Helper: spawn a quick-action subagent with a unique session key ──
+        async function quickActionSpawn(taskName, prompt, model) {
+            const project = sessionTracker.currentProject;
+            const parentKey = sessionTracker.sessionKey;
+            if (!parentKey || !project) {
+                return { ok: false, error: "No active project context. Set project context first." };
+            }
+            try {
+                const sessionKey = `agent:main:subagent:orch-${taskName}-${crypto.randomUUID()}`;
+                const result = await api.runtime.subagent.run({
+                    sessionKey,
+                    message: prompt,
+                    model: model || undefined,
+                    lightContext: true,
+                });
+                logger.info("quickaction", `${taskName} spawned: runId=${result.runId}, sessionKey=${sessionKey}`);
+                return { ok: true, runId: result.runId, sessionKey };
+            }
+            catch (err) {
+                logger.error("quickaction", `${taskName} spawn failed: ${err.message}`);
+                return { ok: false, error: err.message };
+            }
+        }
+        // ── Quick Action: Grill Me With Docs ───────────────────────
+        api.registerTool({
+            name: "orchestrator_grill_with_docs",
+            label: "Grill Me With Docs",
+            description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.",
+            parameters: Type.Object({
+                topic: Type.Optional(Type.String({ description: "Optional specific topic or area to focus on." })),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                const topic = params.topic ? `
+Focus specifically on: ${params.topic}` : "";
+                const prompt = [
+                    `[Quick Action: Grill Me With Docs — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a project documentation examiner.`,
+                    `1. Read ALL project documentation files (STATE.md, CONTEXT.md, ADRs, ROADMAP.md, README, tests, source code headers).`,
+                    `2. Formulate 5-10 probing questions about the project's architecture, decisions, trade-offs, and blind spots.`,
+                    `3. Present ONE question at a time, wait for the user's answer, then give feedback and move to the next.`,
+                    `4. After all questions, provide a summary of what was well-understood and what needs attention.`,
+                    `${topic}`,
+                    ``,
+                    `Be tough but fair. The goal is to catch knowledge gaps before they cause mistakes.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("grill", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "grill_with_docs",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: "📚 Grill session spawned! The examiner is reading your project docs and will start quizzing you shortly. Reply in the spawned session.",
+                });
+            },
+        });
+        // ── Quick Action: Clean Up & Organize Docs ────────────────
+        api.registerTool({
+            name: "orchestrator_cleanup_docs",
+            label: "Clean Up & Organize Docs",
+            description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.",
+            parameters: Type.Object({
+                scope: Type.Optional(Type.String({ description: "Optional scope: 'all' (default), 'readme', 'adrs', 'docs', 'tests'." })),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                const scope = params.scope || "all";
+                const prompt = [
+                    `[Quick Action: Clean Up & Organize Docs — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a documentation specialist. Your job is to review, clean up, organize, and improve project documentation.`,
+                    ``,
+                    `Scope: ${scope}`,
+                    ``,
+                    `1. READ all existing documentation files and understand the current state.`,
+                    `2. Identify: broken links, stale/outdated content, missing sections, inconsistent formatting.`,
+                    `3. Fix issues and update files as needed.`,
+                    `4. Create new documentation files if important gaps are found.`,
+                    `5. Report a summary of what was changed and why.`,
+                    ``,
+                    `Focus on accuracy and clarity. Do NOT change technical content — only documentation quality.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("cleanup-docs", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "cleanup_docs",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: "📝 Documentation cleanup spawned! The docs specialist is reviewing and improving your project docs.",
+                });
+            },
+        });
+        // ── Quick Action: Set Up Unit Tests ───────────────────────
+        api.registerTool({
+            name: "orchestrator_setup_unit_tests",
+            label: "Set Up Unit Tests",
+            description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.",
+            parameters: Type.Object({
+                framework: Type.Optional(Type.String({ description: "Test framework: 'vitest' (default), 'jest', 'mocha', 'pytest', etc." })),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                const framework = params.framework || "vitest";
+                const prompt = [
+                    `[Quick Action: Set Up Unit Tests — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a test infrastructure engineer. Set up unit testing for this project.`,
+                    ``,
+                    `Framework: ${framework}`,
+                    ``,
+                    `1. Check if ${framework} is already configured. If not, install and configure it.`,
+                    `2. Set up the test configuration file (vitest.config.ts, jest.config.js, etc.).`,
+                    `3. Examine the project's source code structure.`,
+                    `4. Create initial unit tests for existing modules (focus on the most critical/logical parts of the codebase).`,
+                    `5. Set up a test script in package.json.`,
+                    `6. Run the test suite and fix any failures.`,
+                    `7. Report: what was set up, what was tested, pass rate, and recommendations.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("setup-unit-tests", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "setup_unit_tests",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: `🧪 Unit test setup spawned! Setting up ${framework} for your project.`,
+                });
+            },
+        });
+        // ── Quick Action: Set Up E2E Tests ────────────────────────
+        api.registerTool({
+            name: "orchestrator_setup_e2e_tests",
+            label: "Set Up E2E Tests",
+            description: "Spawns a subagent that sets up end-to-end test infrastructure and creates initial E2E test scenarios.",
+            parameters: Type.Object({
+                framework: Type.Optional(Type.String({ description: "Framework: 'playwright' (default), 'cypress', 'puppeteer', etc." })),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                const framework = params.framework || "playwright";
+                const prompt = [
+                    `[Quick Action: Set Up E2E Tests — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a test infrastructure engineer. Set up E2E testing for this project.`,
+                    ``,
+                    `Framework: ${framework}`,
+                    ``,
+                    `1. Check if ${framework} is already configured. If not, install and configure it.`,
+                    `2. Set up the test configuration file.`,
+                    `3. Understand the project: what does it serve? What are the critical user journeys?`,
+                    `4. Create E2E test scenarios covering the most important flows.`,
+                    `5. Set up test scripts in package.json.`,
+                    `6. Run the tests and fix any issues.`,
+                    `7. Report: what was set up, test scenarios created, pass rate, and recommendations.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("setup-e2e-tests", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "setup_e2e_tests",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: `🎭 E2E test setup spawned! Setting up ${framework} for your project.`,
+                });
+            },
+        });
+        // ── Quick Action: Debug Issue ─────────────────────────────
+        api.registerTool({
+            name: "orchestrator_debug_issue",
+            label: "Debug Issue",
+            description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.",
+            parameters: Type.Object({
+                issue_description: Type.String({ description: "Describe the bug or issue — what's happening, what should happen, reproduction steps." }),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                if (!params.issue_description) {
+                    return txt({ ok: false, error: "Issue description is required." });
+                }
+                const prompt = [
+                    `[Quick Action: Debug Issue — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a debugging specialist. Investigate and fix the following issue:`,
+                    ``,
+                    `## Issue Description`,
+                    params.issue_description,
+                    ``,
+                    `## Instructions`,
+                    `1. Understand the project codebase and the reported issue.`,
+                    `2. Reproduce the issue if possible (check logs, run the code, inspect state).`,
+                    `3. Identify the root cause.`,
+                    `4. Implement a fix.`,
+                    `5. Verify the fix works.`,
+                    `6. Report: root cause, fix applied, verification results, and any related concerns.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("debug-issue", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "debug_issue",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: "🐛 Debug spawned! The debugging specialist is investigating your issue.",
+                });
+            },
+        });
+        // ── Quick Action: Create New Functionality ────────────────
+        api.registerTool({
+            name: "orchestrator_create_functionality",
+            label: "Create New Functionality",
+            description: "Spawns a subagent to design and implement new features or functionality in the project.",
+            parameters: Type.Object({
+                description: Type.String({ description: "Describe the new functionality — what it should do, requirements, constraints, and any relevant context." }),
+                model: Type.Optional(Type.String({ description: "Optional model override for the subagent." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!sessionTracker.currentProject) {
+                    return txt({ ok: false, error: "No active project. Set project context first." });
+                }
+                if (!params.description) {
+                    return txt({ ok: false, error: "Functionality description is required." });
+                }
+                const prompt = [
+                    `[Quick Action: Create New Functionality — Auto-spawned by Orchestrator Plugin]`,
+                    `Project: ${sessionTracker.currentProject}`,
+                    `Parent Session: ${sessionTracker.sessionKey}`,
+                    ``,
+                    `You are a feature development engineer. Design and implement the following new functionality:`,
+                    ``,
+                    `## Requirements`,
+                    params.description,
+                    ``,
+                    `## Instructions`,
+                    `1. Understand the existing project architecture and codebase.`,
+                    `2. Design a solution that fits the existing patterns and conventions.`,
+                    `3. Implement the functionality following project coding standards.`,
+                    `4. Add tests for the new code.`,
+                    `5. Verify everything works (build, test, lint).`,
+                    `6. Report: what was built, architecture decisions, test results, and any follow-up tasks.`,
+                ].filter(Boolean).join("\n");
+                const result = await quickActionSpawn("create-functionality", prompt, params.model);
+                if (!result.ok)
+                    return txt({ ok: false, error: result.error });
+                return txt({
+                    ok: true,
+                    action: "create_functionality",
+                    run_id: result.runId,
+                    session_key: result.sessionKey,
+                    message: "🚀 Feature development spawned! The engineer is designing and implementing your new functionality.",
                 });
             },
         });
