@@ -9,12 +9,32 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-const HTML_PATH = path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "dashboard", "index.html");
-const DATA_DIR = path.join(os.homedir(), ".openclaw", "workspace", "orchestrator-data");
+// ── RESOLVE PLUGIN ROOT ──────────────────────────────────────
+// Match the resolution in src/index.ts so dashboard relative paths work
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PLUGIN_ROOT = path.resolve(__dirname, "..");
+const HTML_PATH = path.join(PLUGIN_ROOT, "dashboard", "index.html");
+
+// ── DATA DIRECTORY (lazy, same resolution as index.ts) ───────
+let _dataDir: string | null = null;
+function getDataDir(): string {
+  if (_dataDir) return _dataDir;
+  const envDir = process.env.ORCHESTRATOR_DATA_DIR;
+  if (envDir && fs.existsSync(envDir)) {
+    _dataDir = envDir;
+    return envDir;
+  }
+  const dflt = path.join(os.homedir(), ".openclaw/workspace/orchestrator-data");
+  fs.mkdirSync(dflt, { recursive: true });
+  _dataDir = dflt;
+  return dflt;
+}
 
 // ── MIME TYPES ────────────────────────────────────────────────
 const MIME: Record<string, string> = {
@@ -103,7 +123,7 @@ function handleSSE(res: ServerResponse): void {
     "Access-Control-Allow-Origin": "*",
   });
 
-  const liveFile = path.join(DATA_DIR, "live-sessions.json");
+  const liveFile = path.join(getDataDir(), "live-sessions.json");
   let lastMtime = 0;
   const timer = setInterval(() => {
     try {
@@ -126,11 +146,11 @@ function handleSSE(res: ServerResponse): void {
 // ── API HANDLERS ──────────────────────────────────────────────
 
 function handleStatus(_req: IncomingMessage, res: ServerResponse): void {
-  const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json"));
+  const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
   sendJSON(res, {
-    nightly_price_check: fs.existsSync(path.join(DATA_DIR, "price_changes.log")) ? "Configured (2 AM)" : "Not configured",
-    price_log_exists: fs.existsSync(path.join(DATA_DIR, "price_changes.log")),
-    data_dir: DATA_DIR,
+    nightly_price_check: fs.existsSync(path.join(getDataDir(), "price_changes.log")) ? "Configured (2 AM)" : "Not configured",
+    price_log_exists: fs.existsSync(path.join(getDataDir(), "price_changes.log")),
+    data_dir: getDataDir(),
     free_only_mode: cfg?.free_only_mode || false,
     disabled_models: cfg?.disabled_models?.length || 0,
     projects_configured: cfg?.projects ? Object.keys(cfg.projects).length : 0,
@@ -138,10 +158,10 @@ function handleStatus(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleAll(_req: IncomingMessage, res: ServerResponse): void {
-  const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
-  const liveSessions = readJSON(path.join(DATA_DIR, "live-sessions.json"));
-  const liveAgents = readJSON(path.join(DATA_DIR, "live-agents.json"));
-  const modelsData = readJSON(path.join(DATA_DIR, "models.json"));
+  const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
+  const liveSessions = readJSON(path.join(getDataDir(), "live-sessions.json"));
+  const liveAgents = readJSON(path.join(getDataDir(), "live-agents.json"));
+  const modelsData = readJSON(path.join(getDataDir(), "models.json"));
 
   const sessions = liveSessions?.sessions || [];
   const meta = liveSessions?._meta || {};
@@ -175,7 +195,7 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
   const activeModelCount = modelList.filter((m: any) => m.agent_ready !== false && m.status !== "removed").length;
 
   // Build projects list with active model info (Phase 3a)
-  const projDir = path.join(DATA_DIR, "projects");
+  const projDir = path.join(getDataDir(), "projects");
   const projectsList: any[] = [];
   if (fs.existsSync(projDir)) {
     for (const name of fs.readdirSync(projDir).sort()) {
@@ -234,11 +254,11 @@ function handleAll(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleModels(req: IncomingMessage, res: ServerResponse, qs: Record<string, string | undefined>): void {
-  const data = readJSON(path.join(DATA_DIR, "models.json"));
+  const data = readJSON(path.join(getDataDir(), "models.json"));
   if (!data) return sendJSON(res, { models: [], total: 0 });
 
   const models = data.models || [];
-  const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json"));
+  const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
 
   if (qs.id) {
     const m = models.find((m: any) => m.id === qs.id);
@@ -268,7 +288,7 @@ function handleModels(req: IncomingMessage, res: ServerResponse, qs: Record<stri
 }
 
 function handleLogs(req: IncomingMessage, res: ServerResponse, qs: Record<string, string | undefined>): void {
-  const logPath = path.join(DATA_DIR, "logs", "orchestrator.jsonl");
+  const logPath = path.join(getDataDir(), "logs", "orchestrator.jsonl");
   if (!fs.existsSync(logPath)) return sendJSON(res, { entries: [], count: 0 });
 
   const limit = parseInt(qs.limit || "50", 10);
@@ -292,19 +312,19 @@ function handleLogs(req: IncomingMessage, res: ServerResponse, qs: Record<string
 }
 
 function handleLiveAgents(_req: IncomingMessage, res: ServerResponse): void {
-  const data = readJSON(path.join(DATA_DIR, "live-agents.json"));
+  const data = readJSON(path.join(getDataDir(), "live-agents.json"));
   if (data) return sendJSON(res, data);
   sendJSON(res, { agents: [], agent_count: 0, active_count: 0 });
 }
 
 function handleConfigGET(_req: IncomingMessage, res: ServerResponse): void {
-  const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+  const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
   sendJSON(res, cfg);
 }
 
 function handleConfigPOST(req: IncomingMessage, res: ServerResponse): Promise<void> {
   return readBody(req).then((data) => {
-    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
     for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models"]) {
       if (data[key] !== undefined) cfg[key] = data[key];
     }
@@ -319,15 +339,15 @@ function handleConfigPOST(req: IncomingMessage, res: ServerResponse): Promise<vo
     if (data.safeguards && typeof data.safeguards === "object") {
       cfg.safeguards = { ...(cfg.safeguards || {}), ...data.safeguards };
     }
-    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
     sendJSON(res, { ok: true });
   });
 }
 
 async function handleAutoPopulate(_req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   try {
-    const dataDir = DATA_DIR;
-    const scriptPath = path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "scripts", "auto-populate-models.py");
+    const dataDir = getDataDir();
+    const scriptPath = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
     const out = execSync(
       `ORCHESTRATOR_DATA_DIR="${dataDir}" python3 "${scriptPath}" 2>&1`,
       { encoding: "utf-8", timeout: 30000 }
@@ -341,7 +361,7 @@ async function handleAutoPopulate(_req: IncomingMessage, res: ServerResponse): P
 
 /** Project directory path */
 function projectDir(name: string): string {
-  const dir = path.join(DATA_DIR, "projects", name);
+  const dir = path.join(getDataDir(), "projects", name);
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
@@ -358,7 +378,7 @@ async function handleProjectState(req: IncomingMessage, res: ServerResponse): Pr
 
   try {
     const pd = projectDir(name);
-    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
     const projCfg = cfg.projects?.[name] || {};
     const sessions: any[] = [];
 
@@ -475,7 +495,7 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
       return sendJSON(res, { ok: false, error: "Invalid project name." });
     }
 
-    const projDir = path.join(DATA_DIR, "projects", projectName);
+    const projDir = path.join(getDataDir(), "projects", projectName);
     if (fs.existsSync(projDir)) {
       return sendJSON(res, { ok: false, error: `Project "${projectName}" already exists.` });
     }
@@ -504,7 +524,7 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
     fs.writeFileSync(path.join(projDir, "STATE.md"), stateContent, "utf-8");
 
     // Update dashboard config
-    const configPath = path.join(DATA_DIR, "dashboard-config.json");
+    const configPath = path.join(getDataDir(), "dashboard-config.json");
     let cfg: any = {};
     try {
       if (fs.existsSync(configPath)) cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
@@ -548,7 +568,7 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
 }
 
 function handleProjects(_req: IncomingMessage, res: ServerResponse): void {
-  const projDir = path.join(DATA_DIR, "projects");
+  const projDir = path.join(getDataDir(), "projects");
   if (!fs.existsSync(projDir)) return sendJSON(res, { projects: [], count: 0 });
 
   const projects = fs.readdirSync(projDir).filter((n) => {
@@ -562,7 +582,7 @@ function handleProjects(_req: IncomingMessage, res: ServerResponse): void {
     return { name, session_count: sessions.length, created: sessions[0]?.logged_at || "N/A" };
   });
 
-  const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json"));
+  const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
   for (const p of projects) {
     const pc = cfg?.projects?.[p.name] || {};
     (p as any).model_allowlist = pc.model_allowlist || [];
@@ -573,7 +593,7 @@ function handleProjects(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handlePrices(_req: IncomingMessage, res: ServerResponse): void {
-  const logPath = path.join(DATA_DIR, "price_changes.log");
+  const logPath = path.join(getDataDir(), "price_changes.log");
   if (!fs.existsSync(logPath)) return sendJSON(res, { entries: [], count: 0 });
   const entries = fs.readFileSync(logPath, "utf-8")
     .split("\n")
@@ -583,7 +603,7 @@ function handlePrices(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleGateway(req: IncomingMessage, res: ServerResponse): void {
-  const lf = path.join(DATA_DIR, "live-sessions.json");
+  const lf = path.join(getDataDir(), "live-sessions.json");
   if (fs.existsSync(lf)) {
     try {
       const live = JSON.parse(fs.readFileSync(lf, "utf-8"));
@@ -600,7 +620,7 @@ function handleGateway(req: IncomingMessage, res: ServerResponse): void {
 
 function handleSessions(req: IncomingMessage, res: ServerResponse): void {
   // Return live gateway sessions (used by Gateway tab)
-  const lf = path.join(DATA_DIR, "live-sessions.json");
+  const lf = path.join(getDataDir(), "live-sessions.json");
   if (fs.existsSync(lf)) {
     try {
       const live = JSON.parse(fs.readFileSync(lf, "utf-8"));
@@ -616,7 +636,7 @@ function handleSessions(req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleSafeguardLog(_req: IncomingMessage, res: ServerResponse): void {
-  const sl = path.join(DATA_DIR, "safeguard-log.md");
+  const sl = path.join(getDataDir(), "safeguard-log.md");
   if (!fs.existsSync(sl)) return sendJSON(res, { entries: [], count: 0 });
   const lines = fs.readFileSync(sl, "utf-8").split("\n").filter((l) => l.startsWith("|") && !l.includes("---"));
   const entries = lines.slice(1).map((l) => {
@@ -641,7 +661,7 @@ function readOrchestratorErrors(project: string, limit: number = 50): any[] {
 }
 
 function readGlobalErrors(limit: number = 20): any[] {
-  const projectsDir = path.join(DATA_DIR, "projects");
+  const projectsDir = path.join(getDataDir(), "projects");
   if (!fs.existsSync(projectsDir)) return [];
   try {
     const all: any[] = [];
@@ -670,7 +690,7 @@ function validateProjectSessions(dataDir: string, project?: string): any {
   const projectsChecked: string[] = [];
 
   const checkProject = (projName: string) => {
-    const sf = path.join(DATA_DIR, "projects", projName, "sessions.json");
+    const sf = path.join(getDataDir(), "projects", projName, "sessions.json");
     if (!fs.existsSync(sf)) return;
     let sessions: any[] = [];
     try {
@@ -731,7 +751,7 @@ function validateProjectSessions(dataDir: string, project?: string): any {
   if (project) {
     checkProject(project);
   } else {
-    const projDir = path.join(DATA_DIR, "projects");
+    const projDir = path.join(getDataDir(), "projects");
     if (fs.existsSync(projDir)) {
       for (const p of fs.readdirSync(projDir).sort()) {
         if (p.startsWith(".")) continue;
@@ -748,7 +768,7 @@ function validateProjectSessions(dataDir: string, project?: string): any {
 function handleValidateSessions(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || "/", "http://localhost");
   const project = url.searchParams.get("project") || "";
-  const result = validateProjectSessions(DATA_DIR, project || undefined);
+  const result = validateProjectSessions(getDataDir(), project || undefined);
   sendJSON(res, result);
 }
 
@@ -762,7 +782,7 @@ async function handleSetProjectModel(req: IncomingMessage, res: ServerResponse):
       return;
     }
     // Validate model exists in inventory
-    const modelsData = readJSON(path.join(DATA_DIR, "models.json"));
+    const modelsData = readJSON(path.join(getDataDir(), "models.json"));
     const models = (modelsData?.models || []);
     const model = models.find((m: any) => m.id === model_id);
     if (!model) {
@@ -770,12 +790,12 @@ async function handleSetProjectModel(req: IncomingMessage, res: ServerResponse):
       return;
     }
     // Update project config
-    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
     if (!cfg.projects) cfg.projects = {};
     if (!cfg.projects[project]) cfg.projects[project] = {};
     cfg.projects[project].model_allowlist = [model_id];
     cfg.projects[project].free_only = model.tier === "free" || model.tier === 0 ? true : false;
-    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
     sendJSON(res, {
       ok: true,
       model: model.id,
@@ -796,7 +816,7 @@ async function handleSetProjectRouting(req: IncomingMessage, res: ServerResponse
       sendJSON(res, { ok: false, error: "Missing project" });
       return;
     }
-    const cfg = readJSON(path.join(DATA_DIR, "dashboard-config.json")) || {};
+    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
     if (!cfg.projects) cfg.projects = {};
     if (!cfg.projects[project]) cfg.projects[project] = {};
 
@@ -816,7 +836,7 @@ async function handleSetProjectRouting(req: IncomingMessage, res: ServerResponse
       cfg.projects[project].routing_single_provider = routing_single_provider;
     }
 
-    fs.writeFileSync(path.join(DATA_DIR, "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+    fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
     sendJSON(res, {
       ok: true,
       message: `Routing updated for ${project}`,
@@ -834,7 +854,7 @@ function handleProjectBacklog(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || "/", "http://localhost");
   const project = url.searchParams.get("project");
   if (!project) return sendJSON(res, { ok: false, error: "Missing project" });
-  const bp = path.join(DATA_DIR, "projects", project, "BACKLOG.json");
+  const bp = path.join(getDataDir(), "projects", project, "BACKLOG.json");
   if (!fs.existsSync(bp)) return sendJSON(res, { tasks: [] });
   try {
     const data = JSON.parse(fs.readFileSync(bp, "utf-8"));
@@ -895,7 +915,7 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
         }
         // Other static HTML files in dashboard dir
         if (pathname.endsWith(".html") && !pathname.startsWith("/api/")) {
-          const staticFile = path.join(os.homedir(), "projects", "genor-orchestrator-plugin", "dashboard", pathname.slice(1));
+          const staticFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
           if (fs.existsSync(staticFile)) {
             sendFile(res, staticFile);
             return true;
