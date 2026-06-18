@@ -2583,6 +2583,33 @@ const _plugin: Record<string, any> = definePluginEntry({
           sessionTracker.trackAction("session_started");
           logger.debug("hooks", `session_start (unregistered, skipped tracker reset): ${sk}`);
         }
+        // ═══ AUTO-REGISTER PROJECT SESSIONS spawned from dashboard ═══
+        // When the dashboard's handleSpawnProjectSession spawns a session, it
+        // writes a pending-project-sessions.json entry BEFORE calling
+        // subagent.run(). This hook picks it up and auto-registers + sets
+        // project context — so the spawned agent starts ready to work.
+        try {
+          const pendingPath = path.join(dataDir, "pending-project-sessions.json");
+          if (fs.existsSync(pendingPath)) {
+            const pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
+            const entry = pending[sk];
+            if (entry) {
+              sessionTracker.registerSession(sk);
+              sessionTracker.setContext(entry.project, entry.task);
+              delete pending[sk];
+              // Clean up: remove file if empty, otherwise update
+              if (Object.keys(pending).length === 0) {
+                        try { fs.unlinkSync(pendingPath); } catch { /* */ }
+              } else {
+                fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
+              }
+              logger.info("hooks", `Auto-registered project session: ${sk} → ${entry.project}/${entry.task}`);
+            }
+          }
+        } catch (e: any) {
+          logger.warn("hooks", `Pending project-session auto-register failed: ${e.message}`);
+        }
+
         sessionTracker.trackAction("session_started");
         writeLiveAgents("session_start", sessionTracker, logger);
         logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);

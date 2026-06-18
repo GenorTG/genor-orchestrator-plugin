@@ -1021,20 +1021,28 @@ export function createDashboardHandler(api) {
                     // Generate a unique session key for this new project session
                     const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
                     const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-                    // Message instructing the agent to register with orchestrator and begin work
+                    // ═══ PRE-WRITE pending registration so the session_start hook auto-registers it ═══
+                    const pendingPath = path.join(getDataDir(), "pending-project-sessions.json");
+                    let pending = {};
+                    try {
+                        if (fs.existsSync(pendingPath)) {
+                            pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
+                        }
+                    }
+                    catch { /* ignore read errors */ }
+                    pending[sessionKey] = { project, task, spawnedAt: new Date().toISOString() };
+                    fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
+                    // Now spawn — session_start hook will find the pending entry and auto-register
                     const message = [
                         `[Orchestrator: New Project Session]`,
                         ``,
-                        `You have been spawned as an independent session to work on project: ${project}`,
+                        `You have been spawned as an independent session for project: ${project}`,
                         `Your task:`,
                         task,
                         ``,
-                        `IMPORTANT — Before starting work, you MUST call these two tools in order:`,
-                        `1. orchestrator_register — to register this session with the orchestrator`,
-                        `2. orchestrator_set_context(project="${project}", task="<your task>") — to bind to the project and enable auto-routing`,
-                        ``,
-                        `After registration and context are set, begin working on the task above.`,
-                        `You are a persistent independent session — not a sub-agent. You will continue until the task is complete.`,
+                        `You are auto-registered with the orchestrator. Project context is already set.`,
+                        `Begin working on the task above.`,
+                        `You are a persistent independent session — you will continue until the task is complete.`,
                     ].join("\n");
                     const result = await api.runtime.subagent.run({
                         sessionKey,
