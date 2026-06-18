@@ -854,7 +854,7 @@ function renderProjectSessions(data){
       <label style="font-size:12px;color:var(--text-dim)">Project:</label>
       <select id="ps-project" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit;min-width:200px">
         <option value="">-- Select project --</option>
-        ${(data.projects||[]).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join('')}
+        ${((data['/api/all']&&data['/api/all'].projects&&data['/api/all'].projects.projects)||[]).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join('')}
       </select>
       <button class="btn btn-sm btn-primary" onclick="loadProjectSessions()">🔍 Load Sessions</button>
       <button class="btn btn-sm" onclick="showSpawnModal()">➕ New Session</button>
@@ -1100,6 +1100,24 @@ function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replac
 function escAttr(s){return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 // $ and $$ are already defined above (line ~437)
 
+/* ═══════════════════════════════════════════════════════════
+   MODAL SYSTEM
+   ═══════════════════════════════════════════════════════════ */
+window.showModal=function(title,body,actionsHtml){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.setAttribute('role','dialog');
+  overlay.setAttribute('aria-modal','true');
+  overlay.style.zIndex='9999';
+  overlay.innerHTML='<div class="modal"><div class="modal-title">'+escHtml(title)+'</div><div class="modal-body">'+body+'</div>'+(!actionsHtml?'<div class="modal-actions"><button class="btn btn-sm" onclick="closeModal()">Close</button></div>':'<div class="modal-actions">'+actionsHtml+'</div>')+'</div>';
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click',function(e){if(e.target===overlay)closeModal()});
+};
+window.closeModal=function(){
+  const el=document.querySelector('.modal-overlay');
+  if(el)el.remove();
+};
+
 window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Agent</span><span>'+escHtml(s.agent||'—')+'</span></div>'+
@@ -1292,8 +1310,8 @@ async function showProject(name){
           <table>
             <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>
             <tbody>
-              ${sessions.slice().reverse().map(s=>`
-                <tr style="cursor:pointer" onclick="showSessionDetail(${JSON.stringify(s).replace(/"/g,'&quot;')})">
+              ${(()=>{const rev=sessions.slice().reverse();window._projSessions=rev;return rev.map((s,i)=>`
+                <tr style="cursor:pointer" onclick="showSessionDetail(window._projSessions[${i}])">
                   <td style="font-size:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,24)}</td>
                   <td>${esc(s.agent||'—')}</td>
                   <td><span class="tag">${esc(s.model||'—')}</span></td>
@@ -1302,7 +1320,7 @@ async function showProject(name){
                   <td style="font-size:10px">${fmtDate(s.start_time)}</td>
                   <td>${s.duration||'—'}</td>
                 </tr>
-              `).join('')}
+              `).join('')})()}
               ${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
             </tbody>
           </table>

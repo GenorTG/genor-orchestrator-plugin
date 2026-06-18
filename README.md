@@ -875,6 +875,32 @@ The dashboard handler is registered via `api.registerHttpRoute(...)` — same pa
 
 **v0.8.0 Complete Redesign:** The dashboard was rewritten from 3506 lines to 1428 lines with a clean left sidebar navigation layout. Features StateManager reactive state for real-time updates, lazy panel rendering, toast notifications, and accessible ARIA roles.
 
+### Screenshots
+
+| Dashboard Home | Sessions Tab | Session Detail | Project Session Modal |
+|---|---|---|---|
+| ![Dashboard Home](docs/images/dashboard-home.png) | ![Sessions Tab](docs/images/dashboard-sessions.png) | ![Session Detail](docs/images/dashboard-session-detail.png) | ![Session Modal](docs/images/dashboard-session-modal.png) |
+
+### Usage Guide
+
+**📊 Dashboard home** — The landing page shows 4 metric cards (Total Models, Active Agents, Projects, Sessions in 24h), quick-action buttons (Doctor, Populate Models, Fix Docs Drift), a Recent Activity log, and system status indicators.
+
+**📁 Projects** — Lists all configured projects with their session count, creation date, routing preset, and free-only mode. Click **Details** for a deep dive: metric cards, workflow config, session history table, and model routing chains. Click any session row to open a detail modal showing agent, model, status, task, original prompt, and notes.
+
+**🤖 Agents** — Live agent cards from `live-agents.json`. Shows agent name, current project/task, model, workflow phase, elapsed time, action history, and token usage. Use **Stop** to kill a stuck agent or **Recover** to restart it.
+
+**🧠 Models** — CRUD inventory of all 40+ models. Each row has editable tier (S/A/B/C), speed (fast/medium/slow), status (active/offline/removed), and agent-ready flag. Changes persist to `models.json` with a toast confirmation.
+
+**📜 Logs** — Filterable orchestration event log (debug/info/warn/error). Click any row to see full details. Sources include routing decisions, session lifecycle, model changes, and config updates.
+
+**⚙️ Settings** — Dashboard configuration toggles. Free-only mode, safeguard enabled/disabled, auto-recover on stuck agents. Changes apply immediately via API.
+
+**🌐 Gateway** — Live OpenClaw gateway sessions. See every active session with its agent, start time, project binding, and connection status.
+
+**📋 Sessions** — The new per-project session manager. **Select a project** from the dropdown, click **Load Sessions** to fetch session history. Each row shows agent, status badge (green=complete, yellow=running, red=failed), task/goal, start time, and duration. **Click any row** to expand an inline detail pane with full session info: agent, model, status, task, original prompt, notes/tags, links, and parent/sub-agent hierarchy. Use the **Project Docs** sidebar to view BACKLOG.json, CONTEXT.md, RECOVERY.md, sessions.json, and more inline. Click **New Session** to spawn a sub-agent directly from the dashboard.
+
+**🛡️ Safeguards** — Idle/stuck agent detection dashboard. Cards show configuration status, safeguard event log, workflow enforcement per project, agent health indicators (healthy/warning/stale), and a phase timeline for each agent.
+
 ### 9 Tabs (Left Sidebar Nav)
 
 | Tab | What You See |
