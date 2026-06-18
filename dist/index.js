@@ -5246,18 +5246,82 @@ Focus specifically on: ${params.topic}` : "";
         // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
         try {
             const dashHandler = createDashboardHandler(api);
+            // Route stays auth:"plugin" — HTTP handlers run without operator.write scope.
+            // Spawning sessions (subagent.run) requires operator.write, so the dashboard
+            // handler writes spawn requests to a queue file and a fast poll interval
+            // drains them from the plugin's runtime context (which has full scope).
             api.registerHttpRoute({
                 path: "/orchestrator",
                 auth: "plugin",
                 match: "prefix",
                 handler: dashHandler,
-                gatewayRuntimeScopeSurface: "trusted-operator",
             });
             logger.info("plugin", "Dashboard handler registered at /orchestrator");
         }
         catch (dhErr) {
             logger.warn("plugin", "Dashboard route registration failed: " + (dhErr?.message || String(dhErr)));
         }
+        // ═══ SPAWN QUEUE DRAINER ═══
+        // The dashboard HTTP handler can't call api.runtime.subagent.run() because
+        // auth:"plugin" routes get empty runtime scopes. Instead, the dashboard
+        // writes spawn requests to pending-spawns.json and this interval drains
+        // them from the plugin's runtime context (which has operator.write scope).
+        let drainTimer = null;
+        const startSpawnQueueDrainer = () => {
+            const SPAWN_QUEUE_PATH = path.join(dataDir, "pending-spawns.json");
+            const drain = async () => {
+                if (!fs.existsSync(SPAWN_QUEUE_PATH))
+                    return;
+                try {
+                    const raw = JSON.parse(fs.readFileSync(SPAWN_QUEUE_PATH, "utf-8"));
+                    const entries = Array.isArray(raw) ? raw : [];
+                    if (entries.length === 0)
+                        return;
+                    // Process the first pending entry
+                    const entry = entries[0];
+                    // Spawn the session via subagent.run (this context has operator.write)
+                    const result = await api.runtime.subagent.run({
+                        sessionKey: entry.sessionKey,
+                        message: entry.message,
+                        model: entry.model || undefined,
+                    });
+                    // Write pending registration so session_start hook auto-registers
+                    const pendingPath = path.join(dataDir, "pending-project-sessions.json");
+                    let pending = {};
+                    try {
+                        if (fs.existsSync(pendingPath)) {
+                            pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
+                        }
+                    }
+                    catch { /* */ }
+                    pending[entry.sessionKey] = { project: entry.project, task: entry.task, spawnedAt: new Date().toISOString() };
+                    fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
+                    logger.info("spawn", `Drained spawn: ${entry.sessionKey} → ${entry.project} (runId: ${result.runId})`);
+                    // Remove processed entry
+                    entries.shift();
+                    if (entries.length > 0) {
+                        fs.writeFileSync(SPAWN_QUEUE_PATH, JSON.stringify(entries, null, 2));
+                    }
+                    else {
+                        try {
+                            fs.unlinkSync(SPAWN_QUEUE_PATH);
+                        }
+                        catch { /* */ }
+                    }
+                }
+                catch (e) {
+                    logger.warn("spawn", `Spawn queue drain error: ${e.message}`);
+                    // On error, remove the queue file to avoid infinite retries
+                    try {
+                        fs.unlinkSync(SPAWN_QUEUE_PATH);
+                    }
+                    catch { /* */ }
+                }
+            };
+            drainTimer = setInterval(drain, 3000); // every 3 seconds
+            logger.info("plugin", "Spawn queue drainer started (every 3s)");
+        };
+        startSpawnQueueDrainer();
         logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
     },
 });

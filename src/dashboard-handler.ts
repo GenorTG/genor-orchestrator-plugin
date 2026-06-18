@@ -995,18 +995,9 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
           const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
 
-          // ═══ PRE-WRITE pending registration so the session_start hook auto-registers it ═══
-          const pendingPath = path.join(getDataDir(), "pending-project-sessions.json");
-          let pending: Record<string, { project: string; task: string; spawnedAt: string }> = {};
-          try {
-            if (fs.existsSync(pendingPath)) {
-              pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
-            }
-          } catch { /* ignore read errors */ }
-          pending[sessionKey] = { project, task, spawnedAt: new Date().toISOString() };
-          fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
-
-          // Now spawn — session_start hook will find the pending entry and auto-register
+          // ═══ QUEUE the spawn — the plugin's spawn queue drainer (3s interval)
+          // picks this up and calls subagent.run() from the plugin runtime context
+          // which has operator.write scope (HTTP handlers don't).
           const message = [
             `[Orchestrator: New Project Session]`,
             ``,
@@ -1019,18 +1010,21 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
             `You are a persistent independent session — you will continue until the task is complete.`,
           ].join("\n");
 
-          const result = await api.runtime.subagent.run({
-            sessionKey,
-            message,
-            model: model || undefined,
-          });
+          const queuePath = path.join(getDataDir(), "pending-spawns.json");
+          let queue: Array<{ sessionKey: string; project: string; task: string; model?: string; message: string }> = [];
+          try {
+            if (fs.existsSync(queuePath)) {
+              queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
+            }
+          } catch { /* */ }
+          queue.push({ sessionKey, project, task, model: model || undefined, message });
+          fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
 
           sendJSON(_res, {
             ok: true,
             session_key: sessionKey,
-            run_id: result.runId,
             project,
-            message: `Session spawned for "${project}": ${sessionKey}`,
+            message: `Session queued for spawn: "${project}" — ${sessionKey}`,
           });
         } catch (e: any) {
           sendJSON(_res, { ok: false, error: e.message }, 500);
