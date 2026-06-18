@@ -5486,6 +5486,7 @@ Focus specifically on: ${params.topic}` : "";
         auth: "plugin",
         match: "prefix",
         handler: dashHandler,
+        gatewayRuntimeScopeSurface: "trusted-operator",
       });
       logger.info("plugin", "Dashboard handler registered at /orchestrator");
     } catch (dhErr: any) {
