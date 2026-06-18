@@ -2113,6 +2113,7 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_generate_handoff", label: "Generate Handoff", description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.", parameters: { type: "object", properties: {} } },
   // ── Quick Action Tools ────────────────────────────────────
   { name: "orchestrator_grill_with_docs", label: "Grill Me With Docs", description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.", parameters: { type: "object", properties: { topic: { type: "string", description: "Optional focus topic." }, model: { type: "string", description: "Optional model override." } } } },
+  { name: "orchestrator_fix_docs_drift", label: "Fix Docs Drift", description: "Scans project docs for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current state.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
   { name: "orchestrator_cleanup_docs", label: "Clean Up & Organize Docs", description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.", parameters: { type: "object", properties: { scope: { type: "string", description: "Scope: all, readme, adrs, docs, tests." }, model: { type: "string", description: "Optional model override." } } } },
   { name: "orchestrator_setup_unit_tests", label: "Set Up Unit Tests", description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.", parameters: { type: "object", properties: { framework: { type: "string", description: "Test framework: vitest, jest, mocha, pytest, etc." }, model: { type: "string", description: "Optional model override." } } } },
   { name: "orchestrator_setup_e2e_tests", label: "Set Up E2E Tests", description: "Spawns a subagent that sets up E2E test infrastructure and creates initial test scenarios.", parameters: { type: "object", properties: { framework: { type: "string", description: "Framework: playwright, cypress, puppeteer, etc." }, model: { type: "string", description: "Optional model override." } } } },
@@ -2761,7 +2762,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call orchestrator_advance_phase when plan is approved.",
             document: "📝 PHASE: DOCUMENT — Write an ADR (orchestrator_log_decision) or design doc covering the architecture, trade-offs, and key decisions. Call orchestrator_advance_phase when design is documented.",
             work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with orchestrator_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call orchestrator_advance_phase when implementation is complete.`,
-            log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with orchestrator_generate_handoff (REQUIRED before finish). Then call orchestrator_advance_phase.",
+            log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with orchestrator_generate_handoff (REQUIRED before finish). Then call orchestrator_advance_phase. (Docs are auto-synced when advancing to finish.)",
             finish: "✅ PHASE: FINISH — All phases complete. Verifying git status and ensuring everything is committed.",
           };
           
@@ -3168,6 +3169,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             if (!sessionTracker.loggedTaskCompletion) {
               return txt({ ok: false, error: "Task must be explicitly logged before finishing. Call orchestrator_log_session with status=complete first.", log_required: true });
             }
+            // Auto-fix docs drift before finalizing
+            tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
           // work → log: GIT CHECK (soft warning, non-blocking)
@@ -3230,6 +3233,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           if (currentPhase === "log" && !sessionTracker.canFinish()) {
             return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff.", handoff_required: true });
           }
+          // Auto-fix docs drift before finalizing
+          tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           
           // document → next: ADR CHECK (soft warning)
           if (currentPhase === "document") {
@@ -3709,7 +3714,11 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           }
         }
 
-        const result: any = { ok, checks: checks, auto_fix: autoFix, issues_found: issues.length, fixes_applied: fixes.length, session_key: sessionTracker.sessionKey || "(none)", registered: sessionTracker.sessionKey ? sessionTracker.isSessionRegistered(sessionTracker.sessionKey) : false, project_context: sessionTracker.currentProject || "(none)" };
+        // ── Recompute ok: if all discovered issues were fixed, the system is healthy ──
+        // The result should reflect the current state, not the initial scan. A doctor
+        // that successfully fixes everything returns ok=true.
+        const finalOk = autoFix && issues.length > 0 && fixes.length >= issues.length;
+        const result: any = { ok: finalOk || ok, checks: checks, auto_fix: autoFix, issues_found: issues.length, fixes_applied: fixes.length, session_key: sessionTracker.sessionKey || "(none)", registered: sessionTracker.sessionKey ? sessionTracker.isSessionRegistered(sessionTracker.sessionKey) : false, project_context: sessionTracker.currentProject || "(none)" };
         if (issues.length > 0) result.issues = issues;
         if (fixes.length > 0) result.fixes = fixes;
         return txt(result);
@@ -4467,6 +4476,73 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       }
     }
 
+    // ── Helper: try-fix docs drift (non-blocking, best-effort) ──
+    function tryFixDocsDrift(project: string | null, _dataDir: string, _logger: OrchestratorLogger): void {
+      if (!project) return;
+      try {
+        const _projDataDir = projDir(project, _dataDir);
+        const _srcDir = getProjectLocation(project, _dataDir);
+        if (!_srcDir || !fs.existsSync(_srcDir)) return;
+
+        let _toolCount = 0;
+        let _testCount = 0;
+        let _version = "";
+
+        // Count tools from source
+        const srcPath = path.join(_srcDir, "src", "index.ts");
+        if (fs.existsSync(srcPath)) {
+          const content = fs.readFileSync(srcPath, "utf-8");
+          const matches = content.match(/api\.registerTool\(\{/g);
+          if (matches) _toolCount = matches.length;
+        }
+
+        // Count test files
+        const testDir = path.join(_srcDir, "tests");
+        if (fs.existsSync(testDir)) {
+          _testCount = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
+        }
+
+        // Get version from package.json
+        const pkgPath = path.join(_srcDir, "package.json");
+        if (fs.existsSync(pkgPath)) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+            _version = pkg.version || "";
+          } catch { /* */ }
+        }
+
+        // Fix STATE.md
+        const statePath = path.join(_projDataDir, "STATE.md");
+        if (fs.existsSync(statePath)) {
+          let state = fs.readFileSync(statePath, "utf-8");
+          const orig = state;
+          if (_version) state = state.replace(/v(\d+\.\d+\.\d+)/, `v${_version}`);
+          if (_toolCount > 0) state = state.replace(/(\d+)\s+tools?/gi, `${_toolCount} tools`);
+          if (_testCount > 0) state = state.replace(/(\d+)\s+unit tests?/gi, `${_testCount} unit tests`);
+          if (state !== orig) {
+            fs.writeFileSync(statePath, state, "utf-8");
+            _logger.info("docs", `Auto-fixed STATE.md drift for ${project}`);
+          }
+        }
+
+        // Fix CONTEXT.md
+        const ctxPath = path.join(_projDataDir, "CONTEXT.md");
+        if (fs.existsSync(ctxPath)) {
+          let ctx = fs.readFileSync(ctxPath, "utf-8");
+          const orig = ctx;
+          if (_version) {
+            ctx = ctx.replace(/version-(\d+\.\d+\.\d+)/g, `version-${_version}`);
+            ctx = ctx.replace(/version (\d+\.\d+\.\d+)/gi, `version ${_version}`);
+          }
+          if (_toolCount > 0) ctx = ctx.replace(/(\d+)\s+tools/gi, `${_toolCount} tools`);
+          if (ctx !== orig) {
+            fs.writeFileSync(ctxPath, ctx, "utf-8");
+            _logger.info("docs", `Auto-fixed CONTEXT.md drift for ${project}`);
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
     // ── Quick Action: Grill Me With Docs ───────────────────────
     api.registerTool({
       name: "orchestrator_grill_with_docs",
@@ -4743,6 +4819,183 @@ Focus specifically on: ${params.topic}` : "";
           run_id: result.runId,
           session_key: result.sessionKey,
           message: "🚀 Feature development spawned! The engineer is designing and implementing your new functionality.",
+        });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  DOC DRIFT FIXER — scans project docs and corrects stale
+    //  tool counts, test numbers, version references, etc.
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "orchestrator_fix_docs_drift",
+      label: "Fix Docs Drift",
+      description: "Scans project documentation for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current project state.",
+      parameters: Type.Object({
+        project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        const project = params.project || sessionTracker.currentProject;
+        if (!project) {
+          return txt({ ok: false, error: "No project specified and no active project context." });
+        }
+
+        const fixes: string[] = [];
+        const projDataDir = projDir(project, dataDir);
+        const srcDir = getProjectLocation(project, dataDir);
+
+        // ── Count actual tools, tests, version ──
+        let toolCount = 0;
+        let testCount = 0;
+        let hooksCount = 0;
+        let version = "";
+
+        if (srcDir && fs.existsSync(srcDir)) {
+          // Count registered tools (from TOOL_METADATA or grep for registerTool)
+          try {
+            const srcFiles = ["src/index.ts", "src/index.js"];
+            for (const sf of srcFiles) {
+              const sfPath = path.join(srcDir, sf);
+              if (fs.existsSync(sfPath)) {
+                const content = fs.readFileSync(sfPath, "utf-8");
+                // Count tools: look for registerTool calls
+                const toolMatches = content.match(/api\.registerTool\(\{/g);
+                if (toolMatches) toolCount = toolMatches.length;
+                // Count test files
+                const testDir = path.join(srcDir, "tests");
+                if (fs.existsSync(testDir)) {
+                  const testFiles = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js") || f.endsWith(".test.tsx"));
+                  testCount = testFiles.length;
+                }
+                break;
+              }
+            }
+          } catch { /* ignore count errors */ }
+
+          // Look for package.json version
+          const pkgPath = path.join(srcDir, "package.json");
+          if (fs.existsSync(pkgPath)) {
+            try {
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+              version = pkg.version || "";
+            } catch { /* */ }
+          }
+        }
+
+        // ── Scan and fix STATE.md ──
+        const statePath = path.join(projDataDir, "STATE.md");
+        if (fs.existsSync(statePath)) {
+          let state = fs.readFileSync(statePath, "utf-8");
+          const originalState = state;
+
+          // Fix version in header
+          if (version) {
+            const verRegex = /v(\d+\.\d+\.\d+)/;
+            if (verRegex.test(state)) {
+              state = state.replace(verRegex, `v${version}`);
+            }
+          }
+
+          // Fix tool count
+          if (toolCount > 0) {
+            const toolRegex = /(\d+)\s+tools?/gi;
+            state = state.replace(toolRegex, `${toolCount} tools`);
+          }
+
+          // Fix test count
+          if (testCount > 0) {
+            const testRegex = /(\d+)\s+unit tests?/gi;
+            state = state.replace(testRegex, `${testCount} unit tests`);
+          }
+
+          if (state !== originalState) {
+            fs.writeFileSync(statePath, state, "utf-8");
+            fixes.push(`STATE.md: updated version/tool/test counts`);
+          }
+        }
+
+        // ── Scan and fix CONTEXT.md ──
+        const contextPath = path.join(projDataDir, "CONTEXT.md");
+        if (fs.existsSync(contextPath)) {
+          let ctx = fs.readFileSync(contextPath, "utf-8");
+          const originalCtx = ctx;
+
+          if (version) {
+            ctx = ctx.replace(/version-(\d+\.\d+\.\d+)/g, `version-${version}`);
+            ctx = ctx.replace(/version (\d+\.\d+\.\d+)/gi, `version ${version}`);
+          }
+          if (toolCount > 0) {
+            ctx = ctx.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
+          }
+          if (hooksCount > 0) {
+            ctx = ctx.replace(/(\d+)\s+hooks/gi, `${hooksCount} hooks`);
+          }
+
+          if (ctx !== originalCtx) {
+            fs.writeFileSync(contextPath, ctx, "utf-8");
+            fixes.push(`CONTEXT.md: updated version/tool counts`);
+          }
+        }
+
+        // ── Scan and fix README badges if source dir available ──
+        if (srcDir && fs.existsSync(srcDir)) {
+          const readmePath = path.join(srcDir, "README.md");
+          if (fs.existsSync(readmePath)) {
+            let readme = fs.readFileSync(readmePath, "utf-8");
+            const originalReadme = readme;
+
+            if (version) {
+              readme = readme.replace(/version-(\d+\.\d+\.\d+)/g, `version-${version}`);
+              readme = readme.replace(/badge\/version-(\d+\.\d+\.\d+)/g, `badge/version-${version}`);
+            }
+            if (toolCount > 0) {
+              readme = readme.replace(/tools-(\d+)/g, `tools-${toolCount}`);
+            }
+
+            if (readme !== originalReadme) {
+              fs.writeFileSync(readmePath, readme, "utf-8");
+              fixes.push(`README.md: updated version/tool badges`);
+            }
+          }
+        }
+
+        // ── Also update ROADMAP.md if it exists ──
+        const roadPath = path.join(projDataDir, "ROADMAP.md");
+        if (fs.existsSync(roadPath)) {
+          let road = fs.readFileSync(roadPath, "utf-8");
+          const originalRoad = road;
+          let roadChanged = false;
+
+          if (version) {
+            const newRoad = road.replace(/v(\d+\.\d+\.\d+)/g, `v${version}`);
+            if (newRoad !== road) roadChanged = true;
+            road = newRoad;
+          }
+          if (toolCount > 0) {
+            const newRoad = road.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
+            if (newRoad !== road) roadChanged = true;
+            road = newRoad;
+          }
+
+          if (roadChanged) {
+            fs.writeFileSync(roadPath, road, "utf-8");
+            fixes.push(`ROADMAP.md: updated version/tool references`);
+          }
+        }
+
+        if (fixes.length === 0) {
+          return txt({ ok: true, project, message: "✅ All docs are current — no drift found.", fixes: [] });
+        }
+
+        logger.info("docs", `Drift fixed for ${project}: ${fixes.join(", ")}`);
+        return txt({
+          ok: true,
+          project,
+          message: `📝 Fixed ${fixes.length} doc drift(s) for "${project}".`,
+          fixes,
         });
       },
     });
