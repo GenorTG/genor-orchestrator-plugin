@@ -1033,10 +1033,7 @@ export function createDashboardHandler(api) {
                         `Begin working on the task above.`,
                         `You are a persistent independent session — you will continue until the task is complete.`,
                     ].join("\n");
-                    // ═══ Write pending registration FIRST (before scheduleSessionTurn) ═══
-                    // The session_start hook reads this file to auto-register + set context.
-                    // scheduleSessionTurn fires almost immediately (delayMs: 500), so we
-                    // write the registration file first to avoid race conditions.
+                    // ═══ Write pending registration for session_start hook ═══
                     const pendingPath = path.join(getDataDir(), "pending-project-sessions.json");
                     let pending = {};
                     try {
@@ -1047,34 +1044,38 @@ export function createDashboardHandler(api) {
                     catch { /* */ }
                     pending[sessionKey] = { project, task, model: model || undefined, spawnedAt: new Date().toISOString() };
                     fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
-                    // ═══ Schedule the session turn through Cron ═══
-                    // api.session.workflow.scheduleSessionTurn() creates a Cron entry that
-                    // fires after 500ms. Cron creates the session and triggers an agent turn.
-                    // The session_start hook auto-registers before the first turn processes.
-                    // This works from HTTP handler context because it's a Cron API, not a
-                    // subagent.run() call (no operator.write scope needed).
-                    const handle = await api.session.workflow.scheduleSessionTurn({
-                        sessionKey,
-                        agentId: "main",
-                        message,
-                        delayMs: 500,
-                        deleteAfterRun: true,
-                    });
-                    if (!handle) {
-                        // Maybe the session already existed — try the queue fallback
-                        const queuePath = path.join(getDataDir(), "pending-spawns.json");
-                        let queue = [];
-                        try {
-                            if (fs.existsSync(queuePath)) {
-                                queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
-                            }
+                    // ═══ Write spawn queue ═══
+                    const queuePath = path.join(getDataDir(), "pending-spawns.json");
+                    let queue = [];
+                    try {
+                        if (fs.existsSync(queuePath)) {
+                            queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
                         }
-                        catch { /* */ }
-                        queue.push({ sessionKey, project, task, model: model || undefined, message });
-                        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
-                        // Don't block — the before_prompt_build hook will drain the fallback queue
-                        api.logger.warn(`spawn: scheduleSessionTurn returned no handle, wrote fallback queue`);
                     }
+                    catch { /* */ }
+                    queue.push({ sessionKey, project, task, model: model || undefined, message });
+                    fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+                    // ═══ Wake gateway to process queue immediately ═══
+                    // Use the gateway's own chat completions API with the gateway auth token
+                    // to trigger an immediate agent turn. The before_prompt_build hook fires
+                    // on this turn and drains the queue via subagent.run() (has full scope).
+                    try {
+                        const cfg = api.config;
+                        const token = cfg?.gateway?.auth?.token || "";
+                        if (token) {
+                            const port = cfg?.gateway?.port || 18789;
+                            fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                                body: JSON.stringify({
+                                    model: "openclaw/main",
+                                    stream: false,
+                                    messages: [{ role: "user", content: "[orchestrator wake: process pending spawn queue]" }],
+                                }),
+                            }).catch(() => { });
+                        }
+                    }
+                    catch { /* non-fatal */ }
                     sendJSON(_res, {
                         ok: true,
                         session_key: sessionKey,
