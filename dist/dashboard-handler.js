@@ -7,30 +7,15 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
+import { getDataDir } from "./shared.js";
 // ── RESOLVE PLUGIN ROOT ──────────────────────────────────────
 // Match the resolution in src/index.ts so dashboard relative paths work
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const HTML_PATH = path.join(PLUGIN_ROOT, "dashboard", "index.html");
-// ── DATA DIRECTORY (lazy, same resolution as index.ts) ───────
-let _dataDir = null;
-function getDataDir() {
-    if (_dataDir)
-        return _dataDir;
-    const envDir = process.env.ORCHESTRATOR_DATA_DIR;
-    if (envDir && fs.existsSync(envDir)) {
-        _dataDir = envDir;
-        return envDir;
-    }
-    const dflt = path.join(os.homedir(), ".openclaw/workspace/orchestrator-data");
-    fs.mkdirSync(dflt, { recursive: true });
-    _dataDir = dflt;
-    return dflt;
-}
 // ── MIME TYPES ────────────────────────────────────────────────
 const MIME = {
     ".html": "text/html;charset=utf-8",

@@ -65,7 +65,11 @@
       "orchestrator_backlog_list",
       "orchestrator_backlog_update",
       "orchestrator_backlog_dispatch",
-      "orchestrator_backlog_dispatch_all"
+      "orchestrator_backlog_dispatch_all",
+      "orchestrator_qa_submit",
+      "orchestrator_qa_approve",
+      "orchestrator_qa_reject",
+      "orchestrator_generate_handoff"
     ]
   }
 }
