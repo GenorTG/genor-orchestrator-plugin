@@ -7,6 +7,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -1060,19 +1061,39 @@ export function createDashboardHandler(api) {
                     // to trigger an immediate agent turn. The before_prompt_build hook fires
                     // on this turn and drains the queue via subagent.run() (has full scope).
                     try {
-                        const cfg = api.config;
-                        const token = cfg?.gateway?.auth?.token || "";
+                        // Read the gateway auth token from the config file on disk.
+                        // api.config may redact this field, so we read it directly.
+                        const cfgDir = path.join(os.homedir(), ".openclaw");
+                        let token = "";
+                        try {
+                            const cfgPath = path.join(cfgDir, "openclaw.json");
+                            if (fs.existsSync(cfgPath)) {
+                                const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+                                token = raw?.gateway?.auth?.token || "";
+                            }
+                        }
+                        catch { /* */ }
                         if (token) {
-                            const port = cfg?.gateway?.port || 18789;
-                            fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+                            const port = api.config?.gateway?.port || 18789;
+                            const wakeUrl = `http://127.0.0.1:${port}/v1/chat/completions`;
+                            const wakeBody = JSON.stringify({
+                                model: "openclaw/main",
+                                stream: false,
+                                messages: [{ role: "user", content: "[orchestrator wake: process pending spawn queue]" }],
+                            });
+                            api.logger.info(`Waking gateway at ${wakeUrl} (token len=${token.length})`);
+                            fetch(wakeUrl, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-                                body: JSON.stringify({
-                                    model: "openclaw/main",
-                                    stream: false,
-                                    messages: [{ role: "user", content: "[orchestrator wake: process pending spawn queue]" }],
-                                }),
-                            }).catch(() => { });
+                                body: wakeBody,
+                            }).then(res => {
+                                api.logger.info(`Wake response: ${res.status}`);
+                            }).catch(err => {
+                                api.logger.warn(`Wake fetch failed: ${err.message}`);
+                            });
+                        }
+                        else {
+                            api.logger.warn("No gateway token found — cannot wake for immediate spawn");
                         }
                     }
                     catch { /* non-fatal */ }
