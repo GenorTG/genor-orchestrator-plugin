@@ -53,6 +53,9 @@ export interface MockApiType {
       run: ReturnType<typeof vi.fn>;
     };
   };
+  cron: {
+    add: ReturnType<typeof vi.fn>;
+  };
 }
 
 // ── Mock API factory ──────────────────────────────────────────
@@ -77,6 +80,9 @@ export function createMockApi(): MockApiType {
       subagent: {
         run: vi.fn((_params: any) => Promise.resolve({ runId: "mock-run-123" })),
       },
+    },
+    cron: {
+      add: vi.fn((_job: any) => Promise.resolve({ ok: true, id: 'mock-cron-1' })),
     },
     tools,
     hooks,

@@ -3013,51 +3013,6 @@ const _plugin: Record<string, any> = definePluginEntry({
 
     api.on("before_prompt_build", async (event, hookCtx) => {
       try {
-        // ═══ DRAIN PENDING SPAWNS ═══
-        // The dashboard HTTP handler writes spawn requests to pending-spawns.json
-        // and wakes the gateway via chat completions API. This hook fires on the
-        // resulting agent turn and calls subagent.run() with full operator.write scope.
-        try {
-          const queuePath = path.join(dataDir, "pending-spawns.json");
-          if (fs.existsSync(queuePath)) {
-            const raw = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
-            const queue = Array.isArray(raw) ? raw : [];
-            if (queue.length > 0) {
-              // Save current tracker state before drain (subagent.run triggers
-              // session_start which calls sessionTracker.start for the spawned session)
-              const _sk = sessionTracker.sessionKey;
-              const _ctx = _sk ? sessionTracker.getSessionContext(_sk) : null;
-              const _depth = sessionTracker.subagentDepth;
-              try {
-                for (const entry of queue) {
-                  try {
-                    const result = await api.runtime.subagent.run({
-                      sessionKey: entry.sessionKey,
-                      message: entry.message,
-                      model: entry.model || undefined,
-                    });
-                    logger.info("spawn", `Spawned: ${entry.sessionKey.slice(0,50)} → ${entry.project} (${result.runId?.slice(0,8)})`);
-                  } catch (e: any) {
-                    logger.warn("spawn", `Spawn failed: ${e.message}`);
-                  }
-                }
-              } finally {
-                // Restore tracker state (subagent.run triggered session_start which
-                // called sessionTracker.start for the spawned session, overwriting ours)
-                if (_sk) {
-                  sessionTracker.start(_sk, "restored-after-spawn-drain");
-                  if (_ctx) {
-                    sessionTracker.setContext(_ctx.project, _ctx.task || "", _ctx.workflowConfig);
-                  }
-                  sessionTracker.subagentDepth = _depth;
-                }
-              }
-              fs.unlinkSync(queuePath);
-              logger.info("spawn", `Drained ${queue.length} spawn(s) from queue`);
-            }
-          }
-        } catch { /* non-fatal */ }
-        
         // ═══ SESSION ISOLATION: Use hook context key, NOT tracker singleton ═══
         // sessionTracker.sessionKey is shared across all sessions and may have
         // been set by a different session's hooks. Always use hookCtx.sessionKey.
@@ -5530,10 +5485,12 @@ Focus specifically on: ${params.topic}` : "";
     try {
       const dashHandler = createDashboardHandler(api);
       // Dashboard UI + API: auth:"plugin" for static serving, file ops
+      // trusted-operator scope gives HTTP handler access to api.runtime.subagent.run()
       api.registerHttpRoute({
         path: "/orchestrator",
         auth: "plugin",
         match: "prefix",
+        gatewayRuntimeScopeSurface: "trusted-operator",
         handler: dashHandler,
       });
       logger.info("plugin", "Dashboard handler registered at /orchestrator");

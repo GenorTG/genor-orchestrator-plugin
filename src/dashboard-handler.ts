@@ -1005,7 +1005,6 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
             ``,
             `You are auto-registered with the orchestrator. Project context is already set.`,
             `Begin working on the task above.`,
-            `You are a persistent independent session — you will continue until the task is complete.`,
           ].join("\n");
 
           // ═══ Write pending registration for session_start hook ═══
@@ -1019,55 +1018,20 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           pending[sessionKey] = { project, task, model: model || undefined, spawnedAt: new Date().toISOString() };
           fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
 
-          // ═══ Write spawn queue ═══
-          const queuePath = path.join(getDataDir(), "pending-spawns.json");
-          let queue: Array<{ sessionKey: string; project: string; task: string; model?: string; message: string }> = [];
+          // ═══ Direct spawn via subagent.run() ═══
+          // With gatewayRuntimeScopeSurface:"trusted-operator", HTTP handler can
+          // call subagent.run() directly — no queue, no cron, no self-API calls.
           try {
-            if (fs.existsSync(queuePath)) {
-              queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
-            }
-          } catch { /* */ }
-          queue.push({ sessionKey, project, task, model: model || undefined, message });
-          fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
-
-          // ═══ Wake gateway to process queue immediately ═══
-          // Use the gateway's own chat completions API with the gateway auth token
-          // to trigger an immediate agent turn. The before_prompt_build hook fires
-          // on this turn and drains the queue via subagent.run() (has full scope).
-          try {
-            // Read the gateway auth token from the config file on disk.
-            // api.config may redact this field, so we read it directly.
-            const cfgDir = path.join(os.homedir(), ".openclaw");
-            let token = "";
-            try {
-              const cfgPath = path.join(cfgDir, "openclaw.json");
-              if (fs.existsSync(cfgPath)) {
-                const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-                token = raw?.gateway?.auth?.token || "";
-              }
-            } catch { /* */ }
-            if (token) {
-              const port = (api.config as any)?.gateway?.port || 18789;
-              const wakeUrl = `http://127.0.0.1:${port}/v1/chat/completions`;
-              const wakeBody = JSON.stringify({
-                model: "openclaw/main",
-                stream: false,
-                messages: [{ role: "user", content: "[orchestrator wake: process pending spawn queue]" }],
-              });
-              api.logger.info(`Waking gateway at ${wakeUrl} (token len=${token.length})`);
-              fetch(wakeUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-                body: wakeBody,
-              }).then(res => {
-                api.logger.info(`Wake response: ${res.status}`);
-              }).catch(err => {
-                api.logger.warn(`Wake fetch failed: ${err.message}`);
-              });
-            } else {
-              api.logger.warn("No gateway token found — cannot wake for immediate spawn");
-            }
-          } catch { /* non-fatal */ }
+            const result = await (api as any).runtime.subagent.run({
+              sessionKey,
+              message,
+              model: model || undefined,
+            });
+            api.logger.info(`Spawned ${sessionKey.slice(0, 50)} → runId: ${(result as any)?.runId?.slice(0, 8) || "?"}`);
+          } catch (e: any) {
+            api.logger.warn(`Direct spawn failed: ${e.message}`);
+            // Don't fail the HTTP response — the session might still be created
+          }
 
           sendJSON(_res, {
             ok: true,
