@@ -1098,8 +1098,7 @@ function fmtSize(bytes){
 }
 function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function escAttr(s){return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
-function $(id){return document.getElementById(id)}
-function $$(sel){return document.querySelectorAll(sel)}
+// $ and $$ are already defined above (line ~437)
 
 window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
@@ -1293,18 +1292,18 @@ async function showProject(name){
           <table>
             <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>
             <tbody>
-              ${sessions.slice().reverse().map(s=>\`
-                <tr style="cursor:pointer" onclick="showSessionDetail(\${JSON.stringify(s).replace(/"/g,'&quot;')})">
-                  <td style="font-size:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis">\${esc(s.id||s.session_key||'').slice(0,24)}</td>
-                  <td>\${esc(s.agent||'—')}</td>
-                  <td><span class="tag">\${esc(s.model||'—')}</span></td>
-                  <td><span class="badge \${s.status==='complete'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">\${s.status||'—'}</span></td>
-                  <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:10px">\${esc(s.goal||s.task||'—')}</td>
-                  <td style="font-size:10px">\${fmtDate(s.start_time)}</td>
-                  <td>\${s.duration||'—'}</td>
+              ${sessions.slice().reverse().map(s=>`
+                <tr style="cursor:pointer" onclick="showSessionDetail(${JSON.stringify(s).replace(/"/g,'&quot;')})">
+                  <td style="font-size:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,24)}</td>
+                  <td>${esc(s.agent||'—')}</td>
+                  <td><span class="tag">${esc(s.model||'—')}</span></td>
+                  <td><span class="badge ${s.status==='complete'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">${s.status||'—'}</span></td>
+                  <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:10px">${esc(s.goal||s.task||'—')}</td>
+                  <td style="font-size:10px">${fmtDate(s.start_time)}</td>
+                  <td>${s.duration||'—'}</td>
                 </tr>
-              \`).join('')}
-              \${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
+              `).join('')}
+              ${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
             </tbody>
           </table>
         </div>
