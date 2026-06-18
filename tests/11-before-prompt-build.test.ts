@@ -102,7 +102,7 @@ describe("PLUGIN-002b — before_prompt_build hook", () => {
       const { hookHandler, sessionKey } = await setupWithSession();
       const result = await hookHandler({}, { sessionKey });
 
-      expect(result.prependContext).toContain("WORKFLOW");
+      expect(result.prependContext).toContain("━━━ WORKFLOW ━━━");
       expect(result.prependContext).toContain("PHASE: ANALYZE");
     });
 

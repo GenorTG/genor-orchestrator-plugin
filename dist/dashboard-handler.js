@@ -1045,6 +1045,22 @@ export function createDashboardHandler(api) {
                     catch { /* */ }
                     queue.push({ sessionKey, project, task, model: model || undefined, message });
                     fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+                    // ═══ WAKE THE GATEWAY to process the queue immediately ═══
+                    // The before_prompt_build hook drains the queue via subagent.run(),
+                    // but it only fires during active agent turns. requestHeartbeat
+                    // triggers an immediate heartbeat, which produces a turn for the
+                    // main session — causing the hook to fire and drain the spawn.
+                    try {
+                        api.runtime.system.requestHeartbeat({
+                            source: "manual",
+                            intent: "immediate",
+                            reason: "drain orchestrator spawn queue",
+                        });
+                    }
+                    catch (err) {
+                        // Non-fatal — the queue will drain on the next natural agent turn
+                        api.logger.warn(`spawn: Heartbeat wake failed: ${err.message}`);
+                    }
                     sendJSON(_res, {
                         ok: true,
                         session_key: sessionKey,
