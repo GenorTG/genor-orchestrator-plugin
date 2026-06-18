@@ -183,7 +183,7 @@ export const sampleDashboardConfig: Record<string, unknown> = {
       location: "/tmp/test-project-loc",
       workflow: {
         enabled: true,
-        include_qa: true,
+        include_qa: false,
         auto_commit: false,
         qa_retries: 3,
         skip_phases: [],
