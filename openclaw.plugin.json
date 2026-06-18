@@ -72,6 +72,7 @@
       "orchestrator_generate_handoff",
       "orchestrator_grill_with_docs",
       "orchestrator_fix_docs_drift",
+      "orchestrator_regenerate_state",
       "orchestrator_cleanup_docs",
       "orchestrator_setup_unit_tests",
       "orchestrator_setup_e2e_tests",

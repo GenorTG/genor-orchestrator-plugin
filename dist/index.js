@@ -944,6 +944,296 @@ function readRecentSessions(project, dataDir, n) {
         return [];
     }
 }
+// ═══════════════════════════════════════════════════════════════
+//  STATE EVENT LOG — append-only JSONL for project state
+//  Multiple sessions can write concurrently (no overwrites).
+//  STATE.md is generated FROM this log, not LLM-written.
+// ═══════════════════════════════════════════════════════════════
+function stateEventLogPath(project, dataDir) {
+    return path.join(projDir(project, dataDir), "state-events.jsonl");
+}
+function writeStateEvent(project, dataDir, event) {
+    try {
+        const p = stateEventLogPath(project, dataDir);
+        const dir = path.dirname(p);
+        if (!fs.existsSync(dir))
+            fs.mkdirSync(dir, { recursive: true });
+        const line = JSON.stringify({
+            ...event,
+            _ts: new Date().toISOString(),
+            _id: crypto.randomUUID(),
+        }) + "\n";
+        // Append-only — safe for concurrent writers (atomic per write)
+        fs.appendFileSync(p, line, "utf-8");
+    }
+    catch { /* best-effort */ }
+}
+function readStateEvents(project, dataDir) {
+    try {
+        const p = stateEventLogPath(project, dataDir);
+        if (!fs.existsSync(p))
+            return [];
+        const raw = fs.readFileSync(p, "utf-8");
+        return raw.split("\n").filter(Boolean).map(line => {
+            try {
+                return JSON.parse(line);
+            }
+            catch {
+                return null;
+            }
+        }).filter(Boolean);
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Generate STATE.md from the event log. No LLM involved — pure data → template.
+ * Returns { generated: boolean, stats: {...} }.
+ */
+function generateStateFromEvents(project, dataDir, logger) {
+    try {
+        const events = readStateEvents(project, dataDir);
+        const projDataDir = projDir(project, dataDir);
+        // ── Compute state from events ──
+        let version = "0.0.1";
+        let toolCount = 0;
+        let testCount = 0;
+        let hooksCount = 0;
+        let sessionCount = 0;
+        let projectCreated = null;
+        let projectDescription = null;
+        let projectLocation = null;
+        const completedPhases = [];
+        const backlog = { total: 0, done: 0, todo: 0 };
+        const recentSessions = [];
+        for (const ev of events) {
+            switch (ev.type) {
+                case "project_created":
+                    projectCreated = ev._ts;
+                    version = ev.version || version;
+                    projectDescription = ev.description || null;
+                    projectLocation = ev.location || null;
+                    break;
+                case "version_changed":
+                    version = ev.version || version;
+                    break;
+                case "tool_count_changed":
+                    toolCount = ev.count ?? toolCount;
+                    break;
+                case "test_count_changed":
+                    testCount = ev.count ?? testCount;
+                    break;
+                case "hooks_count_changed":
+                    hooksCount = ev.count ?? hooksCount;
+                    break;
+                case "session_logged":
+                    sessionCount++;
+                    if (recentSessions.length < 10) {
+                        recentSessions.push({
+                            ts: ev._ts,
+                            task: ev.task || "",
+                            status: ev.status || "",
+                            model: ev.model || "",
+                            duration: ev.duration || "",
+                        });
+                    }
+                    break;
+                case "phase_completed":
+                    if (ev.phase && !completedPhases.includes(ev.phase)) {
+                        completedPhases.push(ev.phase);
+                    }
+                    break;
+                case "backlog_updated":
+                    if (typeof ev.total === "number")
+                        backlog.total = ev.total;
+                    if (typeof ev.done === "number")
+                        backlog.done = ev.done;
+                    if (typeof ev.todo === "number")
+                        backlog.todo = ev.todo;
+                    break;
+            }
+        }
+        // Also try to read actual counts from source
+        const srcDir = getProjectLocation(project, dataDir);
+        if (srcDir && fs.existsSync(srcDir)) {
+            if (!toolCount) {
+                try {
+                    const content = fs.readFileSync(path.join(srcDir, "src", "index.ts"), "utf-8");
+                    const matches = content.match(/api\.registerTool\(\{/g);
+                    if (matches)
+                        toolCount = matches.length;
+                }
+                catch { /* */ }
+            }
+            if (!testCount) {
+                try {
+                    const tDir = path.join(srcDir, "tests");
+                    if (fs.existsSync(tDir)) {
+                        testCount = fs.readdirSync(tDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
+                    }
+                }
+                catch { /* */ }
+            }
+            if (!version || version === "0.0.1") {
+                try {
+                    const pkg = JSON.parse(fs.readFileSync(path.join(srcDir, "package.json"), "utf-8"));
+                    if (pkg.version)
+                        version = pkg.version;
+                }
+                catch { /* */ }
+            }
+        }
+        const stats = { version, toolCount, testCount, hooksCount, sessionCount, backlog, completedPhases };
+        // ── Build STATE.md ──
+        const lines = [];
+        lines.push(`# STATE: ${project} — v${version}`);
+        lines.push("");
+        lines.push("> _Auto-generated from state-events.jsonl — edit events, not STATE.md._");
+        lines.push("");
+        lines.push("## Overview");
+        lines.push("");
+        if (projectCreated) {
+            lines.push(`- **Created:** ${new Date(projectCreated).toLocaleDateString()}`);
+        }
+        lines.push(`- **Version:** v${version}`);
+        if (projectDescription) {
+            lines.push(`- **Description:** ${projectDescription}`);
+        }
+        lines.push(`- **Tools:** ${toolCount}`);
+        lines.push(`- **Unit Tests:** ${testCount}`);
+        if (hooksCount)
+            lines.push(`- **Hooks:** ${hooksCount}`);
+        if (srcDir)
+            lines.push(`- **Location:** \`${srcDir}\``);
+        lines.push("");
+        lines.push("## Status");
+        lines.push("");
+        lines.push("🟢 Active");
+        lines.push("");
+        if (completedPhases.length > 0) {
+            lines.push("### Workflow Progress");
+            lines.push("");
+            const allPhases = ["analyze", "plan", "document", "work", "log", "finish"];
+            for (const ph of allPhases) {
+                const done = completedPhases.includes(ph);
+                lines.push(`- ${done ? "✅" : "⬜"} **${ph.charAt(0).toUpperCase() + ph.slice(1)}**`);
+            }
+            lines.push("");
+        }
+        if (backlog.total > 0) {
+            lines.push("### Backlog");
+            lines.push("");
+            lines.push(`- **Total:** ${backlog.total}`);
+            lines.push(`- **Done:** ${backlog.done}`);
+            lines.push(`- **Todo:** ${backlog.todo}`);
+            lines.push("");
+        }
+        lines.push("### Recent Sessions");
+        lines.push("");
+        if (recentSessions.length > 0) {
+            lines.push("| # | Task | Status | Model | Duration |");
+            lines.push("|---|------|--------|-------|----------|");
+            let idx = 1;
+            for (const s of recentSessions.reverse()) {
+                const taskShort = (s.task || "").substring(0, 40);
+                const statusEmoji = s.status === "complete" ? "✅" : s.status === "blocked" ? "🔴" : s.status === "failed" ? "❌" : "🟡";
+                lines.push(`| ${idx++} | ${taskShort} | ${statusEmoji} ${s.status || ""} | ${s.model ? s.model.substring(0, 20) : "-"} | ${s.duration || "-"} |`);
+            }
+        }
+        else {
+            lines.push("*No sessions logged yet.*");
+        }
+        lines.push("");
+        lines.push("---");
+        lines.push(`_Last regenerated: ${new Date().toISOString()}_`);
+        lines.push(`_Total events in log: ${events.length}_`);
+        lines.push("");
+        const md = lines.join("\n");
+        fs.writeFileSync(path.join(projDataDir, "STATE.md"), md, "utf-8");
+        logger.info("state", `Generated STATE.md for ${project} from ${events.length} events`);
+        return { generated: true, stats };
+    }
+    catch (e) {
+        logger.error("state", `Failed to generate STATE.md for ${project}: ${e.message}`);
+        return { generated: false, stats: {} };
+    }
+}
+/**
+ * Snapshot current project state into the event log.
+ * Reads actual source, writes diff events, regenerates STATE.md.
+ */
+function snapshotState(project, dataDir, logger) {
+    if (!project)
+        return;
+    try {
+        const srcDir = getProjectLocation(project, dataDir);
+        if (!srcDir || !fs.existsSync(srcDir))
+            return;
+        let toolCount = 0;
+        let testCount = 0;
+        let version = "";
+        const srcPath = path.join(srcDir, "src", "index.ts");
+        if (fs.existsSync(srcPath)) {
+            const content = fs.readFileSync(srcPath, "utf-8");
+            const matches = content.match(/api\.registerTool\(\{/g);
+            if (matches)
+                toolCount = matches.length;
+        }
+        const testDir = path.join(srcDir, "tests");
+        if (fs.existsSync(testDir)) {
+            testCount = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
+        }
+        const pkgPath = path.join(srcDir, "package.json");
+        if (fs.existsSync(pkgPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+                version = pkg.version || "";
+            }
+            catch { /* */ }
+        }
+        // Write snapshot events only if changed vs latest in log
+        const events = readStateEvents(project, dataDir);
+        let latestVersion = "";
+        let latestToolCount = 0;
+        let latestTestCount = 0;
+        for (const ev of events) {
+            if (ev.type === "version_changed")
+                latestVersion = ev.version || "";
+            if (ev.type === "tool_count_changed")
+                latestToolCount = ev.count ?? 0;
+            if (ev.type === "test_count_changed")
+                latestTestCount = ev.count ?? 0;
+        }
+        if (version && version !== latestVersion) {
+            writeStateEvent(project, dataDir, { type: "version_changed", version });
+            logger.info("state", `Snapshot: version ${version} for ${project}`);
+        }
+        if (toolCount > 0 && toolCount !== latestToolCount) {
+            writeStateEvent(project, dataDir, { type: "tool_count_changed", count: toolCount });
+            logger.info("state", `Snapshot: ${toolCount} tools for ${project}`);
+        }
+        if (testCount > 0 && testCount !== latestTestCount) {
+            writeStateEvent(project, dataDir, { type: "test_count_changed", count: testCount });
+            logger.info("state", `Snapshot: ${testCount} tests for ${project}`);
+        }
+        // Regenerate STATE.md
+        generateStateFromEvents(project, dataDir, logger);
+    }
+    catch { /* best-effort */ }
+}
+/**
+ * Legacy alias: tryFixDocsDrift now uses state event log + regeneration.
+ */
+function tryFixDocsDrift(project, dataDir, logger) {
+    if (!project)
+        return;
+    try {
+        writeStateEvent(project, dataDir, { type: "doc_synced", auto: true });
+        snapshotState(project, dataDir, logger);
+    }
+    catch { /* best-effort */ }
+}
 function controlDir(dataDir) {
     return path.join(dataDir, "control");
 }
@@ -1074,6 +1364,11 @@ class MaintenanceService {
                     generateRecoveryDoc(p, this.dataDir, this.logger);
                     if (getProjectLocation(p, this.dataDir)) {
                         syncProjectToOrchestrator(p, this.dataDir, this.logger);
+                    }
+                    // Auto-generate state from event log on every tick
+                    const stateLogPath = path.join(projDir(p, this.dataDir), "state-events.jsonl");
+                    if (fs.existsSync(stateLogPath)) {
+                        generateStateFromEvents(p, this.dataDir, this.logger);
                     }
                 }
                 catch (err) {
@@ -1901,6 +2196,7 @@ const TOOL_METADATA = [
     // ── Quick Action Tools ────────────────────────────────────
     { name: "orchestrator_grill_with_docs", label: "Grill Me With Docs", description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.", parameters: { type: "object", properties: { topic: { type: "string", description: "Optional focus topic." }, model: { type: "string", description: "Optional model override." } } } },
     { name: "orchestrator_fix_docs_drift", label: "Fix Docs Drift", description: "Scans project docs for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current state.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
+    { name: "orchestrator_regenerate_state", label: "Regenerate State", description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events, safe for concurrent writers.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
     { name: "orchestrator_cleanup_docs", label: "Clean Up & Organize Docs", description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.", parameters: { type: "object", properties: { scope: { type: "string", description: "Scope: all, readme, adrs, docs, tests." }, model: { type: "string", description: "Optional model override." } } } },
     { name: "orchestrator_setup_unit_tests", label: "Set Up Unit Tests", description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.", parameters: { type: "object", properties: { framework: { type: "string", description: "Test framework: vitest, jest, mocha, pytest, etc." }, model: { type: "string", description: "Optional model override." } } } },
     { name: "orchestrator_setup_e2e_tests", label: "Set Up E2E Tests", description: "Spawns a subagent that sets up E2E test infrastructure and creates initial test scenarios.", parameters: { type: "object", properties: { framework: { type: "string", description: "Framework: playwright, cypress, puppeteer, etc." }, model: { type: "string", description: "Optional model override." } } } },
@@ -2821,6 +3117,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 const terminal = ["complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
                 if (terminal)
                     sessionTracker.markLoggedCompletion();
+                // Write state event for this session
+                writeStateEvent(params.project, dataDir, {
+                    type: "session_logged",
+                    status: params.status,
+                    model: params.model,
+                    task: params.task,
+                    agent: params.agent,
+                    duration: params.duration,
+                });
                 return txt(logSession(dataDir, params, logger));
             },
         });
@@ -3035,6 +3340,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     if (!next) {
                         return txt({ ok: true, warning: "Already at last phase. No more phases to advance.", phase: wf.currentPhase, progress: wf.getProgress() });
                     }
+                }
+                // Write state event for phase completion
+                const curProject = sessionTracker.currentProject;
+                if (curProject) {
+                    writeStateEvent(curProject, dataDir, {
+                        type: "phase_completed",
+                        phase: currentPhase,
+                        skipped: !!params.skip,
+                    });
                 }
                 sessionTracker.trackAction(`workflow: ${wf.currentPhase}`);
                 writeLiveAgents("workflow_advance", sessionTracker, logger);
@@ -4148,25 +4462,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({ ok: false, error: `Project "${projectName}" already exists in orchestrator-data.` });
                 }
                 fs.mkdirSync(projDir2, { recursive: true });
-                // Create STATE.md
-                const stateContent = [
-                    `# STATE: ${projectName} — v0.0.1`,
-                    "",
-                    "## Overview",
-                    "",
-                    params.description || "No description yet.",
-                    "",
-                    "## Status",
-                    "",
-                    "🟢 Active",
-                    "",
-                    params.directory ? `**Location:** \`${params.directory}\`` : "*Location not configured*",
-                    "",
-                    "## Sessions",
-                    "",
-                    "No sessions logged yet.",
-                ].join("\n");
-                fs.writeFileSync(path.join(projDir2, "STATE.md"), stateContent, "utf-8");
+                // Write project_created state event (append-only, no overwrites)
+                writeStateEvent(projectName, dataDir, {
+                    type: "project_created",
+                    description: params.description || null,
+                    version: "0.0.1",
+                    location: params.directory || null,
+                });
+                // Generate initial STATE.md from event log
+                generateStateFromEvents(projectName, dataDir, logger);
                 // Create dashboard-config.json entry
                 const configPath = path.join(dataDir, "dashboard-config.json");
                 let cfg = {};
@@ -4245,75 +4549,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 return { ok: false, error: err.message };
             }
         }
-        // ── Helper: try-fix docs drift (non-blocking, best-effort) ──
-        function tryFixDocsDrift(project, _dataDir, _logger) {
-            if (!project)
-                return;
-            try {
-                const _projDataDir = projDir(project, _dataDir);
-                const _srcDir = getProjectLocation(project, _dataDir);
-                if (!_srcDir || !fs.existsSync(_srcDir))
-                    return;
-                let _toolCount = 0;
-                let _testCount = 0;
-                let _version = "";
-                // Count tools from source
-                const srcPath = path.join(_srcDir, "src", "index.ts");
-                if (fs.existsSync(srcPath)) {
-                    const content = fs.readFileSync(srcPath, "utf-8");
-                    const matches = content.match(/api\.registerTool\(\{/g);
-                    if (matches)
-                        _toolCount = matches.length;
-                }
-                // Count test files
-                const testDir = path.join(_srcDir, "tests");
-                if (fs.existsSync(testDir)) {
-                    _testCount = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
-                }
-                // Get version from package.json
-                const pkgPath = path.join(_srcDir, "package.json");
-                if (fs.existsSync(pkgPath)) {
-                    try {
-                        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-                        _version = pkg.version || "";
-                    }
-                    catch { /* */ }
-                }
-                // Fix STATE.md
-                const statePath = path.join(_projDataDir, "STATE.md");
-                if (fs.existsSync(statePath)) {
-                    let state = fs.readFileSync(statePath, "utf-8");
-                    const orig = state;
-                    if (_version)
-                        state = state.replace(/v(\d+\.\d+\.\d+)/, `v${_version}`);
-                    if (_toolCount > 0)
-                        state = state.replace(/(\d+)\s+tools?/gi, `${_toolCount} tools`);
-                    if (_testCount > 0)
-                        state = state.replace(/(\d+)\s+unit tests?/gi, `${_testCount} unit tests`);
-                    if (state !== orig) {
-                        fs.writeFileSync(statePath, state, "utf-8");
-                        _logger.info("docs", `Auto-fixed STATE.md drift for ${project}`);
-                    }
-                }
-                // Fix CONTEXT.md
-                const ctxPath = path.join(_projDataDir, "CONTEXT.md");
-                if (fs.existsSync(ctxPath)) {
-                    let ctx = fs.readFileSync(ctxPath, "utf-8");
-                    const orig = ctx;
-                    if (_version) {
-                        ctx = ctx.replace(/version-(\d+\.\d+\.\d+)/g, `version-${_version}`);
-                        ctx = ctx.replace(/version (\d+\.\d+\.\d+)/gi, `version ${_version}`);
-                    }
-                    if (_toolCount > 0)
-                        ctx = ctx.replace(/(\d+)\s+tools/gi, `${_toolCount} tools`);
-                    if (ctx !== orig) {
-                        fs.writeFileSync(ctxPath, ctx, "utf-8");
-                        _logger.info("docs", `Auto-fixed CONTEXT.md drift for ${project}`);
-                    }
-                }
-            }
-            catch { /* best-effort */ }
-        }
+        // ── State event log functions are defined at module level ──
+        // (These are available to both the register closure and MaintenanceService)
         // ── Quick Action: Grill Me With Docs ───────────────────────
         api.registerTool({
             name: "orchestrator_grill_with_docs",
@@ -4753,6 +4990,38 @@ Focus specifically on: ${params.topic}` : "";
                     message: `📝 Fixed ${fixes.length} doc drift(s) for "${project}".`,
                     fixes,
                 });
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  GENERATE STATE — reads state-events.jsonl, produces STATE.md
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_regenerate_state",
+            label: "Regenerate State",
+            description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events. Safe for concurrent writers since events are append-only.",
+            parameters: Type.Object({
+                project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                const project = params.project || sessionTracker.currentProject;
+                if (!project) {
+                    return txt({ ok: false, error: "No project specified and no active project context." });
+                }
+                // Snapshot current state first
+                snapshotState(project, dataDir, logger);
+                const result = generateStateFromEvents(project, dataDir, logger);
+                if (result.generated) {
+                    return txt({
+                        ok: true,
+                        project,
+                        message: `📊 Regenerated STATE.md for "${project}" from event log.`,
+                        stats: result.stats,
+                    });
+                }
+                return txt({ ok: false, error: `Failed to regenerate STATE.md for "${project}".` });
             },
         });
         // ═══════════════════════════════════════════════════════════
