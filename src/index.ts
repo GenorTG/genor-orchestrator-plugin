@@ -1199,7 +1199,8 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
       if (!toolCount) {
         try {
           const content = fs.readFileSync(path.join(srcDir, "src", "index.ts"), "utf-8");
-          const matches = content.match(/api\.registerTool\(\{/g);
+          const registerFn = content.slice(content.lastIndexOf('register(api)'));
+          const matches = registerFn.match(/api\.registerTool\(\{/g);
           if (matches) toolCount = matches.length;
         } catch { /* */ }
       }
@@ -1316,7 +1317,10 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
     const srcPath = path.join(srcDir, "src", "index.ts");
     if (fs.existsSync(srcPath)) {
       const content = fs.readFileSync(srcPath, "utf-8");
-      const matches = content.match(/api\.registerTool\(\{/g);
+      // Only count actual registerTool calls in the register(api) section
+      // (not comment references like "// Each entry matches an api.registerTool")
+      const registerFn = content.slice(content.lastIndexOf('register(api)'));
+      const matches = registerFn.match(/api\.registerTool\(\{/g);
       if (matches) toolCount = matches.length;
     }
 
@@ -2384,7 +2388,7 @@ const TOOL_METADATA: Array<{ name: string; label: string; description: string; p
   { name: "orchestrator_advance_phase", label: "Advance Workflow Phase", description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish).", parameters: { type: "object", properties: { phase: { type: "string", description: "Target phase to transition to. Omit to auto-advance." }, skip: { type: "boolean", description: "Mark current phase as skipped." } } } },
   { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
   { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data', 'pm2' (legacy — kept for compatibility)" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
+  { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data'" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
   { name: "orchestrator_release_project", label: "Release Project Binding", description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project and need to switch contexts with a fresh start.", parameters: { type: "object", properties: { force: { type: "boolean", description: "Force release even if migration in progress (default: false)" } } } },
   { name: "orchestrator_list_active_projects", label: "List Active Projects", description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.", parameters: { type: "object", properties: {} } },
   { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
@@ -3159,7 +3163,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.",
       parameters: Type.Object({
         project: Type.String({ description: "Project name (e.g., kfinance, kotw)." }),
-        task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, restart PM2 process.'" }),
+        task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, rebuild and restart gateway.'" }),
         original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request that triggered this task. Captured in the session log for traceability — so we can see WHY the work was started, not just WHAT was done. Recommended: include the user's full request verbatim. Truncated to 500 chars." })),
       }),
       async execute(_id: string, params: any) {
@@ -3819,7 +3823,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       label: "Orchestrator Doctor",
       description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.",
       parameters: Type.Object({
-        check: Type.Optional(Type.String({ description: "Specific check to run: 'all' (default), 'sessions', 'context', 'data', 'pm2' (legacy — kept for compatibility)" })),
+        check: Type.Optional(Type.String({ description: "Specific check to run: 'all' (default), 'sessions', 'context', 'data'" })),
         fix: Type.Optional(Type.Boolean({ description: "Auto-fix discovered issues when possible (default: false)" })),
       }),
       async execute(_id: string, params: any) {
@@ -3926,19 +3930,18 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           }
         }
 
-        // -- 4. BRIDGE PROCESS HEALTH (gateway-ws-bridge) --
+        // -- 4. GATEWAY HEALTH (plugin deployment — no PM2 bridge needed) --
         if (checks === "all" || checks === "pm2") {
           try {
-            const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 5000 });
+            const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 3000 });
             const processes = JSON.parse(pm2Out);
-            // Dashboard is served via registerHttpRoute — no PM2 process needed
             const bridgeProc = processes.find((p: any) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
-            if (!bridgeProc) addIssue("WebSocket bridge PM2 process not found (expected: genor-bridge, gateway-ws-bridge, or gw-ws-bridge).");
-            else if (bridgeProc.pm2_env?.status !== "online") {
-              addIssue("Bridge is " + (bridgeProc.pm2_env?.status || "unknown") + ".");
-              if (autoFix) { try { execSync("pm2 start " + path.join(getDashboardDir(), "gateway-ws-bridge.js") + " --name gateway-ws-bridge 2>&1", { timeout: 10000 }); addFix("Started gateway-ws-bridge"); } catch (e: any) { addFix("Failed: " + e.message); } }
+            if (!bridgeProc) {
+              // PM2 bridge missing is NORMAL for plugin deployments — ignore
+            } else if (bridgeProc.pm2_env?.status !== "online") {
+              addIssue("Legacy PM2 bridge is " + (bridgeProc.pm2_env?.status || "unknown") + " (ignore if running as OpenClaw plugin).");
             }
-          } catch (e: any) { addIssue("PM2 check failed: " + e.message); }
+          } catch { /* PM2 not available — expected for plugin deployments */ }
         }
 
         // -- 5. PROJECT HEALTH (requires required docs, no orphaned projects) --
@@ -5081,114 +5084,71 @@ Focus specifically on: ${params.topic}` : "";
         const projDataDir = projDir(project, dataDir);
         const srcDir = getProjectLocation(project, dataDir);
 
-        // ── Count actual tools, tests, version ──
+        // Write doc_synced event + update event log + regenerate STATE.md
+        writeStateEvent(project, dataDir, { type: "doc_synced", auto: false, tool: "fix_docs_drift" });
+        snapshotState(project, dataDir, logger);
+
+        // Snapshot already regenerated STATE.md, now fix remaining files
+        // (CONTEXT.md, README, ROADMAP are NOT event-generated — fix inline)
         let toolCount = 0;
         let testCount = 0;
-        let hooksCount = 0;
         let version = "";
 
         if (srcDir && fs.existsSync(srcDir)) {
-          // Count registered tools (from TOOL_METADATA or grep for registerTool)
           try {
-            const srcFiles = ["src/index.ts", "src/index.js"];
-            for (const sf of srcFiles) {
-              const sfPath = path.join(srcDir, sf);
-              if (fs.existsSync(sfPath)) {
-                const content = fs.readFileSync(sfPath, "utf-8");
-                // Count tools: look for registerTool calls
-                const toolMatches = content.match(/api\.registerTool\(\{/g);
-                if (toolMatches) toolCount = toolMatches.length;
-                // Count test files
-                const testDir = path.join(srcDir, "tests");
-                if (fs.existsSync(testDir)) {
-                  const testFiles = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js") || f.endsWith(".test.tsx"));
-                  testCount = testFiles.length;
-                }
-                break;
+            const srcPath = path.join(srcDir, "src", "index.ts");
+            if (fs.existsSync(srcPath)) {
+              const content = fs.readFileSync(srcPath, "utf-8");
+              const toolMatches = content.match(/api\.registerTool\(\{/g);
+              if (toolMatches) {
+                // Subtract comment references (they contain "api.registerTool" in comments)
+                // Actual tool registrations start after the // ── line separating Metadata from register()
+                const registerSection = content.slice(content.lastIndexOf('register(api)'));
+                const actualMatches = registerSection.match(/api\.registerTool\(\{/g);
+                toolCount = actualMatches ? actualMatches.length : 0;
               }
             }
-          } catch { /* ignore count errors */ }
-
-          // Look for package.json version
-          const pkgPath = path.join(srcDir, "package.json");
-          if (fs.existsSync(pkgPath)) {
-            try {
-              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-              version = pkg.version || "";
-            } catch { /* */ }
-          }
-        }
-
-        // ── Scan and fix STATE.md ──
-        const statePath = path.join(projDataDir, "STATE.md");
-        if (fs.existsSync(statePath)) {
-          let state = fs.readFileSync(statePath, "utf-8");
-          const originalState = state;
-
-          // Fix version in header
-          if (version) {
-            const verRegex = /v(\d+\.\d+\.\d+)/;
-            if (verRegex.test(state)) {
-              state = state.replace(verRegex, `v${version}`);
+            const testDir = path.join(srcDir, "tests");
+            if (fs.existsSync(testDir)) {
+              testCount = fs.readdirSync(testDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js") || f.endsWith(".test.tsx")).length;
             }
-          }
-
-          // Fix tool count
-          if (toolCount > 0) {
-            const toolRegex = /(\d+)\s+tools?/gi;
-            state = state.replace(toolRegex, `${toolCount} tools`);
-          }
-
-          // Fix test count
-          if (testCount > 0) {
-            const testRegex = /(\d+)\s+unit tests?/gi;
-            state = state.replace(testRegex, `${testCount} unit tests`);
-          }
-
-          if (state !== originalState) {
-            fs.writeFileSync(statePath, state, "utf-8");
-            fixes.push(`STATE.md: updated version/tool/test counts`);
-          }
+            const pkgPath = path.join(srcDir, "package.json");
+            if (fs.existsSync(pkgPath)) {
+              try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+                version = pkg.version || "";
+              } catch { /* */ }
+            }
+          } catch { /* */ }
         }
 
-        // ── Scan and fix CONTEXT.md ──
+        // Fix CONTEXT.md badges
         const contextPath = path.join(projDataDir, "CONTEXT.md");
         if (fs.existsSync(contextPath)) {
           let ctx = fs.readFileSync(contextPath, "utf-8");
           const originalCtx = ctx;
-
           if (version) {
             ctx = ctx.replace(/version-(\d+\.\d+\.\d+)/g, `version-${version}`);
             ctx = ctx.replace(/version (\d+\.\d+\.\d+)/gi, `version ${version}`);
           }
-          if (toolCount > 0) {
-            ctx = ctx.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
-          }
-          if (hooksCount > 0) {
-            ctx = ctx.replace(/(\d+)\s+hooks/gi, `${hooksCount} hooks`);
-          }
-
+          if (toolCount > 0) ctx = ctx.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
           if (ctx !== originalCtx) {
             fs.writeFileSync(contextPath, ctx, "utf-8");
             fixes.push(`CONTEXT.md: updated version/tool counts`);
           }
         }
 
-        // ── Scan and fix README badges if source dir available ──
+        // Fix README badges
         if (srcDir && fs.existsSync(srcDir)) {
           const readmePath = path.join(srcDir, "README.md");
           if (fs.existsSync(readmePath)) {
             let readme = fs.readFileSync(readmePath, "utf-8");
             const originalReadme = readme;
-
             if (version) {
               readme = readme.replace(/version-(\d+\.\d+\.\d+)/g, `version-${version}`);
               readme = readme.replace(/badge\/version-(\d+\.\d+\.\d+)/g, `badge/version-${version}`);
             }
-            if (toolCount > 0) {
-              readme = readme.replace(/tools-(\d+)/g, `tools-${toolCount}`);
-            }
-
+            if (toolCount > 0) readme = readme.replace(/tools-(\d+)/g, `tools-${toolCount}`);
             if (readme !== originalReadme) {
               fs.writeFileSync(readmePath, readme, "utf-8");
               fixes.push(`README.md: updated version/tool badges`);
@@ -5196,24 +5156,22 @@ Focus specifically on: ${params.topic}` : "";
           }
         }
 
-        // ── Also update ROADMAP.md if it exists ──
+        // Fix ROADMAP.md
         const roadPath = path.join(projDataDir, "ROADMAP.md");
         if (fs.existsSync(roadPath)) {
           let road = fs.readFileSync(roadPath, "utf-8");
           const originalRoad = road;
           let roadChanged = false;
-
           if (version) {
-            const newRoad = road.replace(/v(\d+\.\d+\.\d+)/g, `v${version}`);
-            if (newRoad !== road) roadChanged = true;
-            road = newRoad;
+            const nr = road.replace(/v(\d+\.\d+\.\d+)/g, `v${version}`);
+            if (nr !== road) roadChanged = true;
+            road = nr;
           }
           if (toolCount > 0) {
-            const newRoad = road.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
-            if (newRoad !== road) roadChanged = true;
-            road = newRoad;
+            const nr = road.replace(/(\d+)\s+tools/gi, `${toolCount} tools`);
+            if (nr !== road) roadChanged = true;
+            road = nr;
           }
-
           if (roadChanged) {
             fs.writeFileSync(roadPath, road, "utf-8");
             fixes.push(`ROADMAP.md: updated version/tool references`);
@@ -5221,14 +5179,14 @@ Focus specifically on: ${params.topic}` : "";
         }
 
         if (fixes.length === 0) {
-          return txt({ ok: true, project, message: "✅ All docs are current — no drift found.", fixes: [] });
+          return txt({ ok: true, project, message: "✅ No non-generated docs needed fixing.", fixes: [] });
         }
 
         logger.info("docs", `Drift fixed for ${project}: ${fixes.join(", ")}`);
         return txt({
           ok: true,
           project,
-          message: `📝 Fixed ${fixes.length} doc drift(s) for "${project}".`,
+          message: `📝 Fixed ${fixes.length} doc drift(s) for "${project}". (STATE.md auto-regenerated via event log.)`,
           fixes,
         });
       },
@@ -5453,14 +5411,13 @@ Focus specifically on: ${params.topic}` : "";
             const ageHrs = (Date.now() - stat.mtimeMs) / 3600000;
             if (ageHrs > 24) issues.push("Log file stale (" + ageHrs.toFixed(1) + "h).");
           } else issues.push("Log file missing.");
-          // PM2 check
+          // Gateway health — PM2 bridge is legacy, plugin runs inside OpenClaw
           try {
             const pm2Out = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 3000 });
             const procs = JSON.parse(pm2Out);
             const br = procs.find((p: any) => p.name === "genor-bridge" || p.name === "gateway-ws-bridge" || p.name === "gw-ws-bridge" || (p.pm2_env?.name?.includes("bridge")));
-            if (!br) issues.push("gateway-ws-bridge PM2 process missing.");
-            else if (br.pm2_env?.status !== "online") issues.push("gateway-ws-bridge is " + (br.pm2_env?.status || "unknown") + ".");
-          } catch { issues.push("PM2 process list unavailable."); }
+            if (br && br.pm2_env?.status !== "online") issues.push("Legacy PM2 bridge is " + (br.pm2_env?.status || "unknown") + " (expected for plugin deployments).");
+          } catch { /* PM2 not available — expected */ }
 
           const lines = ["**\uD83D\uDC8A Genor Orchestrator Doctor**"];
           if (issues.length === 0) {
