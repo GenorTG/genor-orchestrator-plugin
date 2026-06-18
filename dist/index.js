@@ -1060,10 +1060,7 @@ function generateStateFromEvents(project, dataDir, logger) {
             if (!toolCount) {
                 try {
                     const content = fs.readFileSync(path.join(srcDir, "src", "index.ts"), "utf-8");
-                    const registerFn = content.slice(content.lastIndexOf('register(api)'));
-                    const matches = registerFn.match(/api\.registerTool\(\{/g);
-                    if (matches)
-                        toolCount = matches.length;
+                    toolCount = countRegisteredTools(content);
                 }
                 catch { /* */ }
             }
@@ -1179,10 +1176,7 @@ function snapshotState(project, dataDir, logger) {
             const content = fs.readFileSync(srcPath, "utf-8");
             // Only count actual registerTool calls in the register(api) section
             // (not comment references like "// Each entry matches an api.registerTool")
-            const registerFn = content.slice(content.lastIndexOf('register(api)'));
-            const matches = registerFn.match(/api\.registerTool\(\{/g);
-            if (matches)
-                toolCount = matches.length;
+            toolCount = countRegisteredTools(content);
         }
         const testDir = path.join(srcDir, "tests");
         if (fs.existsSync(testDir)) {
@@ -2207,6 +2201,29 @@ const TOOL_METADATA = [
     { name: "orchestrator_debug_issue", label: "Debug Issue", description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.", parameters: { type: "object", properties: { issue_description: { type: "string", description: "Describe the bug or issue in detail." }, model: { type: "string", description: "Optional model override." } }, required: ["issue_description"] } },
     { name: "orchestrator_create_functionality", label: "Create New Functionality", description: "Spawns a subagent to design and implement new features or functionality in the project.", parameters: { type: "object", properties: { description: { type: "string", description: "Describe the new functionality — requirements and constraints." }, model: { type: "string", description: "Optional model override." } }, required: ["description"] } },
 ];
+// ── REGISTERED TOOL COUNTER ────────────────────────────────────
+/** Count registerTool calls, excluding those inside line comments. */
+function countRegisteredTools(sourceText) {
+    const prefix = "api.";
+    const suffix = "registerTool({";
+    const target = prefix + suffix;
+    let count = 0, pos = 0;
+    while (pos < sourceText.length) {
+        const idx = sourceText.indexOf(target, pos);
+        if (idx === -1)
+            break;
+        const lineStart = sourceText.lastIndexOf("\n", idx) + 1;
+        if (lineStart === 0) {
+            pos = idx + 1;
+            continue;
+        }
+        const lineBefore = sourceText.slice(lineStart, idx).trimStart();
+        if (!lineBefore.startsWith("//"))
+            count++;
+        pos = idx + 1;
+    }
+    return count;
+}
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
     id: PLUGIN_ID,
@@ -4863,9 +4880,7 @@ Focus specifically on: ${params.topic}` : "";
                             if (toolMatches) {
                                 // Subtract comment references (they contain "api.registerTool" in comments)
                                 // Actual tool registrations start after the // ── line separating Metadata from register()
-                                const registerSection = content.slice(content.lastIndexOf('register(api)'));
-                                const actualMatches = registerSection.match(/api\.registerTool\(\{/g);
-                                toolCount = actualMatches ? actualMatches.length : 0;
+                                toolCount = countRegisteredTools(content);
                             }
                         }
                         const testDir = path.join(srcDir, "tests");
