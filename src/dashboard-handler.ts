@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -873,13 +874,113 @@ function stripBasePath(pathname: string): string {
   return pathname;
 }
 
-export function createDashboardHandler(_api: OpenClawPluginApi) {
+export function createDashboardHandler(api: OpenClawPluginApi) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean | void> => {
     try {
       const method = req.method || "GET";
       const rawPathname = parsePathname(req.url || "/");
       const pathname = stripBasePath(rawPathname);
       const qs = parseQuery(req.url || "");
+
+      // ── Helper: Quick Action — spawns a subagent with a preset prompt ──
+      async function handleQuickAction(_req: IncomingMessage, _res: ServerResponse): Promise<true> {
+        try {
+          const body = await readBody(_req);
+          const { action, params } = typeof body === "string" ? JSON.parse(body) : body;
+          if (!action) { sendJSON(_res, { ok: false, error: "Action name required" }); return true; }
+
+          const promptTemplates: Record<string, (p: any) => string> = {
+            grill_with_docs: (p) => [
+              `[Quick Action: Grill Me With Docs — from Orchestrator Dashboard]`,
+              `You are a project documentation examiner.`,
+              `1. Read ALL project documentation files.`,
+              `2. Formulate 5-10 probing questions about the project's architecture, decisions, trade-offs.`,
+              `3. Present ONE question at a time, wait for the user's answer, then give feedback.`,
+              `4. After all questions, provide a summary of gaps and strengths.`,
+              p.topic ? `Focus on: ${p.topic}` : "",
+              `Be tough but fair.`,
+            ].filter(Boolean).join("\n"),
+            cleanup_docs: (p) => [
+              `[Quick Action: Clean Up & Organize Docs — from Orchestrator Dashboard]`,
+              `You are a documentation specialist.`,
+              `Scope: ${p.scope || "all"}`,
+              `1. READ all existing documentation.`,
+              `2. Fix broken links, stale content, missing sections, inconsistent formatting.`,
+              `3. Update files and create new ones if important gaps found.`,
+              `4. Report summary of changes and why.`,
+            ].filter(Boolean).join("\n"),
+            setup_unit_tests: (p) => [
+              `[Quick Action: Set Up Unit Tests — from Orchestrator Dashboard]`,
+              `You are a test infrastructure engineer.`,
+              `Framework: ${p.framework || "vitest"}`,
+              `1. Install and configure the test framework.`,
+              `2. Create initial unit tests for critical modules.`,
+              `3. Set up test scripts in package.json.`,
+              `4. Run tests and fix failures.`,
+              `5. Report what was set up, pass rate, recommendations.`,
+            ].filter(Boolean).join("\n"),
+            setup_e2e_tests: (p) => [
+              `[Quick Action: Set Up E2E Tests — from Orchestrator Dashboard]`,
+              `You are a test infrastructure engineer.`,
+              `Framework: ${p.framework || "playwright"}`,
+              `1. Install and configure E2E testing.`,
+              `2. Create E2E test scenarios for critical user journeys.`,
+              `3. Set up test scripts.`,
+              `4. Run tests and fix issues.`,
+              `5. Report results and recommendations.`,
+            ].filter(Boolean).join("\n"),
+            debug_issue: (p) => [
+              `[Quick Action: Debug Issue — from Orchestrator Dashboard]`,
+              `## Issue Description`,
+              p.issue_description || "No description provided.",
+              ``,
+              `## Instructions`,
+              `1. Understand the project and the issue.`,
+              `2. Reproduce the issue.`,
+              `3. Identify root cause.`,
+              `4. Implement a fix.`,
+              `5. Verify the fix.`,
+              `6. Report findings.`,
+            ].filter(Boolean).join("\n"),
+            create_functionality: (p) => [
+              `[Quick Action: Create New Functionality — from Orchestrator Dashboard]`,
+              `## Requirements`,
+              p.description || "No description provided.",
+              ``,
+              `## Instructions`,
+              `1. Understand the project architecture.`,
+              `2. Design a solution fitting existing patterns.`,
+              `3. Implement following project standards.`,
+              `4. Add tests.`,
+              `5. Verify everything works.`,
+              `6. Report what was built and decisions made.`,
+            ].filter(Boolean).join("\n"),
+          };
+
+          const templateFn = promptTemplates[action];
+          if (!templateFn) { sendJSON(_res, { ok: false, error: `Unknown action: ${action}` }); return true; }
+
+          const message = templateFn(params || {});
+          const sessionKey = `agent:main:subagent:orch-dash-${crypto.randomUUID()}`;
+          const result = await api.runtime.subagent.run({
+            sessionKey,
+            message,
+            model: params?.model || undefined,
+            lightContext: true,
+          });
+
+          sendJSON(_res, {
+            ok: true,
+            action,
+            run_id: result.runId,
+            session_key: sessionKey,
+            message: `Quick action "${action}" spawned (runId: ${result.runId})`,
+          });
+        } catch (e: any) {
+          sendJSON(_res, { ok: false, error: e.message }, 500);
+        }
+        return true;
+      }
 
       // CORS preflight
       if (method === "OPTIONS") {
@@ -943,6 +1044,7 @@ export function createDashboardHandler(_api: OpenClawPluginApi) {
           case "/api/create-project": handleCreateProject(req, res); return true;
           case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
           case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
+          case "/api/quick-action": return handleQuickAction(req, res);
         }
       }
 

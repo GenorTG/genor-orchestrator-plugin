@@ -69,7 +69,13 @@
       "orchestrator_qa_submit",
       "orchestrator_qa_approve",
       "orchestrator_qa_reject",
-      "orchestrator_generate_handoff"
+      "orchestrator_generate_handoff",
+      "orchestrator_grill_with_docs",
+      "orchestrator_cleanup_docs",
+      "orchestrator_setup_unit_tests",
+      "orchestrator_setup_e2e_tests",
+      "orchestrator_debug_issue",
+      "orchestrator_create_functionality"
     ]
   }
 }

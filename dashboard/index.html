@@ -603,6 +603,19 @@ input.search:focus{border-color:var(--blue);outline:none}
       <div class="term-card" data-tip="Projects registered with the orchestrator for context automation"><div class="card-label">Projects</div><div class="card-value" id="hcProjects">—</div><div class="card-sub">registered</div></div>
       <div class="term-card" data-tip="Active sessions currently running on the OpenClaw gateway"><div class="card-label">Gateway Sessions</div><div class="card-value" id="hcSessions">—</div><div class="card-sub">on gateway</div></div>
     </div>
+    <!-- ─── Quick Actions Panel ─── -->
+    <div style="margin-bottom:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:8px">⚡ Quick Actions</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <button class="btn btn-sm quick-action" data-action="grill_with_docs" title="Spawns a subagent that quizzes you on project docs" style="background:var(--bg2)">📚 Grill Me With Docs</button>
+        <button class="btn btn-sm quick-action" data-action="cleanup_docs" title="Reads, cleans, organizes project docs" style="background:var(--bg2)">📝 Clean Up Docs</button>
+        <button class="btn btn-sm quick-action" data-action="setup_unit_tests" title="Sets up unit test infrastructure" style="background:var(--bg2)">🧪 Set Up Unit Tests</button>
+        <button class="btn btn-sm quick-action" data-action="setup_e2e_tests" title="Sets up E2E test framework" style="background:var(--bg2)">🎭 Set Up E2E Tests</button>
+        <button class="btn btn-sm quick-action" data-action="debug_issue" title="Investigate and fix a bug" style="background:var(--bg2)">🐛 Debug Issue</button>
+        <button class="btn btn-sm quick-action" data-action="create_functionality" title="Design and implement new features" style="background:var(--bg2)">🚀 New Functionality</button>
+      </div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text-dim);display:none" id="quickActionResult"></div>
+    </div>
     <div class="activity-feed-wrap">
       <div class="activity-feed-header">
         <div class="title">📡 Activity Feed</div>
@@ -3438,6 +3451,55 @@ function showResult(msg, type) {
   el.textContent = msg;
   el.style.color = type === 'error' ? 'var(--red)' : 'var(--green)';
 }
+
+// ── Quick Actions ──────────────────────────────────────────
+document.addEventListener('click', async function(e) {
+  const btn = e.target.closest('.quick-action');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const resultEl = document.getElementById('quickActionResult');
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '⏳ Spawning <strong>' + action.replace(/_/g,' ') + '</strong>...';
+  resultEl.style.color = 'var(--text-dim)';
+  btn.disabled = true;
+  try {
+    const params = {};
+    // Ask for issue description for debug_issue
+    if (action === 'debug_issue') {
+      params.issue_description = prompt('Describe the issue to debug:') || '';
+      if (!params.issue_description) { btn.disabled = false; resultEl.style.display = 'none'; return; }
+    }
+    // Ask for description for create_functionality
+    if (action === 'create_functionality') {
+      params.description = prompt('Describe the new functionality:') || '';
+      if (!params.description) { btn.disabled = false; resultEl.style.display = 'none'; return; }
+    }
+    // Optional topic for grill
+    if (action === 'grill_with_docs') {
+      const t = prompt('Optional focus topic (leave blank for full docs):');
+      if (t) params.topic = t;
+    }
+    const r = await fetch('/api/quick-action', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ action, params })
+    });
+    const data = await r.json();
+    if (data.ok) {
+      resultEl.innerHTML = '✅ <strong>' + action.replace(/_/g,' ') + '</strong> spawned! Session: <code>' + data.session_key.slice(-12) + '</code>';
+      resultEl.style.color = 'var(--green)';
+    } else {
+      resultEl.innerHTML = '❌ ' + (data.error || 'Failed');
+      resultEl.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    resultEl.innerHTML = '❌ Network error: ' + e.message;
+    resultEl.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+  // Auto-hide after 15s
+  setTimeout(() => { resultEl.style.display = 'none'; }, 15000);
+});
 </script>
 
 </body>

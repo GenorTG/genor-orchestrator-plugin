@@ -7,4 +7,4 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-export declare function createDashboardHandler(_api: OpenClawPluginApi): (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void>;
+export declare function createDashboardHandler(api: OpenClawPluginApi): (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void>;
