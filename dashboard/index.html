@@ -8,7 +8,10 @@
 /* ═══════════════════════════════════════════════════════════════
    ROOT — Terminal aesthetic, GitHub Dark palette, JetBrains Mono
    ═══════════════════════════════════════════════════════════════ */
-:root {
+/* ═══════════════════════════════════════════════════════════════
+   THEME: Dark (default) + Light via [data-theme] on <html>
+   ═══════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
   --bg: #0d1117;
   --bg-alt: #161b22;
   --border: #30363d;
@@ -22,6 +25,28 @@
   --orange: #f0883e;
   --purple: #bc8cff;
   --cyan: #39d2c0;
+  --tooltip-bg: #1c2333;
+  --font: 'JetBrains Mono','Cascadia Code','Fira Code','Consolas',monospace;
+  --font-ui: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --radius: 6px;
+  --transition: 150ms ease;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-alt: #f6f8fa;
+  --border: #d0d7de;
+  --text: #24292f;
+  --text-dim: #656d76;
+  --text-bright: #1f2328;
+  --blue: #0969da;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --yellow: #9a6700;
+  --orange: #bd561d;
+  --purple: #8250df;
+  --cyan: #1b7c83;
+  --tooltip-bg: #e8eaed;
   --font: 'JetBrains Mono','Cascadia Code','Fira Code','Consolas',monospace;
   --font-ui: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   --radius: 6px;
@@ -64,6 +89,15 @@ body{
 .term-header .stats .stat .num.idle{color:var(--yellow)}
 .term-header .stats .stat .num.fail{color:var(--red)}
 
+/* Theme toggle button */
+.theme-btn{
+  background:none;border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text-dim);cursor:pointer;padding:3px 8px;font-size:14px;
+  line-height:1;transition:var(--transition);display:flex;align-items:center;
+  font-family:var(--font-ui)
+}
+.theme-btn:hover{color:var(--text-bright);border-color:var(--blue);background:rgba(88,166,255,.06)}
+
 /* ═══════════════════════════════════════════════════════════════
    TAB BAR — CLI-style
    ═══════════════════════════════════════════════════════════════ */
@@ -92,7 +126,7 @@ body{
 [data-tip]:hover::after{
   content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);
   left:50%;transform:translateX(-50%);
-  background:#1c2333;color:var(--text-bright);font-size:10px;
+  background:var(--tooltip-bg);color:var(--text-bright);font-size:10px;
   padding:4px 10px;border-radius:4px;white-space:nowrap;
   border:1px solid var(--border);z-index:1000;
   font-family:var(--font-ui);box-shadow:0 4px 12px rgba(0,0,0,.4);
@@ -101,7 +135,7 @@ body{
 [data-tip]:hover::before{
   content:'';position:absolute;bottom:calc(100% + 2px);
   left:50%;transform:translateX(-50%);
-  border:4px solid transparent;border-top-color:#1c2333;z-index:1001;
+  border:4px solid transparent;border-top-color:var(--tooltip-bg);z-index:1001;
   pointer-events:none
 }
 @keyframes tipIn{from{opacity:0;transform:translateX(-50%) translateY(3px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
@@ -390,6 +424,8 @@ body{
    MODAL
    ═══════════════════════════════════════════════════════════════ */
 .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:100;padding:30px;overflow-y:auto}
+
+/* ═══ NEW PROJECT MODAL (HTML inline styles kept for compatibility) ═══ */
 .modal-overlay.open{display:block}
 .modal-content{background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);max-width:800px;margin:0 auto;padding:20px}
 .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
@@ -539,6 +575,7 @@ input.search:focus{border-color:var(--blue);outline:none}
     <div class="stat">Projects: <span class="num" id="sProjects">—</span></div>
     <div class="stat">Logged: <span class="num" id="sSessions">—</span></div>
   </div>
+  <button class="theme-btn" id="themeToggle" onclick="toggleTheme()" data-tip="Toggle dark/light theme">🌙</button>
 </div>
 
 <!-- ═══════════════════ TAB BAR ═══════════════════ -->
@@ -2726,9 +2763,35 @@ function openAgentModal(name) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   THEME — dark/light toggle with localStorage persistence
+   ═══════════════════════════════════════════════════════════════ */
+function getPreferredTheme() {
+  const saved = localStorage.getItem('orchestrator-theme');
+  if (saved === 'dark' || saved === 'light') return saved;
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('orchestrator-theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+}
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+/* ═══════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
+  applyTheme(getPreferredTheme());
+  // Listen for OS-level theme changes when no localStorage override is set
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('orchestrator-theme')) {
+      applyTheme(e.matches ? 'light' : 'dark');
+    }
+  });
   initLoad();
 
   // Periodic refresh for static data
@@ -3294,12 +3357,6 @@ async function sgToggleConfig(key) {
   }
 }
 
-// ══ BOOT: load all data on page load ══
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initLoad);
-} else {
-  initLoad();
-}
 </script>
 
 <!-- ─── NEW PROJECT MODAL ─── -->

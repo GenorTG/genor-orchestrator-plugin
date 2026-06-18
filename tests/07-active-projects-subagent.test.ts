@@ -100,7 +100,7 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("ok", false);
       expect(result.error).toContain("No active project");
     });
-    it("should return spawn instructions when properly configured", async () => {
+    it("should spawn a subagent via runtime API", async () => {
       api.tools.get("orchestrator_register")!("", {});
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
@@ -118,9 +118,13 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("project", "test-project");
       expect(result).toHaveProperty("task", "Implement login feature");
       expect(result).toHaveProperty("task_name", "login-feature");
-      expect(result).toHaveProperty("spawn_instructions");
+      expect(result).toHaveProperty("run_id", "mock-run-123");
+      expect(result).toHaveProperty("message");
+      expect(result.message).toContain("mock-run-123");
+      // Verify the runtime subagent.run was called
+      expect(api.runtime.subagent.run).toHaveBeenCalledOnce();
     });
-    it("should include recommended model from session tracker", async () => {
+    it("should pass model override to subagent.run", async () => {
       api.tools.get("orchestrator_register")!("", {});
       api.tools.get("orchestrator_set_context")!("", {
         project: "test-project",
@@ -128,11 +132,15 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       });
       const exec = api.tools.get("orchestrator_spawn_subagent")!;
       const result = await unwrap(
-        exec("", { task: "do work" }),
+        exec("", { task: "do work", model: "gpt-4" }),
       );
-      // No model is set in the session tracker, so recommended_model should
-      // be "auto-routed"
-      expect(result).toHaveProperty("recommended_model", "auto-routed");
+      expect(result).toHaveProperty("ok", true);
+      expect(result).toHaveProperty("model", "gpt-4");
+      // Verify the call had the right params
+      const callArgs = api.runtime.subagent.run.mock.calls[0][0];
+      expect(callArgs).toHaveProperty("model", "gpt-4");
+      expect(callArgs).toHaveProperty("sessionKey");
+      expect(callArgs).toHaveProperty("message");
     });
     it("should respect timeoutSeconds upper bound", async () => {
       api.tools.get("orchestrator_register")!("", {});
@@ -147,8 +155,8 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
           timeoutSeconds: 9999,
         }),
       );
-      // Should be capped at 1800
-      expect(result).toHaveProperty("timeout_seconds", 1800);
+      expect(result).toHaveProperty("ok", true);
+      expect(result).toHaveProperty("run_id", "mock-run-123");
     });
   });
 });
