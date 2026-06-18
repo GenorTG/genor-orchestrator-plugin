@@ -4229,10 +4229,13 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           logger.info("subagent", `Spawning: ${taskName} (${project}/${task}) model=${model || "auto"}`);
 
           // ── ACTUALLY SPAWN the subagent via OpenClaw runtime API ──
-          const sessionKey = sessionTracker.sessionKey;
-          if (!sessionKey) {
+          if (!sessionTracker.sessionKey) {
             return txt({ ok: false, error: "No session key available. Cannot spawn subagent." });
           }
+
+          // Generate a unique session key that incorporates the task name
+          const safeName = taskName.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
+          const sessionKey = `agent:main:subagent:${safeName || 'sub'}-${Date.now().toString(36)}`;
 
           const spawnResult = await api.runtime.subagent.run({
             sessionKey,
