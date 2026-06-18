@@ -1058,7 +1058,7 @@ function generateRecoveryDoc(project: string, dataDir: string, logger: Orchestra
   const context = readFileContent(path.join(pd, "CONTEXT.md")) || "";
   const blPath = path.join(pd, "BACKLOG.json");
   let backlog: ProjectBacklogTask[] = [];
-  if (fs.existsSync(blPath)) { try { backlog = JSON.parse(fs.readFileSync(blPath, "utf-8")); } catch { /* */ } }
+  if (fs.existsSync(blPath)) { try { const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8")); backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []); } catch { /* */ } }
 
   const openTasks = backlog.filter(t => t.status === "todo" || t.status === "in_progress");
   const sessions = readRecentSessions(project, dataDir, 10);

@@ -898,7 +898,8 @@ function generateRecoveryDoc(project, dataDir, logger) {
     let backlog = [];
     if (fs.existsSync(blPath)) {
         try {
-            backlog = JSON.parse(fs.readFileSync(blPath, "utf-8"));
+            const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8"));
+            backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []);
         }
         catch { /* */ }
     }
