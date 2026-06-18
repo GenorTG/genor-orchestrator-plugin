@@ -2480,12 +2480,39 @@ const _plugin = definePluginEntry({
                 if (!pc)
                     return;
                 const loc = getProjectLocation(pc.project, dataDir);
-                let ctx = `⚡ Project: ${pc.project}`;
+                // ═══ ORCHESTRATOR OPERATING CONTEXT (system prompt) ═══
+                // This is the first thing injected — concise LLM-facing instructions
+                // about how to use the orchestrator naturally.
+                let ctx = `## Orchestrator Operating Context
+You are working within Genor's Orchestrator plugin. Follow these rules automatically.
+
+`;
+                ctx += `**Workflow phases** (advance in order via \`orchestrator_advance_phase\`):
+   analyze → plan → document → work → log → finish
+`;
+                ctx += `**Enforced gates** (code blocks these if violated):
+• Must call \`orchestrator_register\` then \`orchestrator_set_context\` before project work
+• work→log: BLOCKED until QA approves (run \`orchestrator_qa_submit\` → \`orchestrator_qa_approve\`)\n• log→finish: BLOCKED until \`orchestrator_log_session\` AND \`orchestrator_generate_handoff\` complete
+`;
+                ctx += `**Model routing**: Orchestrator auto-selects the best model per task category.
+  Use \`orchestrator_get_routing\` to see recommendations. Don't override unless necessary.
+`;
+                ctx += `**Phase tools**:
+  • Analyze: study context, output findings
+  • Plan: create step-by-step plan, ADR (\`orchestrator_log_decision\`)
+  • Document: \`orchestrator_log_decision\` for architecture decisions
+  • Work: implement, then submit QA if enabled
+  • Log: \`orchestrator_log_session\` with status=complete
+  • Finish: \`orchestrator_generate_handoff\` before advancing
+
+`;
+                let pcl = `⚡ Project: ${pc.project}`;
                 if (pc.task)
-                    ctx += ` | Task: ${pc.task}`;
-                ctx += `\nLocation: ${loc || "not set"}`;
-                ctx += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
-                ctx += ` | Data: orchestrator-data/projects/${pc.project}/`;
+                    pcl += ` | Task: ${pc.task}`;
+                pcl += `\nLocation: ${loc || "not set"}`;
+                pcl += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
+                pcl += ` | Data: orchestrator-data/projects/${pc.project}/`;
+                ctx += pcl;
                 // ═══ PHASE ENFORCEMENT ═══
                 // Inject current workflow phase instructions so the AI knows what phase
                 // it's in and what to do.
