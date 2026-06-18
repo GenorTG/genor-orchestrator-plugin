@@ -1061,15 +1061,16 @@ window.showSpawnModal=function(){
   const project=$('#ps-project')?.value||'';
   const sel=$('#ps-project');
   const projectOptions=sel?sel.innerHTML:'';
-  showModal('➕ Spawn Sub-Agent Session',
+  showModal('🚀 Spawn New Project Session',
     '<div style="display:flex;flex-direction:column;gap:10px">'+
+      '<div style="font-size:11px;color:var(--text-dim);background:var(--bg-alt);padding:6px 8px;border-radius:var(--radius)">🧠 Creates a <strong>persistent independent session</strong> that auto-registers with orchestrator + starts working the task.</div>'+
       '<label style="font-size:12px;color:var(--text-dim)">Project</label>'+
       '<select id="spawn-project" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit">'+projectOptions+'</select>'+
-      '<label style="font-size:12px;color:var(--text-dim)">Task Description</label>'+
-      '<textarea id="spawn-task" rows="3" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit;resize:vertical" placeholder="Describe what the sub-agent should do..."></textarea>'+
+      '<label style="font-size:12px;color:var(--text-dim)">Task / Starting Prompt</label>'+
+      '<textarea id="spawn-task" rows="4" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit;resize:vertical" placeholder="Describe what the session should accomplish..."></textarea>'+
       '<label style="font-size:12px;color:var(--text-dim)">Model (optional)</label>'+
       '<input id="spawn-model" type="text" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit" placeholder="e.g. openrouter/free">'+
-      '<button class="btn btn-primary" onclick="executeSpawn()">🚀 Spawn</button>'+
+      '<button class="btn btn-primary" onclick="executeSpawn()">🚀 Launch Session</button>'+
     '</div>');
 };
 
@@ -1079,14 +1080,14 @@ window.executeSpawn=async function(){
   const model=$('#spawn-model')?.value;
   if(!project||!task){showToast('error','Project and task are required');return;}
   try{
-    showToast('info','Spawning sub-agent for '+project+'...');
-    const r=await API('/api/quick-action',{method:'POST',body:JSON.stringify({action:'spawn_session',params:{project,task,model}}),headers:{'Content-Type':'application/json'}});
+    showToast('info','Spawning persistent session for '+project+'...');
+    const r=await API('/api/spawn-project-session',{method:'POST',body:JSON.stringify({project,task,model}),headers:{'Content-Type':'application/json'}});
     if(r&&r.ok){
-      showToast('success','Sub-agent spawned (run: '+r.run_id?.slice(0,8)+'...)');
+      showToast('success','Session spawned! Key: '+r.session_key.slice(0,40)+'...');
       closeModal();
       document.getElementById('ps-spawned-section').style.display='block';
       const sp=$('#ps-spawned');
-      if(sp) sp.innerHTML+='<div style="padding:4px 0;border-bottom:1px solid var(--border)">✅ ['+new Date().toLocaleTimeString()+'] <strong>'+project+'</strong>: '+task.slice(0,50)+'</div>';
+      if(sp) sp.innerHTML+='<div style="padding:4px 0;border-bottom:1px solid var(--border)">✅ ['+new Date().toLocaleTimeString()+'] <strong>'+project+'</strong>: '+task.slice(0,50)+' <code style="font-size:10px;color:var(--text-dim)">'+r.session_key.slice(0,30)+'</code></div>';
     } else showToast('error',(r&&r.error)||'Spawn failed');
   } catch(e){showToast('error',e.message);}
 };

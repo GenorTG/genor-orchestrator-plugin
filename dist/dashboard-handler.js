@@ -1010,6 +1010,50 @@ export function createDashboardHandler(api) {
                 }
                 return true;
             }
+            async function handleSpawnProjectSession(_req, _res) {
+                try {
+                    const body = await readBody(_req);
+                    const { project, task, model } = typeof body === "string" ? JSON.parse(body) : body;
+                    if (!project || !task) {
+                        sendJSON(_res, { ok: false, error: "Project and task are required" });
+                        return true;
+                    }
+                    // Generate a unique session key for this new project session
+                    const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
+                    const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+                    // Message instructing the agent to register with orchestrator and begin work
+                    const message = [
+                        `[Orchestrator: New Project Session]`,
+                        ``,
+                        `You have been spawned as an independent session to work on project: ${project}`,
+                        `Your task:`,
+                        task,
+                        ``,
+                        `IMPORTANT — Before starting work, you MUST call these two tools in order:`,
+                        `1. orchestrator_register — to register this session with the orchestrator`,
+                        `2. orchestrator_set_context(project="${project}", task="<your task>") — to bind to the project and enable auto-routing`,
+                        ``,
+                        `After registration and context are set, begin working on the task above.`,
+                        `You are a persistent independent session — not a sub-agent. You will continue until the task is complete.`,
+                    ].join("\n");
+                    const result = await api.runtime.subagent.run({
+                        sessionKey,
+                        message,
+                        model: model || undefined,
+                    });
+                    sendJSON(_res, {
+                        ok: true,
+                        session_key: sessionKey,
+                        run_id: result.runId,
+                        project,
+                        message: `Session spawned for "${project}": ${sessionKey}`,
+                    });
+                }
+                catch (e) {
+                    sendJSON(_res, { ok: false, error: e.message }, 500);
+                }
+                return true;
+            }
             // CORS preflight
             if (method === "OPTIONS") {
                 res.writeHead(200, {
@@ -1104,6 +1148,7 @@ export function createDashboardHandler(api) {
                     case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
                     case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
                     case "/api/quick-action": return handleQuickAction(req, res);
+                    case "/api/spawn-project-session": return handleSpawnProjectSession(req, res);
                 }
             }
             // ── 404 ──
