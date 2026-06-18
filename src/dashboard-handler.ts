@@ -995,9 +995,7 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
           const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
 
-          // ═══ QUEUE the spawn — the plugin's spawn queue drainer (3s interval)
-          // picks this up and calls subagent.run() from the plugin runtime context
-          // which has operator.write scope (HTTP handlers don't).
+          // Build the task message for the spawned session
           const message = [
             `[Orchestrator: New Project Session]`,
             ``,
@@ -1010,37 +1008,54 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
             `You are a persistent independent session — you will continue until the task is complete.`,
           ].join("\n");
 
-          const queuePath = path.join(getDataDir(), "pending-spawns.json");
-          let queue: Array<{ sessionKey: string; project: string; task: string; model?: string; message: string }> = [];
+          // ═══ Write pending registration FIRST (before scheduleSessionTurn) ═══
+          // The session_start hook reads this file to auto-register + set context.
+          // scheduleSessionTurn fires almost immediately (delayMs: 500), so we
+          // write the registration file first to avoid race conditions.
+          const pendingPath = path.join(getDataDir(), "pending-project-sessions.json");
+          let pending: Record<string, { project: string; task: string; spawnedAt: string; model?: string }> = {};
           try {
-            if (fs.existsSync(queuePath)) {
-              queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
+            if (fs.existsSync(pendingPath)) {
+              pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
             }
           } catch { /* */ }
-          queue.push({ sessionKey, project, task, model: model || undefined, message });
-          fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+          pending[sessionKey] = { project, task, model: model || undefined, spawnedAt: new Date().toISOString() };
+          fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
 
-          // ═══ WAKE THE GATEWAY to process the queue immediately ═══
-          // The before_prompt_build hook drains the queue via subagent.run(),
-          // but it only fires during active agent turns. requestHeartbeat
-          // triggers an immediate heartbeat, which produces a turn for the
-          // main session — causing the hook to fire and drain the spawn.
-          try {
-            api.runtime.system.requestHeartbeat({
-              source: "manual",
-              intent: "immediate",
-              reason: "drain orchestrator spawn queue",
-            });
-          } catch (err: any) {
-            // Non-fatal — the queue will drain on the next natural agent turn
-            api.logger.warn(`spawn: Heartbeat wake failed: ${err.message}`);
+          // ═══ Schedule the session turn through Cron ═══
+          // api.session.workflow.scheduleSessionTurn() creates a Cron entry that
+          // fires after 500ms. Cron creates the session and triggers an agent turn.
+          // The session_start hook auto-registers before the first turn processes.
+          // This works from HTTP handler context because it's a Cron API, not a
+          // subagent.run() call (no operator.write scope needed).
+          const handle = await api.session.workflow.scheduleSessionTurn({
+            sessionKey,
+            agentId: "main",
+            message,
+            delayMs: 500,
+            deleteAfterRun: true,
+          });
+
+          if (!handle) {
+            // Maybe the session already existed — try the queue fallback
+            const queuePath = path.join(getDataDir(), "pending-spawns.json");
+            let queue: Array<{ sessionKey: string; project: string; task: string; model?: string; message: string }> = [];
+            try {
+              if (fs.existsSync(queuePath)) {
+                queue = JSON.parse(fs.readFileSync(queuePath, "utf-8"));
+              }
+            } catch { /* */ }
+            queue.push({ sessionKey, project, task, model: model || undefined, message });
+            fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+            // Don't block — the before_prompt_build hook will drain the fallback queue
+            api.logger.warn(`spawn: scheduleSessionTurn returned no handle, wrote fallback queue`);
           }
 
           sendJSON(_res, {
             ok: true,
             session_key: sessionKey,
             project,
-            message: `Session queued for spawn: "${project}" — ${sessionKey}`,
+            message: `Spawned new session for "${project}": ${sessionKey}`,
           });
         } catch (e: any) {
           sendJSON(_res, { ok: false, error: e.message }, 500);

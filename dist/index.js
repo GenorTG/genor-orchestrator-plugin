@@ -2811,104 +2811,17 @@ const _plugin = definePluginEntry({
         });
         api.on("before_prompt_build", async (event, hookCtx) => {
             try {
-                // ═══ SAVE & RESTORE tracker around spawn drain ═══
-                // subagent.run() triggers session_start hook synchronously, which calls
-                // sessionTracker.start() on the spawned session — overwriting our current
-                // session's sessionKey. We save and restore to prevent tracker corruption.
-                // CRITICAL: Only save/restore when there is actually a spawn queue to
-                // drain. The restore calls sessionTracker.start() which resets workflow
-                // state (phase progress, etc.), so we must avoid it when no draining occurs.
-                let _didDrain = false;
-                const spawnQueuePath = path.join(dataDir, "pending-spawns.json");
-                if (fs.existsSync(spawnQueuePath)) {
-                    _didDrain = true;
-                    const _savedKey = sessionTracker.sessionKey || "";
-                    const _savedCtx = _savedKey ? sessionTracker.getSessionContext(_savedKey) : null;
-                    // Save subagent depth so restore doesn't lose it
-                    const _savedDepth = sessionTracker.subagentDepth;
-                    // Save workflow state (phase history, QA results, handoff status)
-                    // so it can be restored after subagent.run() resets the tracker
-                    const _savedWorkflow = sessionTracker.workflow.toJSON();
-                    const _savedQaStatus = sessionTracker.qaStatus;
-                    const _savedQaFindings = [...sessionTracker.qaFindings];
-                    const _savedHandoffGenerated = sessionTracker.handoffGenerated;
-                    const _savedHandoffPath = sessionTracker.handoffPath;
-                    try {
-                        let spawnQueue = [];
-                        try {
-                            spawnQueue = JSON.parse(fs.readFileSync(spawnQueuePath, "utf-8"));
-                        }
-                        catch { /* */ }
-                        while (spawnQueue.length > 0) {
-                            const entry = spawnQueue[0];
-                            try {
-                                const result = await api.runtime.subagent.run({
-                                    sessionKey: entry.sessionKey,
-                                    message: entry.message,
-                                    model: entry.model || undefined,
-                                });
-                                const pendingPath = path.join(dataDir, "pending-project-sessions.json");
-                                let pending = {};
-                                try {
-                                    if (fs.existsSync(pendingPath)) {
-                                        pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
-                                    }
-                                }
-                                catch { /* */ }
-                                pending[entry.sessionKey] = { project: entry.project, task: entry.task, spawnedAt: new Date().toISOString() };
-                                fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
-                                logger.info("spawn", `Drained: ${entry.sessionKey.slice(0, 50)} → ${entry.project} (runId: ${result.runId})`);
-                                spawnQueue.shift();
-                            }
-                            catch (e) {
-                                logger.warn("spawn", `Spawn drain failed: ${e.message}`);
-                                spawnQueue.shift();
-                            }
-                        }
-                        if (spawnQueue.length === 0) {
-                            try {
-                                fs.unlinkSync(spawnQueuePath);
-                            }
-                            catch { /* */ }
-                        }
-                        else {
-                            fs.writeFileSync(spawnQueuePath, JSON.stringify(spawnQueue, null, 2));
-                        }
-                    }
-                    finally {
-                        // Restore tracker state
-                        if (_savedKey) {
-                            sessionTracker.start(_savedKey, "restored-from-spawn-drain");
-                            if (_savedCtx) {
-                                sessionTracker.setContext(_savedCtx.project, _savedCtx.task || "", _savedCtx.workflowConfig);
-                            }
-                            // Restore subagent depth (lost by sessionTracker.start())
-                            sessionTracker.subagentDepth = _savedDepth;
-                            // Restore workflow state (phase history, QA results, handoff status)
-                            // setContext.workflow.reset() already created a fresh WorkflowTracker.
-                            // We need to re-apply the saved state on top.
-                            if (_savedWorkflow) {
-                                const wt = sessionTracker.workflow;
-                                wt.currentPhase = _savedWorkflow.current_phase || wt.currentPhase;
-                                wt.phaseHistory = _savedWorkflow.phase_history || wt.phaseHistory;
-                                wt.currentPhaseStartedAt = Date.now();
-                                wt.qaResults = _savedWorkflow.qa_results || [];
-                                wt.qaRetries = _savedWorkflow.qa_retries || 0;
-                                wt.qaMaxRetries = _savedWorkflow.qa_max_retries || 3;
-                                wt.isQARunning = _savedWorkflow.is_qa_running || false;
-                                wt.includeQa = _savedWorkflow.include_qa || false;
-                                wt.autoCommit = _savedWorkflow.auto_commit || false;
-                                wt.skipPhases = _savedWorkflow.skip_phases || [];
-                            }
-                            // Restore QA gate state
-                            sessionTracker.qaStatus = _savedQaStatus;
-                            sessionTracker.qaFindings = _savedQaFindings;
-                            // Restore handoff state
-                            sessionTracker.handoffGenerated = _savedHandoffGenerated;
-                            sessionTracker.handoffPath = _savedHandoffPath;
-                        }
+                // ═══ LEGACY: Clean up stale pending-spawns.json (beta artifacts) ═══
+                // v0.8.8 uses api.session.workflow.scheduleSessionTurn() for spawn.
+                // Old queue files from v0.8.5–v0.8.7 are no longer processed.
+                try {
+                    const legacyQueue = path.join(dataDir, "pending-spawns.json");
+                    if (fs.existsSync(legacyQueue)) {
+                        fs.unlinkSync(legacyQueue);
+                        logger.info("spawn", "Removed stale pending-spawns.json");
                     }
                 }
+                catch { /* */ }
                 // ═══ SESSION ISOLATION: Use hook context key, NOT tracker singleton ═══
                 // sessionTracker.sessionKey is shared across all sessions and may have
                 // been set by a different session's hooks. Always use hookCtx.sessionKey.
