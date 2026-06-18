@@ -846,22 +846,272 @@ function renderSafeguards(data){
   </div>`;
 }
 
-function renderChat(data){
+function renderProjectSessions(data){
   return `
   <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-sessions">
-    <div class="section-title">💬 SSE Console</div>
-    <div class="card" style="margin-bottom:8px">
-      <div class="btn-group">
-        <button class="btn btn-sm btn-primary" onclick="toggleSSE(true)" id="sse-start-btn">▶ Start SSE</button>
-        <button class="btn btn-sm" onclick="toggleSSE(false)" id="sse-stop-btn" disabled>■ Stop</button>
-        <button class="btn btn-sm" onclick="clearSSE()">🗑 Clear</button>
-      </div>
+    <div class="section-title">📋 Session Manager</div>
+    <div class="card" style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label style="font-size:12px;color:var(--text-dim)">Project:</label>
+      <select id="ps-project" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit;min-width:200px">
+        <option value="">-- Select project --</option>
+        ${(data.projects||[]).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join('')}
+      </select>
+      <button class="btn btn-sm btn-primary" onclick="loadProjectSessions()">🔍 Load Sessions</button>
+      <button class="btn btn-sm" onclick="showSpawnModal()">➕ New Session</button>
     </div>
-    <div class="card log-viewer" id="sse-output" style="max-height:500px;overflow-y:auto;font-size:11px">
-      <div class="empty">SSE not started. Click "Start SSE" to begin receiving live session updates.</div>
+    <div id="ps-output" style="font-size:12px;color:var(--text-dim);padding:24px;text-align:center">Select a project and click "Load Sessions"</div>
+    <div style="margin-top:16px;display:none" id="ps-spawned-section">
+      <div class="section-mark">Spawn Log</div>
+      <div id="ps-spawned" style="font-size:12px"></div>
     </div>
   </div>`;
 }
+
+window.loadProjectSessions=async function(){
+  const project=$('#ps-project')?.value;
+  const out=$('#ps-output');
+  if(!project){out.innerHTML='<span style="color:var(--red)">Please select a project.</span>';return;}
+  out.innerHTML='<span style="color:var(--text-dim)">Loading…</span>';
+  try{
+    const state=await API('/api/project-state?name='+encodeURIComponent(project)+'&t='+Date.now());
+    if(!state||state.error){out.innerHTML='<span style="color:var(--red)">Error: '+(state?.error||'No data')+'</span>';return;}
+    const sessions=state.sessions||[];
+    const docs=state.docs||[];
+    if(!sessions.length&&!docs.length){
+      out.innerHTML='<span style="color:var(--text-dim)">No sessions or docs found for this project.</span>';
+      return;
+    }
+    renderSessionTree(sessions,docs,project,out);
+  } catch(e){out.innerHTML='<span style="color:var(--red)">Error: '+e.message+'</span>';}
+};
+
+function renderSessionTree(sessions,docs,project,out){
+  const byParent={},byKey={};
+  for(const s of sessions){
+    byKey[s.session_key||s.id]=s;
+    const pk=s.parent_session_key||'__root__';
+    if(!byParent[pk]) byParent[pk]=[];
+    byParent[pk].push(s);
+  }
+  const roots=byParent['__root__']||[];
+  let html='<div style="display:flex;gap:16px;flex-wrap:wrap">';
+  html+='<div style="flex:2;min-width:350px">';
+  html+='<div class="section-mark" style="margin-top:0">Sessions ('+sessions.length+')</div>';
+  html+='<div id="sessions-tree">';
+  const visited=new Set();
+  function walk(nodes,depth){
+    if(!nodes||!nodes.length) return '';
+    let h='<div style="'+(depth>0?'margin-left:'+(depth*16)+'px;':'')+'">';
+    for(const s of nodes){
+      const k=s.session_key||s.id;
+      if(visited.has(k)) continue;
+      visited.add(k);
+      const children=byParent[k];
+      const hasChild=children&&children.length>0;
+      const st=s.status||'unknown';
+      const bc=st==='complete'?'success':st==='failed'?'error':st==='running'||st==='in_progress'?'warn':'info';
+      const dur=s.duration?formatDur(s.duration):calcDur(s.started_at||s.start_time,s.ended_at||s.end_time);
+      const startFmt=fmtTime(s.started_at||s.start_time);
+      h+='<div class="session-row" data-sk="'+escAttr(k)+'" onclick="toggleSessionDetail(this,\''+escAttr(k)+'\')" style="padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:8px;border-radius:4px">';
+      h+='<span style="width:14px;flex-shrink:0;text-align:center;font-size:9px;color:var(--text-dim)">'+(hasChild?'▶':'')+'</span>';
+      h+='<span style="width:80px;flex-shrink:0;font-size:11px;color:var(--text-dim)">'+escHtml(s.agent||'?')+'</span>';
+      h+='<span class="badge badge-'+bc+'" style="width:60px;text-align:center">'+st+'</span>';
+      h+='<span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(s.goal||s.task||'—')+'</span>';
+      h+='<span style="width:110px;flex-shrink:0;font-size:10px;color:var(--text-dim);text-align:right">'+startFmt+'</span>';
+      h+='<span style="width:50px;flex-shrink:0;font-size:10px;color:var(--text-dim);text-align:right">'+(dur||'—')+'</span>';
+      h+='</div>';
+      h+='<div class="session-detail" id="sdetail-'+k.replace(/[^a-z0-9]/gi,'_')+'" style="display:none;padding:10px 12px 14px 28px;background:var(--bg);border-bottom:1px solid var(--border);font-size:11px">Click to load details.</div>';
+      if(hasChild) h+=walk(children,depth+1);
+    }
+    h+='</div>';
+    return h;
+  }
+  html+=walk(roots,0);
+  // Orphans
+  const orphaned=[];
+  const seen2=new Set();
+  for(const s of sessions){
+    const k=s.session_key||s.id;
+    const pk=s.parent_session_key;
+    if(pk&&pk!=='__root__'&&!byKey[pk]&&!seen2.has(k)){seen2.add(k);orphaned.push(s);}
+  }
+  if(orphaned.length){
+    html+='<div style="margin-top:8px;font-size:11px;color:var(--text-dim);padding:4px 8px">⚠️ '+orphaned.length+' orphan session(s)</div>';
+    html+=walk(orphaned,0);
+  }
+  html+='</div></div>';
+  // Right column: docs
+  html+='<div style="flex:1;min-width:200px"><div class="section-mark" style="margin-top:0">Project Docs</div>';
+  if(docs.length){
+    html+='<div style="display:flex;flex-direction:column;gap:4px">';
+    for(const d of docs){
+      const icon=d.is_md?'📄':d.is_json?'📋':'📎';
+      html+='<a href="#" onclick="event.preventDefault();loadProjectDoc(\''+project+'\',\''+d.name+'\')" style="color:var(--text);text-decoration:none;font-size:12px;padding:2px 4px;border-radius:3px;display:flex;align-items:center;gap:6px">'+
+        '<span>'+icon+'</span><span>'+d.name+'</span><span style="margin-left:auto;font-size:10px;color:var(--text-dim)">'+fmtSize(d.size)+'</span></a>';
+    }
+    html+='</div>';
+  } else html+='<p style="color:var(--text-dim)">No docs.</p>';
+  html+='</div></div>';
+  out.innerHTML=html;
+  window._sessionData=window._sessionData||{};
+  window._sessionData[project]=sessions;
+}
+
+window.toggleSessionDetail=function(row,sk){
+  const detailId='sdetail-'+sk.replace(/[^a-z0-9]/gi,'_');
+  const detail=document.getElementById(detailId);
+  if(!detail) return;
+  if(detail.style.display!=='none'){
+    detail.style.display='none';
+    row.style.background='transparent';
+    return;
+  }
+  document.querySelectorAll('.session-detail').forEach(d=>d.style.display='none');
+  document.querySelectorAll('.session-row').forEach(r=>r.style.background='transparent');
+  row.style.background='var(--accent-bg)';
+  detail.style.display='block';
+  if(detail.textContent==='Click to load details.'||detail.textContent==='Loading…'){
+    detail.textContent='Loading…';
+    loadSessionDetail(sk,detail);
+  }
+};
+
+async function loadSessionDetail(sk,el){
+  try{
+    let s=null;
+    for(const proj in (window._sessionData||{})){
+      for(const sess of window._sessionData[proj]){
+        if((sess.session_key||sess.id)===sk){s=sess;break;}
+      }
+      if(s) break;
+    }
+    if(!s){el.innerHTML='<span style="color:var(--red)">Session not found</span>';return;}
+    const dur=s.duration?formatDur(s.duration):calcDur(s.started_at||s.start_time,s.ended_at||s.end_time);
+    const hasParent=!!(s.parent_session_key&&s.parent_session_key!=='__root__');
+    const tags=Array.isArray(s.tags)?s.tags:[];
+    let html='';
+    html+='<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">';
+    html+='<div><strong style="font-size:13px">'+escHtml(s.goal||s.task||'Untitled')+'</strong>';
+    html+='<div style="font-size:10px;color:var(--text-dim);margin-top:2px">'+escHtml(s.id||sk)+'</div></div>';
+    const bc=s.status==='complete'?'success':s.status==='failed'?'error':s.status==='running'||s.status==='in_progress'?'warn':'info';
+    html+='<span class="badge badge-'+bc+'">'+(s.status||'unknown')+'</span>';
+    html+='</div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">';
+    html+=infoRow('Agent',s.agent||'—');
+    html+=infoRow('Model',s.model||'—');
+    html+=infoRow('Started',fmtTime(s.started_at||s.start_time));
+    html+=infoRow('Duration',dur||'—');
+    html+=infoRow('Task',s.task||'—');
+    if(s.original_prompt) html+=infoRow('Original Prompt',s.original_prompt,true);
+    if(hasParent) html+='<div style="grid-column:1/-1;margin-top:4px">🔗 <strong>Parent Session:</strong> <code style="font-size:10px">'+escHtml(s.parent_session_key)+'</code></div>';
+    html+='</div>';
+    if(tags.length){
+      html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
+      for(const t of tags) html+='<span style="background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-size:10px">#'+escHtml(t)+'</span>';
+      html+='</div>';
+    }
+    if(s.notes){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">📝 Notes:</strong>';
+      html+='<pre style="background:var(--bg-alt);padding:6px 8px;border-radius:4px;font-size:10px;margin-top:4px;overflow:auto;max-height:120px">'+escHtml(s.notes)+'</pre></div>';
+    }
+    if(s.links&&Object.keys(s.links).length){
+      html+='<div><strong style="font-size:11px">🔗 Links:</strong><div style="margin-top:4px">';
+      for(const [lk,lv] of Object.entries(s.links)) html+='<div style="font-size:10px;color:var(--text-dim);padding:1px 0">'+escHtml(lk)+': <code>'+escHtml(String(lv).slice(0,80))+'</code></div>';
+      html+='</div></div>';
+    }
+    el.innerHTML=html;
+  } catch(e){el.innerHTML='<span style="color:var(--red)">Error: '+e.message+'</span>';}
+}
+
+function infoRow(label,val,wide){
+  const col=wide?'1/-1':'1fr';
+  return '<div style="grid-column:'+col+'"><span style="font-size:10px;color:var(--text-dim);display:block">'+label+'</span><span>'+val+'</span></div>';
+}
+
+function calcDur(start,end){
+  if(!start||!end) return null;
+  const s=new Date(start).getTime(), e=new Date(end).getTime();
+  if(isNaN(s)||isNaN(e)||e<s) return null;
+  const ms=e-s;
+  if(ms<60000) return Math.round(ms/1000)+'s';
+  if(ms<3600000) return Math.floor(ms/60000)+'m '+Math.round((ms%60000)/1000)+'s';
+  return Math.floor(ms/3600000)+'h '+Math.round((ms%3600000)/60000)+'m';
+}
+
+function formatDur(d){
+  if(!d) return null;
+  const m=d.match(/(\d+)\s*(s|sec|m|min|h|hr)/i);
+  return m?m[1]+m[2].charAt(0):d;
+}
+
+function fmtTime(ts){
+  if(!ts) return '—';
+  try{const d=new Date(ts);if(isNaN(d.getTime())) return ts.slice(0,16);return d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}catch(e){return String(ts).slice(0,16);}
+}
+
+window.loadProjectDoc=async function(project,file){
+  try{
+    const d=await API('/api/project-doc?name='+encodeURIComponent(project)+'&file='+encodeURIComponent(file)+'&t='+Date.now());
+    if(!d||d.error){showToast('error','Failed to load '+file);return;}
+    showModal('📄 '+file,'<pre style="background:var(--bg);padding:12px;border-radius:var(--radius);font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap">'+escHtml(d.content||'')+'</pre>');
+  } catch(e){showToast('error',e.message);}
+};
+
+window.showSpawnModal=function(){
+  const project=$('#ps-project')?.value||'';
+  const sel=$('#ps-project');
+  const projectOptions=sel?sel.innerHTML:'';
+  showModal('➕ Spawn Sub-Agent Session',
+    '<div style="display:flex;flex-direction:column;gap:10px">'+
+      '<label style="font-size:12px;color:var(--text-dim)">Project</label>'+
+      '<select id="spawn-project" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit">'+projectOptions+'</select>'+
+      '<label style="font-size:12px;color:var(--text-dim)">Task Description</label>'+
+      '<textarea id="spawn-task" rows="3" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit;resize:vertical" placeholder="Describe what the sub-agent should do..."></textarea>'+
+      '<label style="font-size:12px;color:var(--text-dim)">Model (optional)</label>'+
+      '<input id="spawn-model" type="text" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;font:inherit" placeholder="e.g. openrouter/free">'+
+      '<button class="btn btn-primary" onclick="executeSpawn()">🚀 Spawn</button>'+
+    '</div>');
+};
+
+window.executeSpawn=async function(){
+  const project=$('#spawn-project')?.value;
+  const task=$('#spawn-task')?.value;
+  const model=$('#spawn-model')?.value;
+  if(!project||!task){showToast('error','Project and task are required');return;}
+  try{
+    showToast('info','Spawning sub-agent for '+project+'...');
+    const r=await API('/api/quick-action',{method:'POST',body:JSON.stringify({action:'spawn_session',params:{project,task,model}}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){
+      showToast('success','Sub-agent spawned (run: '+r.run_id?.slice(0,8)+'...)');
+      closeModal();
+      document.getElementById('ps-spawned-section').style.display='block';
+      const sp=$('#ps-spawned');
+      if(sp) sp.innerHTML+='<div style="padding:4px 0;border-bottom:1px solid var(--border)">✅ ['+new Date().toLocaleTimeString()+'] <strong>'+project+'</strong>: '+task.slice(0,50)+'</div>';
+    } else showToast('error',(r&&r.error)||'Spawn failed');
+  } catch(e){showToast('error',e.message);}
+};
+
+function fmtSize(bytes){
+  if(bytes<1024) return bytes+'B';
+  if(bytes<1048576) return (bytes/1024).toFixed(1)+'KB';
+  return (bytes/1048576).toFixed(1)+'MB';
+}
+function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escAttr(s){return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function $(id){return document.getElementById(id)}
+function $$(sel){return document.querySelectorAll(sel)}
+
+window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
+  '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Agent</span><span>'+escHtml(s.agent||'—')+'</span></div>'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Model</span><span>'+escHtml(s.model||'—')+'</span></div>'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Status</span><span class="badge badge-'+(s.status==='complete'?'success':s.status==='failed'?'error':'info')+'">'+(s.status||'—')+'</span></div>'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Duration</span><span>'+(s.duration||calcDur(s.started_at||s.start_time,s.ended_at||s.end_time)||'—')+'</span></div>'+
+  '<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Task</span><span>'+escHtml(s.task||'—')+'</span></div>'+
+  (s.original_prompt?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Original Prompt</span><span>'+escHtml(s.original_prompt)+'</span></div>':'')+
+  (s.notes?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Notes</span><pre style="background:var(--bg-alt);padding:6px;border-radius:4px;font-size:10px;max-height:100px;overflow:auto">'+escHtml(s.notes)+'</pre></div>':'')+
+  '</div>'+
+  '</div>');};
 
 /* ═══════════════════════════════════════════════════════════
    TAB MANAGEMENT
@@ -1041,19 +1291,20 @@ async function showProject(name){
         <div class="section-title">Sessions <span class="badge">${sessions.length}</span></div>
         <div class="table-wrap" style="max-height:300px;overflow-y:auto">
           <table>
-            <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Start</th><th>Duration</th></tr></thead>
+            <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>
             <tbody>
-              ${sessions.slice().reverse().map(s=>`
-                <tr>
-                  <td style="font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,30)}</td>
-                  <td>${esc(s.agent||'—')}</td>
-                  <td><span class="tag">${esc(s.model||'—')}</span></td>
-                  <td><span class="badge ${s.status==='complete'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">${s.status||'—'}</span></td>
-                  <td style="font-size:10px">${fmtDate(s.start_time)}</td>
-                  <td>${s.duration||'—'}</td>
+              ${sessions.slice().reverse().map(s=>\`
+                <tr style="cursor:pointer" onclick="showSessionDetail(\${JSON.stringify(s).replace(/"/g,'&quot;')})">
+                  <td style="font-size:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis">\${esc(s.id||s.session_key||'').slice(0,24)}</td>
+                  <td>\${esc(s.agent||'—')}</td>
+                  <td><span class="tag">\${esc(s.model||'—')}</span></td>
+                  <td><span class="badge \${s.status==='complete'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">\${s.status||'—'}</span></td>
+                  <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:10px">\${esc(s.goal||s.task||'—')}</td>
+                  <td style="font-size:10px">\${fmtDate(s.start_time)}</td>
+                  <td>\${s.duration||'—'}</td>
                 </tr>
-              `).join('')}
-              ${!sessions.length?'<tr><td colspan="6" class="empty">No sessions</td></tr>':''}
+              \`).join('')}
+              \${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
             </tbody>
           </table>
         </div>
