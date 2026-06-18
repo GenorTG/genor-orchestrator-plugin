@@ -3,26 +3,38 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 ![Tools](https://img.shields.io/badge/tools-40-success)
 ![Hooks](https://img.shields.io/badge/hooks-8-ff69b4)
 
-> **✨ 28 tools + 8 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, a built-in dashboard — all inside OpenClaw with zero external processes.
+> **✨ 40 tools + 8 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
 
 The orchestrator doesn't take over your thinking. It handles the scaffolding so your LLM can focus on what matters: **coding, solving problems, and building cool stuff.** 🚀
 
 ---
 
-## 🚀 What's New in v0.7.0
+## 🚀 What's New in v0.8.0
 
-The jump from 22 → 28 tools brings **six major features** that supercharge the orchestrator's routing brain and project workflow:
+The jump from 28 → 40 tools brings a **complete dashboard redesign**, a new **Sessions tab**, and **12 new tools** for project lifecycle and QA:
+
+| # | Feature | What It Does |
+|---|---------|-------------|
+| 🖥️ | **Dashboard Redesign** | 1428-line single-file SPA with 9-tab left sidebar nav, StateManager reactive state, lazy rendering, toast notifications, accessible ARIA roles. Replaced old top-tab-bar with clean sidebar layout. |
+| 📋 | **Sessions Tab** | Per-project session tree with parent-child hierarchy, clickable detail pane, spawn sub-agent modal. Replaces old "Chat Console" (all SSE/chat functionality removed — that's OpenClaw WebUI's job). |
+| ✅ | **QA Workflow** | 3 new tools: `qa_submit`, `qa_approve`, `qa_reject`. Auto-spawns independent QA review subagent on submit. QA gate blocks work→log phase transition. |
+| 🤝 | **Handoff & Deep-Dive** | `generate_handoff` — compact session handoff for agent switching. `grill_with_docs` — subagent that quizzes you on project docs to sharpen understanding. |
+| 🧹 | **Doc Tools** | `fix_docs_drift` — scans for stale version numbers, tool counts, etc. `regenerate_state` — STATE.md from state event log. `cleanup_docs` — spawns subagent to fix broken links, stale content. |
+| 🧪 | **Test Infrastructure** | `setup_unit_tests` and `setup_e2e_tests` — spawn subagents with framework config + initial tests. `debug_issue` and `create_functionality` — spawn subagents for targeted work. |
+| 🐛 | **Bug Fixes** | Dashboard handler rebuild on every plugin load, stale model display in dashboard, orphan session key cleanup, auto-populate edge cases. |
+
+### Previous Release — v0.7.0
 
 | # | Feature | What It Does |
 |---|---------|-------------|
 | 🧠 | **Routing Presets** | 5 presets: Custom Chains, No Steering, Free Only, Single Provider, Custom Fallbacks Only. Dashboard preset selector with live descriptions. Dynamic provider input for Single Provider mode. |
-| 📋 | **Backlog Tools** | 6 new tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog CRUD with dependency resolution and parallel dispatch. |
-| 🔗 | **Routing Chains** | Per-task-type (coding, fixing, research, q&a, documentation) model preference lists with fallback chain. Dashboard-editable, persisted to config via `POST /api/set-project-routing`. |
-| 🧩 | **Enhanced Routing Brain** | `get_routing` returns model quality metadata (tier, speed, context, status). Task category auto-inferred from task description. Blocked chain detection. Preset-aware `before_model_resolve` hook with chain fallthrough logic. |
+| 📋 | **Backlog Tools** | 6 tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog CRUD with dependency resolution and parallel dispatch. |
+| 🔗 | **Routing Chains** | Per-task-type (coding, fixing, research, q&a, documentation) model preference lists with fallback chain. Dashboard-editable, persisted to config. |
+| 🧩 | **Enhanced Routing Brain** | `get_routing` returns model quality metadata (tier, speed, context, status). Task category auto-inferred from task description. Blocked chain detection. Preset-aware hook resolution with chain fallthrough logic. |
 | 🖥️ | **Dashboard Agent Cards** | Stop and Recover buttons on agent cards. Safeguards tab with event log viewer, agent health indicators (healthy/warning/stale). |
 | 🛡️ | **Safeguards Dashboard** | Configuration card, workflow enforcement per project, agent phase display, phase timeline, safeguard event log. |
 
@@ -37,7 +49,7 @@ The jump from 22 → 28 tools brings **six major features** that supercharge the
 The agent will:
 1. `git clone --recurse-submodules` the repo
 2. Read `SETUP.md`
-3. Execute the 7-step installation procedure
+3. Execute the installation procedure
 
 Done. The plugin auto-creates data dirs, schedules nightly model sync, and runs background maintenance every 30 minutes. ⏰
 
@@ -72,7 +84,7 @@ openclaw plugins list | grep orchestrator
 
 ## 🔧 Tool Reference
 
-Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **28** of them:
+Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **40** of them:
 
 ### 📋 Registration & Lifecycle
 
@@ -269,7 +281,7 @@ orchestrator_get_routing(category: "coding", project: "my-project")
 
 ---
 
-### 📁 Project Management (7 tools)
+### 📁 Project Management (8 tools)
 
 #### `orchestrator_create_project`
 > 🏗️ **Create a new project** with STATE.md, dashboard config entry, and optional spawn marker for immediate work.
@@ -328,7 +340,56 @@ orchestrator_get_project_docs(project: "my-project")
 
 ---
 
-### 📋 Backlog Management (5 tools)
+#### `orchestrator_fix_docs_drift`
+> 🔍 **Scan project documentation for stale version numbers, tool counts, test counts, and other drift.** Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current project state.
+
+```typescript
+orchestrator_fix_docs_drift(project: "my-project")
+// → { ok: true, fixes_applied: 3, details: [...] }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ❌ | Project name. Omit to use current project context. |
+
+**When to use:** When project docs seem out of date after significant code changes.
+
+---
+
+#### `orchestrator_regenerate_state`
+> 🔄 **Regenerate STATE.md from the project state event log (state-events.jsonl).** No LLM involved — computed from actual events. Safe for concurrent writers.
+
+```typescript
+orchestrator_regenerate_state(project: "my-project")
+// → { ok: true, project: "my-project", path: "..." }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project` | `string` | ❌ | Omit to use current project context. |
+
+**When to use:** After STATE.md gets out of sync with the event log.
+
+---
+
+#### `orchestrator_cleanup_docs`
+> 🧹 **Spawns a subagent that reads, cleans up, and updates project documentation** — fixing broken links, stale content, and filling gaps.
+
+```typescript
+orchestrator_cleanup_docs(scope: "all")
+// → spawns a subagent, returns session key
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `scope` | `string` | ❌ | `all` (default), `readme`, `adrs`, `docs`, `tests`. |
+| `model` | `string` | ❌ | Optional model override for the subagent. |
+
+**When to use:** When project docs are messy and need a thorough cleanup pass.
+
+---
+
+### 📋 Backlog Management (6 tools)
 
 #### `orchestrator_backlog_add`
 > ➕ **Add a task to a project's backlog.** Supports priority, labels, and dependencies.
@@ -547,6 +608,146 @@ orchestrator_advance_phase(skip: true)
 
 ---
 
+### ✅ QA Review (3 tools)
+
+#### `orchestrator_qa_submit`
+> 🧪 **Submit a QA finding for review.** When `workflow.include_qa` is enabled, this is required before advancing from work to log. Auto-spawns an independent QA review subagent.
+
+```typescript
+orchestrator_qa_submit(finding: "All edge cases covered, docs updated, tests passing")
+// → spawns QA review subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `finding` | `string` | ✅ | Describe the QA finding, issue, or observation. |
+| `review_model` | `string` | ❌ | Optional model override for the QA review subagent. |
+
+**When to use:** After completing work, before advancing to the Log phase. QA gate is enforced when enabled.
+
+---
+
+#### `orchestrator_qa_approve`
+> ✅ **Approve the current work.** Unblocks the work→log transition when the QA gate is active.
+
+```typescript
+orchestrator_qa_approve()
+// → { ok: true }
+```
+
+**When to use:** After QA review passes.
+
+---
+
+#### `orchestrator_qa_reject`
+> ❌ **Reject the current work** and return to work phase for fixes.
+
+```typescript
+orchestrator_qa_reject(reason: "Missing error handling for empty state")
+// → { ok: true, status: "returned_to_work" }
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reason` | `string` | ✅ | Why the work was rejected. Describe what needs to be fixed. |
+
+**When to use:** When QA review finds issues that need fixing.
+
+---
+
+### 🤝 Handoff & Deep-Dive (2 tools)
+
+#### `orchestrator_generate_handoff`
+> 📋 **Generate a handoff/recovery document** for the current task. Required before advancing to the finish phase.
+
+```typescript
+orchestrator_generate_handoff()
+// → { ok: true, path: ".../RECOVERY.md", ... }
+```
+
+**When to use:** When switching agents, ending a session, or passing work to a subagent. Captures state, decisions, open questions, and next steps.
+
+---
+
+#### `orchestrator_grill_with_docs`
+> 🔥 **Spawns a subagent that reads all project documentation and quizzes you** on it — sharpens project understanding and catches knowledge gaps.
+
+```typescript
+orchestrator_grill_with_docs(topic: "authentication flow")
+// → spawns a quiz subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `topic` | `string` | ❌ | Optional specific topic or area to focus on. |
+| `model` | `string` | ❌ | Optional model override for the subagent. |
+
+**When to use:** When you need to deeply understand a project's docs.
+
+---
+
+### 🧪 Test & Debug Infrastructure (4 tools)
+
+#### `orchestrator_setup_unit_tests`
+> 🧪 **Spawns a subagent that sets up unit test infrastructure** (framework, config, CI) and creates initial tests for existing code.
+
+```typescript
+orchestrator_setup_unit_tests(framework: "vitest")
+// → spawns test setup subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `framework` | `string` | ❌ | `vitest` (default), `jest`, `mocha`, `pytest`, etc. |
+| `model` | `string` | ❌ | Optional model override. |
+
+---
+
+#### `orchestrator_setup_e2e_tests`
+> 🌐 **Spawns a subagent that sets up end-to-end test infrastructure** and creates initial E2E test scenarios.
+
+```typescript
+orchestrator_setup_e2e_tests(framework: "playwright")
+// → spawns E2E setup subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `framework` | `string` | ❌ | `playwright` (default), `cypress`, `puppeteer`, etc. |
+| `model` | `string` | ❌ | Optional model override. |
+
+---
+
+#### `orchestrator_debug_issue`
+> 🐛 **Spawns a subagent to investigate and help fix a specific bug or issue** in the project.
+
+```typescript
+orchestrator_debug_issue(issue_description: "Login form crashes on empty input when validation fails")
+// → spawns debug subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `issue_description` | `string` | ✅ | Describe the bug — what's happening, what should happen, reproduction steps. |
+| `model` | `string` | ❌ | Optional model override. |
+
+---
+
+#### `orchestrator_create_functionality`
+> ✨ **Spawns a subagent to design and implement new features or functionality** in the project.
+
+```typescript
+orchestrator_create_functionality(description: "Add a dark mode toggle that persists to localStorage")
+// → spawns feature subagent
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | `string` | ✅ | Describe the new functionality — requirements, constraints, context. |
+| `model` | `string` | ❌ | Optional model override. |
+
+---
+
 ### 👥 Session Operations
 
 #### `orchestrator_get_registered_sessions`
@@ -648,55 +849,45 @@ orchestrator_doctor(check: "data")
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `check` | `string` | ❌ | Check scope: `all` (default), `sessions`, `context`, `data`, `pm2` (legacy). |
+| `check` | `string` | ❌ | Check scope: `all` (default), `sessions`, `context`, `data`. |
 | `fix` | `boolean` | ❌ | Auto-fix issues when possible (default: `false`). |
 
-**When to use:** Things feel off — registration fails, context injection isn't firing, models aren't updating. Doctor covers **5 areas**:
+**When to use:** Things feel off — registration fails, context injection isn't firing, models aren't updating. Doctor covers **4 areas**:
+
 | Check | What It Diagnoses | Auto-Fix |
 |-------|------------------|----------|
 | **sessions** | Missing/lost registration, synthetic key bridge issues | Registers sessions, bridges synthetic → real keys |
 | **context** | Missing project context, mismatched session keys | Copies context from other sessions |
 | **data** | Corrupt `models.json`, missing config, stale logs | Deletes corrupt files, removes stale live-agents |
-| **pm2** | *(Legacy)* Bridge process for old dashboard | Auto-starts if bridge script still present |
 | **projects** | Orphaned 0-session projects, missing STATE.md | Archives orphans, auto-creates STATE.md |
-
----
-
-### 🎮 Slash Commands
-
-Available in Discord and chat channels:
-
-| Command | Description |
-|---------|-------------|
-| `/genor-help` | List all available commands |
-| `/genor-dashboard` | Show dashboard URL |
-| `/genor-status` | Quick orchestrator overview |
-| `/genor-git-commit` | Auto-commit current project with version bump |
-| `/genor-doctor` | Diagnose and fix issues |
 
 ---
 
 ## 🖥️ Dashboard — Built In
 
-No PM2 process. No separate server. The dashboard is served directly by OpenClaw at the `/orchestrator` gateway route:
+No separate process or PM2 bridge. The dashboard is served directly by OpenClaw at the `/orchestrator` gateway route via a single-file SPA:
 
 ```
 https://your-gateway/orchestrator
 ```
 
-The dashboard handler is registered via `api.registerHttpRoute({ path: "/orchestrator", auth: "plugin", match: "prefix" })` — same pattern as built-in plugins like canvas and webhooks.
+The dashboard handler is registered via `api.registerHttpRoute(...)` — same pattern as built-in OpenClaw plugins.
 
-### 7 Tabs
+**v0.8.0 Complete Redesign:** The dashboard was rewritten from 3506 lines to 1428 lines with a clean left sidebar navigation layout. Features StateManager reactive state for real-time updates, lazy panel rendering, toast notifications, and accessible ARIA roles.
+
+### 9 Tabs (Left Sidebar Nav)
 
 | Tab | What You See |
 |-----|-------------|
-| **🏠 Home** | Model stats (24 total, 11 agent-ready), active projects, recent sessions, routable models, agent card buttons (Stop/Recover/Details) |
-| **📁 Projects** | Per-project deep dive: session history, generated docs, health status, active session list, Model Config with routing presets |
+| **📊 Dashboard** | 4 metric cards (models, agents, sessions, projects) + activity feed + quick-action buttons |
+| **📁 Projects** | Per-project deep dive: session history, generated docs, health status, active session list, Model Config with routing presets and chains |
+| **🤖 Agents** | Agent cards with Stop/Recover/Details buttons, live agent state, health indicators |
 | **🧠 Models** | Full CRUD model inventory. Edit tier ratings, speed ratings, status, agent-ready flags. All changes persist to `models.json` |
-| **🌐 Gateway** | Live OpenClaw gateway sessions — see every active session on the gateway |
 | **📜 Logs** | Orchestration log with level filtering. Drill into routing decisions, session events, config changes |
-| **🛡️ Safeguards** | Idle/stuck agent detection dashboard, error tracking, auto-recovery controls, event log viewer, agent health indicators |
-| **⚙ Settings** | Orchestrator configuration — dashboard settings and preferences |
+| **⚙️ Settings** | Dashboard configuration — theme, auto-refresh, preferences |
+| **🌐 Gateway** | Live OpenClaw gateway sessions — see every active session on the gateway |
+| **📋 Sessions** | **(NEW)** Per-project session tree with parent-child hierarchy, clickable detail pane, spawn sub-agent modal. Replaces the old "Chat Console" (all SSE/chat functionality removed — that's OpenClaw WebUI's job) |
+| **🛡️ Safeguards** | Idle/stuck agent detection dashboard, error tracking, auto-recovery controls, event log viewer, agent health indicators (healthy/warning/stale) |
 
 ### Live Agent Monitoring
 
@@ -850,13 +1041,12 @@ Session B ──register()──►  registered
 
 ### orchestrator_doctor — The Swiss Army Knife 🛠️
 
-The `orchestrator_doctor` tool runs **5 categories** of health checks:
+The `orchestrator_doctor` tool runs **4 categories** of health checks:
 
 1. **Session Health** — Is the session key set? Is it registered? Are there synthetic keys that need bridging to real gateway keys?
 2. **Context Health** — Is there an active project? Do other sessions have context that should be copied?
 3. **Data Health** — Is `models.json` valid? Is `dashboard-config.json` present? Are logs fresh? Is `live-agents.json` stale?
 4. **Project Health** — Are there orphaned projects with 0 sessions? Are required docs (`STATE.md`) present? Track stale running sessions >24h.
-5. **PM2 Health** — Is the bridge process running? (Legacy check — dashboard now runs via gateway route.)
 
 ### Background Maintenance
 
@@ -970,11 +1160,12 @@ orchestrator-data/
 
 | Version | Highlights |
 |---------|-----------|
-| **v0.7.0** | 🧠 **Routing presets system.** 5 presets (custom, no-steering, free-only, single-provider, custom-fallbacks-only), 28 tools (+6 backlog tools), set-project-routing API, enhanced routing brain with model quality metadata, preset selector UI, task category inference in hooks, agent card buttons (Stop/Recover), safeguards tab with event log viewer. 116 tests passing. |
-| **v0.6.0** | 🎯 **22 tools, 8 hooks, 6 new features.** Session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, project health enforcement (`STATE.md`), subagent spawning. Dashboard migrated to native `/orchestrator` route — **no PM2 needed**. `orchestrator_doctor` with 5 check categories + auto-fix. Safeguard auto-recovery writes recovery actions. Hidden-dir filter across all listings (`.archived` excluded). All 8 hooks fully operational: `session_start`, `session_end`, `subagent_spawned`, `subagent_ended`, `before_model_resolve`, `before_prompt_build`, `agent_end`, `gateway_stop`. |
-| **v0.5.0** | 🗺️ Slash commands restructured — monolithic `/genor` replaced with `/genor-COMMAND` pattern. Added `/genor-git-commit` (auto-commit + version bump). Session key filter for background/dreaming/cron sessions. |
-| **v0.4.4** | 🔧 Session key fix — filter background/dreaming/cron/subagent sessions from `session_start` hook. Prevents key overwrites. |
-| **v0.4.3** | 🏗️ ToolPluginMetadata compat (OpenClaw 2026.6.6+), live agent tracking via `live-agents.json`, function name cleanup, double-cron scheduling fix. |
+| **v0.8.0** | 🖥️ **Dashboard complete redesign** (3506→1428 lines, left sidebar nav with 9 tabs). New **Sessions tab** with per-project session tree & spawn sub-agent modal. **12 new tools** (40 total): QA trilogy (`qa_submit`, `qa_approve`, `qa_reject`), Handoff (`generate_handoff`), Deep-dive (`grill_with_docs`), Doc tools (`fix_docs_drift`, `regenerate_state`, `cleanup_docs`), Test infra (`setup_unit_tests`, `setup_e2e_tests`), Debug (`debug_issue`), Feature creation (`create_functionality`). StateManager reactive state, lazy rendering, toast notifications, accessible ARIA roles. PM2 bridge removed entirely. Bug fixes. |
+| **v0.7.0** | 🧠 **Routing presets system.** 5 presets (custom, no-steering, free-only, single-provider, custom-fallbacks-only), 6 backlog tools (28 total), set-project-routing API, enhanced routing brain with model quality metadata, preset selector UI, task category inference in hooks, agent card buttons (Stop/Recover), safeguards tab with event log viewer. |
+| **v0.6.0** | 🎯 **22 tools, 8 hooks, 6 new features.** Session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, project health enforcement (`STATE.md`), subagent spawning. Dashboard migrated to native `/orchestrator` route — **no PM2 needed**. `orchestrator_doctor` with auto-fix. Safeguard auto-recovery writes recovery actions. Hidden-dir filter across all listings (`.archived` excluded). All 8 hooks fully operational. |
+| **v0.5.0** | 🗺️ Slash commands restructured — `/genor-COMMAND` pattern. Added `/genor-git-commit` (auto-commit + version bump). Session key filter for background/dreaming/cron sessions. |
+| **v0.4.4** | 🔧 Session key fix — filter background/dreaming/cron/subagent sessions from `session_start` hook. |
+| **v0.4.3** | 🏗️ ToolPluginMetadata compat (OpenClaw 2026.6.6+), live agent tracking via `live-agents.json`, double-cron scheduling fix. |
 | **v0.4.2** | 📊 SessionTracker with `live-agents.json` file writer, debounced at 500ms. Error logging improvements. |
 | **v0.4.1** | ✅ 12 tools verified working. `plugins.load.paths` fix. Dashboard v4 with SSE streaming. |
 | **v0.4.0** | 🚀 Phase 1 complete: full tool audit, 9 bugs fixed. Model routing, session logging, ADR management, project sync all operational. |
@@ -993,7 +1184,7 @@ The orchestrator uses a **scoped, permission-based model** — sessions opt in, 
                     │          OpenClaw Gateway               │
                     │   /orchestrator (dashboard — built in)   │
                     └──────────────┬──────────────────────────┘
-                                   │ hooks (8 total)
+                                   │ hooks (8 via api.on)
                     ┌──────────────▼──────────────────────────┐
                     │        Orchestrator Plugin               │
                     │                                          │
@@ -1085,7 +1276,8 @@ The orchestrator uses a **scoped, permission-based model** — sessions opt in, 
                     │     session_end                         │
                     │     📝 Auto-logs session                 │
                     │     🚀 Auto-commits (if enabled)         │
-                    │     ⚡ Generates RECOVERY.md              │
+                    │     ⚡ Auto-QA (if enabled)              │
+                    │     📋 Generates RECOVERY.md             │
                     └────┬────────────────────────────────────┘
                          │
                     orchestrator_unregister()
@@ -1123,15 +1315,16 @@ npm test
 ```
 genor-orchestrator-plugin/
 ├── src/
-│   ├── index.ts                    # Main plugin — 28 tools, 8 hooks, all logic
-│   ├── dashboard-handler.ts        # Dashboard HTTP handler
-│   └── index.test.ts              # Tests (116)
+│   ├── index.ts                    # Main plugin — 40 tools, 8 hooks, all logic
+│   ├── dashboard-handler.ts        # Dashboard HTTP handler (registered at /orchestrator)
+│   ├── shared.ts                   # Shared types and helpers
+│   └── index.test.ts              # Tests (3)
 ├── dashboard/
-│   └── index.html                  # Dashboard single-page HTML
+│   └── index.html                  # Dashboard single-page SPA (1428 lines)
 ├── openclaw.plugin.json           # Plugin metadata + config schema
 ├── SETUP.md                       # Step-by-step installation guide
 ├── README.md                      # You are here 📍
-└── package.json                   # v0.7.0
+└── package.json                   # v0.8.0
 ```
 
 ---

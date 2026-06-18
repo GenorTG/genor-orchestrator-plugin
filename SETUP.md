@@ -53,7 +53,7 @@ open http://localhost:18789/orchestrator
 open https://genorbox1.tailxxx.ts.net/orchestrator
 ```
 
-That's it. **6 tabs, 22 tools, 8 hooks** — all running inside your gateway.
+That's it. **9 dashboard tabs, 40 tools, 8 hooks** — all running inside your gateway as a native extension (installed at `~/.openclaw/extensions/genor-orchestrator/`).
 
 ---
 
@@ -65,8 +65,9 @@ That's it. **6 tabs, 22 tools, 8 hooks** — all running inside your gateway.
 | 🌙 Nightly model sync | 3 AM via cron |
 | 🔧 Maintenance tick | Every 30 min (log rotation, session normalization, recovery docs) |
 | 📝 Session auto-logging | On every session_end hook |
-| 🚦 Model routing | On every before_model_resolve (per-project allowlists & free-only) |
+| 🚦 Model routing | On every before_model_resolve (per-project allowlists & routing presets) |
 | 📍 Context injection | On every before_prompt_build (STATE.md, ROADMAP.md) |
+| ✅ Auto-QA | When workflow.include_qa is enabled |
 
 ---
 
