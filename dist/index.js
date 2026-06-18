@@ -2388,6 +2388,9 @@ const _plugin = definePluginEntry({
                         const pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
                         const entry = pending[sk];
                         if (entry) {
+                            // MUST call start() FIRST to set sessionTracker.sessionKey, otherwise
+                            // registerSession/setContext will bind to the old session's key.
+                            sessionTracker.start(sk || "unknown", "project-session-auto-register");
                             sessionTracker.registerSession(sk);
                             sessionTracker.setContext(entry.project, entry.task);
                             delete pending[sk];
