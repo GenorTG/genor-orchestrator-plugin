@@ -1894,7 +1894,7 @@ const TOOL_METADATA = [
     { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
     { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
     { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
-    { name: "orchestrator_qa_submit", label: "QA Submit Finding", description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log.", parameters: { type: "object", properties: { finding: { type: "string", description: "Describe the QA finding, issue, or observation." } }, required: ["finding"] } },
+    { name: "orchestrator_qa_submit", label: "QA Submit Finding", description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.", parameters: { type: "object", properties: { finding: { type: "string", description: "Describe the QA finding, issue, or observation." }, review_model: { type: "string", description: "Optional model for the QA review subagent." } }, required: ["finding"] } },
     { name: "orchestrator_qa_approve", label: "QA Approve", description: "Approve the current work. Unblocks the work→log transition when QA gate is active.", parameters: { type: "object", properties: {} } },
     { name: "orchestrator_qa_reject", label: "QA Reject", description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.", parameters: { type: "object", properties: { reason: { type: "string", description: "Why the work was rejected. Describe what needs to be fixed." } }, required: ["reason"] } },
     { name: "orchestrator_generate_handoff", label: "Generate Handoff", description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.", parameters: { type: "object", properties: {} } },
@@ -2533,7 +2533,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                         analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call orchestrator_advance_phase when analysis is complete.",
                         plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call orchestrator_advance_phase when plan is approved.",
                         document: "📝 PHASE: DOCUMENT — Write an ADR (orchestrator_log_decision) or design doc covering the architecture, trade-offs, and key decisions. Call orchestrator_advance_phase when design is documented.",
-                        work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with orchestrator_qa_submit. The work→log transition is BLOCKED until QA approves." : ""} Call orchestrator_advance_phase when implementation is complete.`,
+                        work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with orchestrator_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call orchestrator_advance_phase when implementation is complete.`,
                         log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with orchestrator_generate_handoff (REQUIRED before finish). Then call orchestrator_advance_phase.",
                         finish: "✅ PHASE: FINISH — All phases complete. Verifying git status and ensuring everything is committed.",
                     };
@@ -3657,19 +3657,28 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     `Timeout: ${timeoutSeconds}s`,
                 ].filter(Boolean).join("\n");
                 try {
-                    // Use api.spawnSubagent or sessions_spawn via the tool
-                    // The actual spawn is delegated to the OpenClaw runtime
                     logger.info("subagent", `Spawning: ${taskName} (${project}/${task}) model=${model || "auto"}`);
-                    // Return the spawn request — the calling agent can use sessions_spawn
-                    // with the orchestrator context injected
+                    // ── ACTUALLY SPAWN the subagent via OpenClaw runtime API ──
+                    const sessionKey = sessionTracker.sessionKey;
+                    if (!sessionKey) {
+                        return txt({ ok: false, error: "No session key available. Cannot spawn subagent." });
+                    }
+                    const spawnResult = await api.runtime.subagent.run({
+                        sessionKey,
+                        message: spawnTask,
+                        model: model || undefined,
+                        lightContext: true,
+                    });
+                    logger.info("subagent", `Spawned ${taskName}: runId=${spawnResult.runId}`);
                     return txt({
                         ok: true,
                         project,
                         task,
                         task_name: taskName,
-                        recommended_model: model || "auto-routed",
+                        model: model || "auto-routed",
                         timeout_seconds: timeoutSeconds,
-                        spawn_instructions: `Use sessions_spawn with the following context:\n\n${spawnTask}\n\nRecommended: runtime="subagent", taskName="${taskName}", model="${model || "auto"}"`,
+                        run_id: spawnResult.runId,
+                        message: `Subagent "${taskName}" spawned successfully (runId: ${spawnResult.runId}). Use orchestrator_spawn_subagent to track completion.`,
                     });
                 }
                 catch (err) {
@@ -3903,9 +3912,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         api.registerTool({
             name: "orchestrator_qa_submit",
             label: "QA Submit Finding",
-            description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log.",
+            description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.",
             parameters: Type.Object({
                 finding: Type.String({ description: "Describe the QA finding, issue, or observation." }),
+                review_model: Type.Optional(Type.String({ description: "Optional model override for the QA review subagent." })),
             }),
             async execute(_id, params) {
                 const reg = requireRegistration();
@@ -3916,11 +3926,50 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 }
                 sessionTracker.addQaFinding(params.finding);
                 logger.info("qa", `QA finding submitted: ${params.finding.substring(0, 100)}`);
+                // ── ENFORCED: Always spawn an independent QA review subagent ──
+                let spawnResult = null;
+                const project = sessionTracker.currentProject;
+                const taskDesc = sessionTracker.currentTask || "Unknown task";
+                const sessionKey = sessionTracker.sessionKey;
+                if (sessionKey && project) {
+                    try {
+                        const reviewTask = [
+                            `[QA Review - Auto-spawned by Orchestrator Plugin]`,
+                            `Project: ${project}`,
+                            `Parent Session: ${sessionKey}`,
+                            `Task under review: ${taskDesc}`,
+                            ``,
+                            `You are a QA reviewer. Independently review the work done for this task.`,
+                            `Read the relevant files, check the planned changes (ADR), verify implementation`,
+                            `matches requirements, and report your findings.`,
+                            ``,
+                            `QA finding from developer: ${params.finding}`,
+                            ``,
+                            `Return PASS or FAIL with specific findings.`,
+                        ].filter(Boolean).join("\n");
+                        const reviewModel = params.review_model || undefined;
+                        logger.info("qa", `Auto-spawning QA review subagent for project=${project}`);
+                        const result = await api.runtime.subagent.run({
+                            sessionKey,
+                            message: reviewTask,
+                            model: reviewModel,
+                            lightContext: true,
+                        });
+                        spawnResult = { runId: result.runId };
+                        logger.info("qa", `QA review subagent spawned: runId=${result.runId}`);
+                    }
+                    catch (spawnErr) {
+                        logger.warn("qa", `Auto-spawn QA review failed: ${spawnErr.message}`);
+                        spawnResult = { runId: null };
+                    }
+                }
                 return txt({
                     ok: true,
                     message: "QA finding submitted. Waiting for review (call orchestrator_qa_approve or orchestrator_qa_reject).",
                     qa_status: sessionTracker.qaStatus,
                     findings_count: sessionTracker.qaFindings.length,
+                    review_spawned: spawnResult?.runId ? true : false,
+                    review_run_id: spawnResult?.runId || null,
                 });
             },
         });

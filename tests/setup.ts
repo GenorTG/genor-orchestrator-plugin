@@ -48,6 +48,11 @@ export interface MockApiType {
   tools: Map<string, (id: string, params: any) => any>;
   hooks: Map<string, Function>;
   commands: Map<string, Function>;
+  runtime: {
+    subagent: {
+      run: ReturnType<typeof vi.fn>;
+    };
+  };
 }
 
 // ── Mock API factory ──────────────────────────────────────────
@@ -68,6 +73,11 @@ export function createMockApi(): MockApiType {
       commands.set(name, handler);
     }),
     registerHttpRoute: vi.fn(),
+    runtime: {
+      subagent: {
+        run: vi.fn((_params: any) => Promise.resolve({ runId: "mock-run-123" })),
+      },
+    },
     tools,
     hooks,
     commands,
