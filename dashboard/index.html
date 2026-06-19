@@ -420,7 +420,6 @@ tr.selected td{background:var(--accent-bg)}
    ═══════════════════════════════════════════════════════════ */
 class StateManager {
   constructor(){this.state={};
-
 window.filterDashLogs=function(){
   const lvl=$('#dash-log-level')?.value||'';
   const sort=$('#dash-log-sort')?.value||'newest';
@@ -697,17 +696,19 @@ function renderProjects(data){
       <table>
         <thead><tr><th>Name</th><th>Sessions</th><th>Created</th><th>Free Only</th><th>Routing</th><th></th></tr></thead>
         <tbody id="projects-tbody">
-          ${projects.map((p,i)=>{
+          ${projects.map(p=>{
             const safeName='proj-'+esc(p.name).replace(/[^a-z0-9]/gi,'_');
-            return '<tr class="proj-row" data-name="'+esc(p.name).toLowerCase()+'" id="'+safeName+'" style="cursor:pointer" onclick="showProject(''+esc(p.name)+'')" title="Click for details">'+
-              '<td><strong>'+esc(p.name)+'</strong></td>
-              <td>${p.session_count||0}</td>
-              <td>${fmtDate(p.created)}</td>
-              <td>${p.free_only?'<span class="badge badge-yellow">Free only</span>':'<span class="badge badge-green">Flexible</span>'}</td>
-              <td><span class="badge badge-blue">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
-              <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${esc(p.name)}')">Details</button></td>
-            </tr>
-          `).join('')}
+            const safeNameLower=esc(p.name).toLowerCase();
+            return `
+              <tr class="proj-row" data-name="${safeNameLower}" id="${safeName}" style="cursor:pointer" onclick="showProject('${esc(p.name)}')" title="Click for details">
+                <td><strong>${esc(p.name)}</strong></td>
+                <td>${p.session_count||0}</td>
+                <td>${fmtDate(p.created)}</td>
+                <td>${p.free_only?'<span class="badge badge-yellow">Free only</span>':'<span class="badge badge-green">Flexible</span>'}</td>
+                <td><span class="badge badge-blue">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
+                <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${esc(p.name)}')">Details</button></td>
+              </tr>`;
+          }).join('')}
           ${!projects.length?'<tr><td colspan="6" class="empty">No projects</td></tr>':''}
         </tbody>
       </table>
@@ -1580,8 +1581,6 @@ async function showProject(name){
               ${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
             </tbody>
           </table>
-        </div><span class="tag">${esc(m)}</span>`).join(' ')||'<span style="color:var(--text-dim)">none</span>'}</div>
-          `).join('')}
         </div>
       </div>
     </div>`;
