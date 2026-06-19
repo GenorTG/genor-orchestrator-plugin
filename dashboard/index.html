@@ -946,6 +946,57 @@ async function loadSessionDetail(sk,el){
       html+='<div style="margin-bottom:6px"><strong style="font-size:11px">📝 Notes:</strong>';
       html+='<pre style="background:var(--bg-alt);padding:6px 8px;border-radius:4px;font-size:10px;margin-top:4px;overflow:auto;max-height:120px">'+escHtml(s.notes)+'</pre></div>';
     }
+    // Rich data: action history
+    var ah=s.action_history||[];
+    if(ah.length){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">⚡ Actions ('+ah.length+'):</strong>';
+      html+='<div style="max-height:100px;overflow-y:auto;margin-top:4px">';
+      for(var ai=Math.max(0,ah.length-20);ai<ah.length;ai++){
+        var a=ah[ai];
+        var at='';try{at=new Date(a.ts).toLocaleTimeString();}catch(e){}
+        html+='<div style="display:flex;gap:6px;padding:2px 4px;font-size:9px;border-bottom:1px solid var(--border)"><span style="color:var(--text-dim);white-space:nowrap">'+at+'</span><span>'+escHtml(a.action)+(a.file?' <span style="color:var(--text-dim)">→ '+escHtml(a.file)+'</span>':'')+'</span></div>';
+      }
+      html+='</div></div>';
+    }
+    // Rich data: touched files
+    var tf=s.touched_files||[];
+    if(tf.length){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">📄 Files ('+tf.length+'):</strong>';
+      html+='<div style="max-height:80px;overflow-y:auto;font-size:9px;color:var(--text-dim);margin-top:2px">';
+      for(var fi=0;fi<tf.length;fi++) html+='<div style="padding:1px 4px">📄 '+escHtml(tf[fi])+'</div>';
+      html+='</div></div>';
+    }
+    // Rich data: token usage
+    var tu=s.token_usage||null;
+    if(tu&&(tu.input||tu.output)){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">💰 Tokens:</strong> '+(tu.input||0).toLocaleString()+' in / '+(tu.output||0).toLocaleString()+' out'+(tu.total?' / '+tu.total.toLocaleString()+' total':'')+'</div>';
+    }
+    // Rich data: QA history
+    var qh=s.qa_history||[];
+    if(qh.length){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">🔍 QA History:</strong>';
+      for(var qi=0;qi<qh.length;qi++){
+        var e=qh[qi];
+        var icon=e.event==='approve'?'✅':e.event==='reject'?'❌':'📝';
+        var label=e.event==='approve'?'Approved':e.event==='reject'?'Rejected':'Submitted';
+        html+='<div style="display:flex;gap:6px;align-items:flex-start;padding:4px 6px;border-left:2px solid '+(e.event==='approve'?'var(--green)':e.event==='reject'?'var(--red)':'var(--yellow)')+';margin-top:2px;background:var(--bg-alt);border-radius:0 4px 4px 0">';
+        html+='<span>'+icon+'</span><div><span style="font-weight:600;font-size:10px">'+label+'</span>';
+        if(e.detail) html+='<div style="font-size:10px;color:var(--text-dim)">'+escHtml(e.detail)+'</div>';
+        html+='<div style="font-size:9px;color:var(--text-dim)">'+new Date(e.timestamp).toLocaleString()+'</div></div></div>';
+      }
+      html+='</div>';
+    }
+    // Rich data: workflow phases
+    var wf=s.workflow||{};
+    var phases=(wf.phase_history||[]).filter(function(p){return p.status==='completed'||p.status==='current';});
+    if(phases.length){
+      html+='<div style="margin-bottom:6px"><strong style="font-size:11px">🔄 Workflow:</strong> ';
+      for(var pi=0;pi<phases.length;pi++){
+        var p=phases[pi];
+        html+='<span class="badge '+(p.status==='completed'?'badge-success':'badge-warn')+'" style="font-size:9px;margin:1px">'+escHtml(p.phase)+(p.status==='completed'?' ✅':'')+'</span>';
+      }
+      html+='</div>';
+    }
     if(s.links&&Object.keys(s.links).length){
       html+='<div><strong style="font-size:11px">🔗 Links:</strong><div style="margin-top:4px">';
       for(const [lk,lv] of Object.entries(s.links)) html+='<div style="font-size:10px;color:var(--text-dim);padding:1px 0">'+escHtml(lk)+': <code>'+escHtml(String(lv).slice(0,80))+'</code></div>';
@@ -1119,17 +1170,60 @@ window.saveModelEdit=async function(id){
 };
 
 
-window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
+window.formatTok=function(t){if(!t||!t.input&&!t.output)return'—';var i=t.input||0,o=t.output||0;return i.toLocaleString()+' in / '+o.toLocaleString()+' out'};
+window.showSessionDetail=function(s){
+  var started=s.started_at||s.start_time;
+  var ended=s.ended_at||s.end_time;
+  var dur=s.duration||calcDur(started,ended)||'—';
+  var wf=s.workflow||{};
+  var ah=s.action_history||[];
+  var tf=s.touched_files||[];
+  var tu=s.token_usage||null;
+  var qh=s.qa_history||[];
+  var qf=s.qa_findings||[];
+  var err=s.last_error||null;
+  var la=s.last_activity_at||null;
+  showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Agent</span><span>'+escHtml(s.agent||'—')+'</span></div>'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Model</span><span>'+escHtml(s.model||'—')+'</span></div>'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Status</span><span class="badge badge-'+(s.status==='qa'?'warn':s.status==='done'?'success':s.status==='failed'?'error':'info')+'">'+(s.status||'—')+'</span></div>'+
-  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Duration</span><span>'+(s.duration||calcDur(s.started_at||s.start_time,s.ended_at||s.end_time)||'—')+'</span></div>'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Duration</span><span>'+dur+'</span></div>'+
+  (started?'<div><span style="font-size:10px;color:var(--text-dim);display:block">Started</span><span>'+new Date(started).toLocaleString()+'</span></div>':'')+
+  (ended?'<div><span style="font-size:10px;color:var(--text-dim);display:block">Ended</span><span>'+new Date(ended).toLocaleString()+'</span></div>':'')+
+  (la?'<div><span style="font-size:10px;color:var(--text-dim);display:block">Last Activity</span><span>'+new Date(la).toLocaleString()+'</span></div>':'')+
+  (tu?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Token Usage</span><span>'+window.formatTok(tu)+'</span></div>':'')+
+  (s.error_count?'<div><span style="font-size:10px;color:var(--text-dim);display:block">Errors</span><span class="badge badge-error">'+s.error_count+'</span></div>':'')+
   '<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Task</span><span>'+escHtml(s.task||'—')+'</span></div>'+
   (s.original_prompt?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Original Prompt</span><span>'+escHtml(s.original_prompt)+'</span></div>':'')+
-  (s.notes?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Notes</span><pre style="background:var(--bg-alt);padding:6px;border-radius:4px;font-size:10px;max-height:100px;overflow:auto">'+escHtml(s.notes)+'</pre></div>':'')+
-  (s.qa_history&&s.qa_history.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">QA History</span><div style="margin-top:4px">'+
-    s.qa_history.map(function(e){
+
+  // Workflow phases
+  (wf&&wf.phase_history&&wf.phase_history.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">Workflow</span>'+
+    '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
+    wf.phase_history.map(function(p){
+      var cls=p.status==='completed'?'badge-success':p.status==='current'||p.status==='in_progress'?'badge-warn':'badge-gray';
+      return '<span class="badge '+cls+'" style="font-size:9px">'+escHtml(p.phase)+(p.status==='completed'?' ✅':'')+'</span>';
+    }).join('')+'</div></div>':'')+
+
+  // Action history
+  (ah.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">Actions ('+ah.length+')</span>'+
+    '<div style="max-height:120px;overflow-y:auto;margin-top:4px">'+
+    ah.slice(-15).map(function(a){
+      var t='';
+      try{t=new Date(a.ts).toLocaleTimeString();}catch(e){t=a.ts||'';}
+      return '<div style="display:flex;gap:6px;padding:2px 4px;font-size:9px;border-bottom:1px solid var(--border)"><span style="color:var(--text-dim);white-space:nowrap">'+t+'</span><span>'+escHtml(a.action)+(a.file?' <span style="color:var(--text-dim)">→ '+escHtml(a.file)+'</span>':'')+'</span></div>';
+    }).join('')+
+  '</div></div>':'')+
+
+  // Touched files
+  (tf.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">Files Touched ('+tf.length+')</span>'+
+    '<div style="max-height:80px;overflow-y:auto;font-size:9px;color:var(--text-dim);margin-top:2px">'+
+    tf.map(function(f){return'<div style="padding:1px 4px">📄 '+escHtml(f)+'</div>';}).join('')+
+  '</div></div>':'')+
+
+  // QA History
+  (qh.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">QA History</span><div style="margin-top:4px">'+
+    qh.map(function(e){
       var icon=e.event==='approve'?'✅':e.event==='reject'?'❌':'📝';
       var label=e.event==='approve'?'Approved':e.event==='reject'?'Rejected':'Submitted';
       return '<div style="display:flex;gap:6px;align-items:flex-start;padding:4px 6px;border-left:2px solid '+(e.event==='approve'?'var(--green)':e.event==='reject'?'var(--red)':'var(--yellow)')+';margin-bottom:4px;background:var(--bg-alt);border-radius:0 4px 4px 0">'+
@@ -1141,6 +1235,11 @@ window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'
         '</div></div>';
     }).join('')+
   '</div></div>':'')+
+
+  // Error
+  (err?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600;color:var(--red)">Last Error</span><pre style="background:var(--bg-alt);padding:6px;border-radius:4px;font-size:10px;color:var(--red);max-height:100px;overflow:auto">'+escHtml(err)+'</pre></div>':'')+
+
+  (s.notes&&!qh.length?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Notes</span><pre style="background:var(--bg-alt);padding:6px;border-radius:4px;font-size:10px;max-height:100px;overflow:auto">'+escHtml(s.notes)+'</pre></div>':'')+
   '</div>'+
   '</div>');};
 

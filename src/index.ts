@@ -2179,7 +2179,7 @@ function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
   })();
   const tags = Array.isArray(opts.tags) ? opts.tags : extractTags(opts.task || "", opts.notes || "");
   const now = new Date().toISOString();
-  const newEntry = {
+  const newEntry: Record<string, any> = {
     id: sessId,
     session_key: sessionKey,
     parent_session_key: parentSessionKey,
@@ -2203,6 +2203,17 @@ function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
     notes: opts.notes || "",
     qa: opts.qa || false,
     checked: opts.checked || false,
+    // ═══ Rich session data (Phase 5c) ═══
+    action_history: opts.action_history || [],
+    touched_files: opts.touched_files || [],
+    token_usage: opts.token_usage || null,
+    workflow: opts.workflow || null,
+    qa_status: opts.qa_status || "none",
+    qa_history: opts.qa_history || [],
+    qa_findings: opts.qa_findings || [],
+    error_count: opts.error_count || 0,
+    last_error: opts.last_error || null,
+    last_activity_at: opts.last_activity_at || now,
   };
   // Check for duplicate by (session_key, task, status) — avoid log noise
   const isDup = ps.some(e => e.session_key && e.session_key === newEntry.session_key
@@ -2654,9 +2665,21 @@ const _plugin: Record<string, any> = definePluginEntry({
             agent: sessionTracker.currentAgent || "system",
             status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "done",
             duration: info.duration,
+            start_time: new Date(sessionTracker.sessionStartTimestamp).toISOString(),
+            end_time: new Date().toISOString(),
             session_key: sk_end || sessionTracker.sessionKey || "",
             parent_session_key: isSubagent && subInfo ? subInfo.parentKey || null : (sk_end && sk_end !== sessionTracker.sessionKey ? sessionTracker.sessionKey || null : null),
             goal: info.task,
+            action_history: sessionTracker.actionHistory.slice(-20),
+            touched_files: sessionTracker.touchedFiles.slice(-20),
+            token_usage: sessionTracker.tokenUsage,
+            workflow: sessionTracker.workflow.toJSON(),
+            qa_status: sessionTracker.qaStatus,
+            qa_history: sessionTracker.qaHistory,
+            qa_findings: sessionTracker.qaFindings,
+            error_count: sessionTracker.errorCount,
+            last_error: sessionTracker.lastError,
+            last_activity_at: new Date(sessionTracker.lastActivityTimestamp).toISOString(),
             notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason} | Workflow: ${sessionTracker.workflow.enabled ? sessionTracker.workflow.currentPhase : "OFF"}`,
           }, logger);
           generateRecoveryDoc(info.project, dataDir, logger);
