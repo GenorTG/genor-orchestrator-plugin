@@ -4235,6 +4235,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({ ok: false, error: "Finding description is required." });
                 }
                 sessionTracker.addQaFinding(params.finding);
+                sessionTracker.setStatus("qa");
                 logger.info("qa", `QA finding submitted: ${params.finding.substring(0, 100)}`);
                 // ── ENFORCED: Always spawn an independent QA review subagent ──
                 // Uses a unique session key so each QA review gets its own isolated session
@@ -4303,6 +4304,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({ ok: false, error: "No pending QA review to approve. Submit findings with orchestrator_qa_submit first." });
                 }
                 sessionTracker.setQaStatus("approved");
+                sessionTracker.setStatus("running");
                 logger.info("qa", "QA approved — work→log transition unblocked");
                 return txt({
                     ok: true,
@@ -4329,6 +4331,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({ ok: false, error: "Rejection reason is required." });
                 }
                 sessionTracker.setQaStatus("rejected");
+                sessionTracker.setStatus("running");
                 // Automatically return to work phase for fixes
                 const wf = sessionTracker.workflow;
                 if (wf.currentPhase !== "log") {
