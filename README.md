@@ -3,7 +3,7 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.8.0-blue)
+![Version](https://img.shields.io/badge/version-0.9.0-blue)
 ![Tools](https://img.shields.io/badge/tools-40-success)
 ![Hooks](https://img.shields.io/badge/hooks-8-ff69b4)
 
@@ -13,7 +13,15 @@ The orchestrator doesn't take over your thinking. It handles the scaffolding so 
 
 ---
 
-## 🚀 What's New in v0.8.0
+## 🚀 What's New in v0.9.0
+
+| # | Feature | What It Does |
+|---|---------|-------------|
+| 🚀 | **Instant Project Session Spawning** | Dashboard **➕ New Session** button spawns persistent project sessions that auto-register with the orchestrator. No cron, no self-API calls, no config hacks. Queue → hook → subagent.run() → auto-register. |
+| 📋 | **Dashboard Spawn Button** | Click ➕ New Session in the dashboard, choose a project, describe the task, and get an instant response with the session key. The spawned session appears in Live Agents on the next agent turn. |
+| 🔧 | **Simplified Arch** | Removed heartbeat, self-API, and trusted-operator approaches. The queue-based spawn is the only path — proven reliable through end-to-end testing. |
+
+### Previous Release — v0.8.0
 
 The jump from 28 → 40 tools brings a **complete dashboard redesign**, a new **Sessions tab**, and **12 new tools** for project lifecycle and QA:
 
@@ -69,6 +77,30 @@ npm run plugin:build
 ```
 
 Then add `genor-orchestrator-plugin` to your OpenClaw `plugins.load.paths` config and restart.
+
+### ⚙️ Configuration Requirements
+
+> **No manual OpenClaw config changes needed.** The plugin handles everything internally.
+
+The dashboard's **➕ New Session** button spawns persistent project sessions using a **queue-based architecture**:
+
+1. The spawn HTTP handler writes a `pending-spawns.json` queue file and returns immediately (~91ms)
+2. On the next agent turn, the `before_prompt_build` hook drains the queue via `api.runtime.subagent.run()`
+3. The new session's `session_start` hook picks up a pending registration entry and auto-registers with the orchestrator
+4. The spawned session appears in the dashboard's **Live Agents** with full project context
+
+**What this means for you:**
+1. The plugin must be in your `plugins.allow` list (it is by default when installed via ClawHub or `plugin:build`)
+2. That's it — no config tokens, no file paths, no special permissions to set up
+3. The spawn API returns immediately; the session starts on the **next agent turn** (typically when the user sends their next message)
+
+**Why this approach:** OpenClaw restricts runtime access (`subagent.run()`) from HTTP handler contexts for security. The `before_prompt_build` hook has full `operator.write` scope, so it can call `subagent.run()` reliably. The queue bridges the gap between HTTP handler and hook — simple, predictable, and clean.
+
+**What was abandoned:**
+- ❌ `gatewayRuntimeScopeSurface: "trusted-operator"` — Doesn't work with `auth: "plugin"` routes. The runtime ignores it for plugin-authenticated routes.
+- ❌ Self-API fetch to `/v1/chat/completions` — Blocks for 10-30s waiting for AI response, and `session_start` hook doesn't fire for API-created sessions.
+- ❌ `requestHeartbeat` — Doesn't trigger `before_prompt_build` hook. Heartbeats check for pending work but don't create agent turns.
+- ❌ Cron jobs — User explicitly rejected cron-based triggers.
 
 ### Sanity Check
 
