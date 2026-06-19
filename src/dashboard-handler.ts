@@ -47,7 +47,7 @@ function sendJSON(res: ServerResponse, data: any, code = 200): void {
   res.writeHead(code, {
     "Content-Type": "application/json;charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(JSON.stringify(data));
@@ -289,6 +289,40 @@ function handleModels(req: IncomingMessage, res: ServerResponse, qs: Record<stri
 
   const active = filtered.filter((m: any) => m.agent_ready !== false && m.status !== "removed").length;
   sendJSON(res, { models: filtered, total: filtered.length, active, project });
+}
+
+async function handleModelUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = JSON.parse(await readBody(req));
+    const { id, ...updates } = body;
+    if (!id) return sendError(res, 400, "Model ID required");
+
+    const modelsPath = path.join(getDataDir(), "models.json");
+    const data = readJSON(modelsPath);
+    if (!data || !data.models) return sendError(res, 500, "Models data not found");
+
+    const idx = data.models.findIndex((m: any) => m.id === id);
+    if (idx === -1) return sendError(res, 404, `Model "${id}" not found`);
+
+    // Apply updates — deep merge for nested objects
+    const model = data.models[idx];
+    for (const [key, val] of Object.entries(updates)) {
+      if (val !== undefined && val !== null) {
+        if (typeof val === "object" && !Array.isArray(val) && typeof model[key] === "object" && model[key] !== null) {
+          model[key] = { ...model[key], ...val };
+        } else {
+          (model as any)[key] = val;
+        }
+      }
+    }
+    model.last_edited = new Date().toISOString();
+    data.models[idx] = model;
+    fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+
+    sendJSON(res, { ok: true, model });
+  } catch (e: any) {
+    sendError(res, 400, e.message);
+  }
 }
 
 function handleLogs(req: IncomingMessage, res: ServerResponse, qs: Record<string, string | undefined>): void {
@@ -1081,7 +1115,7 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
       if (method === "OPTIONS") {
         res.writeHead(200, {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         });
         res.end();
@@ -1141,6 +1175,13 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
           case "/api/quick-action": return handleQuickAction(req, res);
           case "/api/spawn-project-session": return handleSpawnProjectSession(req, res);
+        }
+      }
+
+      // ── PATCH API ──
+      if (method === "PATCH") {
+        switch (pathname) {
+          case "/api/models": return handleModelUpdate(req, res);
         }
       }
 

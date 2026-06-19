@@ -395,8 +395,6 @@ tr.selected td{background:var(--accent-bg)}
       <button class="nav-item" data-tab="models" role="tab" aria-selected="false" aria-controls="panel-models"><span class="icon">🧠</span><span class="label">Models</span></button>
       <button class="nav-item" data-tab="logs" role="tab" aria-selected="false" aria-controls="panel-logs"><span class="icon">📜</span><span class="label">Logs</span></button>
       <button class="nav-item" data-tab="settings" role="tab" aria-selected="false" aria-controls="panel-settings"><span class="icon">⚙️</span><span class="label">Settings</span></button>
-      <button class="nav-item" data-tab="gateway" role="tab" aria-selected="false" aria-controls="panel-gateway"><span class="icon">🌐</span><span class="label">Gateway</span></button>
-      <button class="nav-item" data-tab="sessions" role="tab" aria-selected="false" aria-controls="panel-sessions"><span class="icon">📋</span><span class="label">Sessions</span></button>
       <button class="nav-item" data-tab="safeguards" role="tab" aria-selected="false" aria-controls="panel-safeguards"><span class="icon">🛡️</span><span class="label">Safeguards</span></button>
     </div>
     <div class="sidebar-footer" id="sidebar-footer"></div>
@@ -474,9 +472,7 @@ async function loadTabData(tab,fresh=false){
     models:['/api/models'],
     logs:['/api/logs?limit=100'],
     settings:['/api/config','/api/status'],
-    gateway:['/api/gateway'],
     safeguards:['/api/safeguard-log','/api/config','/api/status'],
-    sessions:['/api/all'],
   };
   const paths=maps[tab]||[];
   const results=await Promise.allSettled(paths.map(p=>API(p)));
@@ -686,7 +682,7 @@ function renderModels(data){
         <thead><tr><th>ID</th><th>Provider</th><th>Tier</th><th>Status</th><th>Speed</th><th>Agent Ready</th><th>Verified</th></tr></thead>
         <tbody id="models-tbody">
           ${models.map(m=>`
-            <tr class="model-row" data-name="${esc(m.id).toLowerCase()}" data-status="${m.status||''}" data-provider="${esc(m.provider||'')}">
+            <tr class="model-row" style="cursor:pointer" onclick="showModelEdit(this)" data-json='${esc(JSON.stringify(m))}' data-name="${esc(m.id).toLowerCase()}" data-status="${m.status||''}" data-provider="${esc(m.provider||'')}">
               <td><code style="font-size:10px">${esc(m.id)}</code></td>
               <td><span class="tag">${esc(m.provider||'—')}</span></td>
               <td>${m.tier!==undefined?m.tier:'?'}</td>
@@ -789,31 +785,6 @@ function renderSettings(data){
   </div>`;
 }
 
-function renderGateway(data){
-  const gdata=data['/api/gateway']||{};
-  const sessions=gdata.sessions||[];
-  return `
-  <div role="tabpanel" id="panel-gateway" aria-labelledby="tab-gateway">
-    <div class="section-title">🌐 Gateway Sessions <span class="badge">${gdata.session_count||sessions.length}</span> ${gdata.live?'<span class="badge badge-green">Live</span>':''}</div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Display Name</th><th>Model</th><th>Status</th><th>Key</th></tr></thead>
-        <tbody id="gateway-tbody">
-          ${sessions.map(s=>`
-            <tr>
-              <td><strong>${esc(s.displayName||'—')}</strong></td>
-              <td><span class="tag">${esc(s.model||'—')}</span></td>
-              <td><span class="badge ${s.status==='running'?'badge-green':s.status==='qa'?'badge-yellow':s.status==='done'?'badge-gray':'badge-yellow'}">${esc(s.status||'—')}</span></td>
-              <td style="font-size:10px;color:var(--text-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(s.key||'')}</td>
-            </tr>
-          `).join('')}
-          ${!sessions.length?'<tr><td colspan="4" class="empty">No sessions</td></tr>':''}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
-}
-
 function renderSafeguards(data){
   const slog=data['/api/safeguard-log']||{};
   const config=data['/api/config']||{};
@@ -845,45 +816,6 @@ function renderSafeguards(data){
     </div>
   </div>`;
 }
-
-function renderProjectSessions(data){
-  return `
-  <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-sessions">
-    <div class="section-title">📋 Session Manager</div>
-    <div class="card" style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label style="font-size:12px;color:var(--text-dim)">Project:</label>
-      <select id="ps-project" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit;min-width:200px">
-        <option value="">-- Select project --</option>
-        ${((data['/api/all']&&data['/api/all'].projects&&data['/api/all'].projects.projects)||[]).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join('')}
-      </select>
-      <button class="btn btn-sm btn-primary" onclick="loadProjectSessions()">🔍 Load Sessions</button>
-      <button class="btn btn-sm" onclick="showSpawnModal()">➕ New Session</button>
-    </div>
-    <div id="ps-output" style="font-size:12px;color:var(--text-dim);padding:24px;text-align:center">Select a project and click "Load Sessions"</div>
-    <div style="margin-top:16px;display:none" id="ps-spawned-section">
-      <div class="section-mark">Spawn Log</div>
-      <div id="ps-spawned" style="font-size:12px"></div>
-    </div>
-  </div>`;
-}
-
-window.loadProjectSessions=async function(){
-  const project=$('#ps-project')?.value;
-  const out=$('#ps-output');
-  if(!project){out.innerHTML='<span style="color:var(--red)">Please select a project.</span>';return;}
-  out.innerHTML='<span style="color:var(--text-dim)">Loading…</span>';
-  try{
-    const state=await API('/api/project-state?name='+encodeURIComponent(project)+'&t='+Date.now());
-    if(!state||state.error){out.innerHTML='<span style="color:var(--red)">Error: '+(state?.error||'No data')+'</span>';return;}
-    const sessions=state.sessions||[];
-    const docs=state.docs||[];
-    if(!sessions.length&&!docs.length){
-      out.innerHTML='<span style="color:var(--text-dim)">No sessions or docs found for this project.</span>';
-      return;
-    }
-    renderSessionTree(sessions,docs,project,out);
-  } catch(e){out.innerHTML='<span style="color:var(--red)">Error: '+e.message+'</span>';}
-};
 
 function renderSessionTree(sessions,docs,project,out){
   const byParent={},byKey={};
@@ -1118,6 +1050,74 @@ window.closeModal=function(){
   const el=document.querySelector('.modal-overlay');
   if(el)el.remove();
 };
+window.showModelEdit=function(row){
+  try{
+    var raw=row.getAttribute('data-json');
+    var m=JSON.parse(raw);
+    var caps=m.capabilities||{};
+    var cost=m.cost||{};
+    var desc=m.description||'';
+    var routingHints=(m.routing_hints||[]).join(', ');
+    var cc=m.context_window||'';
+    showModal('🧠 Edit Model: '+esc(m.id),
+      '<div style="display:flex;flex-direction:column;gap:8px;font-size:12px">'+
+        '<label style="color:var(--text-dim)">Description</label><input id="med-desc" value="'+escAttr(desc)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Context Window</label><input id="med-ctx" value="'+escAttr(cc)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Speed Rating (0-10)</label><input id="med-speed" type="number" min="0" max="10" value="'+(m.speed_rating||0)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Tier (0=best)</label><input id="med-tier" type="number" min="0" max="10" value="'+(m.tier||0)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Cost Type</label>'+
+        '<select id="med-cost-type" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+          '<option value="free" '+(cost.type==='free'?'selected':'')+'>Free</option>'+
+          '<option value="payg" '+(cost.type==='payg'?'selected':'')+'>Pay-as-you-go</option>'+
+          '<option value="subscription" '+(cost.type==='subscription'?'selected':'')+'>Subscription</option>'+
+          '<option value="unknown" '+(cost.type==='unknown'||!cost.type?'selected':'')+'>Unknown</option>'+
+        '</select>'+
+        '<label style="color:var(--text-dim)">Cost Amount</label><input id="med-cost-amt" type="number" step="0.001" value="'+(cost.amount||0)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Routing Hints (comma-separated)</label><input id="med-routing" value="'+escAttr(routingHints)+'" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+        '<label style="color:var(--text-dim)">Status</label>'+
+        '<select id="med-status" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font:inherit">'+
+          '<option value="active" '+(m.status==='active'?'selected':'')+'>Active</option>'+
+          '<option value="discovered" '+(m.status==='discovered'?'selected':'')+'>Discovered</option>'+
+          '<option value="offline" '+(m.status==='offline'?'selected':'')+'>Offline</option>'+
+          '<option value="removed" '+(m.status==='removed'?'selected':'')+'>Removed</option>'+
+        '</select>'+
+      '</div>',
+      '<button class="btn btn-primary btn-sm" onclick="saveModelEdit(\''+esc(m.id)+'\')">💾 Save</button>');
+  } catch(e){showToast('error','Failed to load model: '+e.message);}
+};
+
+window.saveModelEdit=async function(id){
+  try{
+    var desc=$('#med-desc')?.value||'';
+    var ctx=$('#med-ctx')?.value||'';
+    var speed=parseInt($('#med-speed')?.value)||0;
+    var tier=parseInt($('#med-tier')?.value)||0;
+    var costType=$('#med-cost-type')?.value||'unknown';
+    var costAmt=parseFloat($('#med-cost-amt')?.value)||0;
+    var routing=($('#med-routing')?.value||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+    var status=$('#med-status')?.value||'active';
+
+    showToast('info','Saving model...');
+    var r=await API('/api/models',{method:'PATCH',body:JSON.stringify({
+      id: id,
+      description: desc,
+      context_window: ctx,
+      speed_rating: speed,
+      tier: tier,
+      cost: {type: costType, amount: costAmt},
+      routing_hints: routing,
+      status: status,
+    }),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){
+      showToast('success','Model updated');
+      closeModal();
+      refreshTab(currentTab);
+    }else{
+      showToast('error',(r&&r.error)||'Save failed');
+    }
+  }catch(e){showToast('error',e.message);}
+};
+
 
 window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'Session'),'<div style="font-size:12px">'+
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
@@ -1128,6 +1128,19 @@ window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'
   '<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Task</span><span>'+escHtml(s.task||'—')+'</span></div>'+
   (s.original_prompt?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Original Prompt</span><span>'+escHtml(s.original_prompt)+'</span></div>':'')+
   (s.notes?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Notes</span><pre style="background:var(--bg-alt);padding:6px;border-radius:4px;font-size:10px;max-height:100px;overflow:auto">'+escHtml(s.notes)+'</pre></div>':'')+
+  (s.qa_history&&s.qa_history.length?'<div style="grid-column:1/-1;margin-top:6px"><span style="font-size:10px;color:var(--text-dim);display:block;font-weight:600">QA History</span><div style="margin-top:4px">'+
+    s.qa_history.map(function(e){
+      var icon=e.event==='approve'?'✅':e.event==='reject'?'❌':'📝';
+      var label=e.event==='approve'?'Approved':e.event==='reject'?'Rejected':'Submitted';
+      return '<div style="display:flex;gap:6px;align-items:flex-start;padding:4px 6px;border-left:2px solid '+(e.event==='approve'?'var(--green)':e.event==='reject'?'var(--red)':'var(--yellow)')+';margin-bottom:4px;background:var(--bg-alt);border-radius:0 4px 4px 0">'+
+        '<span>'+icon+'</span>'+
+        '<div><span style="font-weight:600;font-size:10px">'+label+'</span>'+
+        (e.detail?'<div style="font-size:10px;color:var(--text-dim)">'+escHtml(e.detail)+'</div>':'')+
+        '<div style="font-size:9px;color:var(--text-dim)">'+new Date(e.timestamp).toLocaleString()+'</div>'+
+        (e.reviewSessionKey?'<div style="font-size:9px;color:var(--text-dim)">🔍 review: '+escHtml(e.reviewSessionKey).slice(0,40)+'</div>':'')+
+        '</div></div>';
+    }).join('')+
+  '</div></div>':'')+
   '</div>'+
   '</div>');};
 
@@ -1172,9 +1185,7 @@ function renderActiveTab(tabId,data){
     case 'models': main.innerHTML=renderModels(data);break;
     case 'logs': main.innerHTML=renderLogs(data);break;
     case 'settings': main.innerHTML=renderSettings(data);break;
-    case 'gateway': main.innerHTML=renderGateway(data);break;
     case 'safeguards': main.innerHTML=renderSafeguards(data);break;
-    case 'sessions': main.innerHTML=renderProjectSessions(data);break;
   }
 
   // Update header stats with sessions count after dashboard renders
@@ -1375,7 +1386,7 @@ async function quickAction(action){
    ═══════════════════════════════════════════════════════════ */
 function routeFromHash(){
   const hash=location.hash.slice(1)||'dashboard';
-  const valid=['dashboard','projects','agents','models','logs','settings','gateway','safeguards','sessions'];
+  const let validTabs=['dashboard','projects','agents','models','logs','settings','safeguards'];// auto
   return valid.includes(hash)?hash:'dashboard';
 }
 
@@ -1432,9 +1443,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   refreshHeader();
   setInterval(refreshHeader,15000);
 
-  // Periodic tab refresh (auto-refresh for dashboard, agents, gateway)
+  // Periodic tab refresh (auto-refresh for dashboard, agents)
   setInterval(()=>{
-    if(currentTab==='dashboard'||currentTab==='agents'||currentTab==='gateway'){
+    if(currentTab==='dashboard'||currentTab==='agents'){
       refreshTab(currentTab);
     }
   },10000);
