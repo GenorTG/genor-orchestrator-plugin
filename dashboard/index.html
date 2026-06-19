@@ -637,11 +637,11 @@ function renderAgents(data){
     <div id="agent-list">
       ${list.map(a=>{
         const status=a.agent_status||'unknown';
-        const dotCls=status==='working'?'badge-green':status==='prompting'?'badge-yellow':status==='error'||status==='failed'?'badge-red':'badge-gray';
+        const dotCls=status==='running'?'badge-green':status==='error'||status==='failed'?'badge-red':'badge-gray';
         const wf=a.workflow||{};
         return `<div class="agent-card">
           <div class="ac-header">
-            <span class="status-dot ${status==='working'||status==='prompting'?'on':'off'}" style="flex-shrink:0"></span>
+            <span class="status-dot ${status==='running'?'on':'off'}" style="flex-shrink:0"></span>
             <span class="ac-name">${esc(a.agent)}</span>
             <span class="badge ${dotCls}" style="margin-left:auto">${status}</span>
           </div>
@@ -909,7 +909,7 @@ function renderSessionTree(sessions,docs,project,out){
       const children=byParent[k];
       const hasChild=children&&children.length>0;
       const st=s.status||'unknown';
-      const bc=st==='complete'?'success':st==='failed'?'error':st==='running'||st==='in_progress'?'warn':'info';
+      const bc=st==='done'?'success':st==='failed'?'error':st==='running'||st==='in_progress'?'warn':'info';
       const dur=s.duration?formatDur(s.duration):calcDur(s.started_at||s.start_time,s.ended_at||s.end_time);
       const startFmt=fmtTime(s.started_at||s.start_time);
       h+='<div class="session-row" data-sk="'+escAttr(k)+'" onclick="toggleSessionDetail(this,\''+escAttr(k)+'\')" style="padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:8px;border-radius:4px">';
@@ -993,7 +993,7 @@ async function loadSessionDetail(sk,el){
     html+='<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">';
     html+='<div><strong style="font-size:13px">'+escHtml(s.goal||s.task||'Untitled')+'</strong>';
     html+='<div style="font-size:10px;color:var(--text-dim);margin-top:2px">'+escHtml(s.id||sk)+'</div></div>';
-    const bc=s.status==='complete'?'success':s.status==='failed'?'error':s.status==='running'||s.status==='in_progress'?'warn':'info';
+    const bc=s.status==='done'?'success':s.status==='failed'?'error':s.status==='running'||s.status==='in_progress'?'warn':'info';
     html+='<span class="badge badge-'+bc+'">'+(s.status||'unknown')+'</span>';
     html+='</div>';
     html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">';
@@ -1123,7 +1123,7 @@ window.showSessionDetail=function(s){showModal('📋 '+escHtml(s.goal||s.task||'
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-bottom:8px">'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Agent</span><span>'+escHtml(s.agent||'—')+'</span></div>'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Model</span><span>'+escHtml(s.model||'—')+'</span></div>'+
-  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Status</span><span class="badge badge-'+(s.status==='complete'?'success':s.status==='failed'?'error':'info')+'">'+(s.status||'—')+'</span></div>'+
+  '<div><span style="font-size:10px;color:var(--text-dim);display:block">Status</span><span class="badge badge-'+(s.status==='done'?'success':s.status==='failed'?'error':'info')+'">'+(s.status||'—')+'</span></div>'+
   '<div><span style="font-size:10px;color:var(--text-dim);display:block">Duration</span><span>'+(s.duration||calcDur(s.started_at||s.start_time,s.ended_at||s.end_time)||'—')+'</span></div>'+
   '<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Task</span><span>'+escHtml(s.task||'—')+'</span></div>'+
   (s.original_prompt?'<div style="grid-column:1/-1"><span style="font-size:10px;color:var(--text-dim);display:block">Original Prompt</span><span>'+escHtml(s.original_prompt)+'</span></div>':'')+
@@ -1316,7 +1316,7 @@ async function showProject(name){
                   <td style="font-size:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,24)}</td>
                   <td>${esc(s.agent||'—')}</td>
                   <td><span class="tag">${esc(s.model||'—')}</span></td>
-                  <td><span class="badge ${s.status==='complete'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">${s.status||'—'}</span></td>
+                  <td><span class="badge ${s.status==='done'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">${s.status||'—'}</span></td>
                   <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:10px">${esc(s.goal||s.task||'—')}</td>
                   <td style="font-size:10px">${fmtDate(s.start_time)}</td>
                   <td>${s.duration||'—'}</td>

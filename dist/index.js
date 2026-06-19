@@ -415,7 +415,7 @@ class SessionTracker {
         this.currentFile = null;
         this.touchedFiles = [];
         this.actionHistory = [];
-        this.agentStatus = "working";
+        this.agentStatus = "running";
         this.lastError = null;
         this.errorCount = 0;
         this.qaStatus = "none";
@@ -438,7 +438,7 @@ class SessionTracker {
             return null;
         const ms = Date.now() - this.sessionStartTimestamp;
         const dur = ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}min`;
-        this.agentStatus = "complete";
+        this.agentStatus = "done";
         return {
             project: this.currentProject,
             task: this.currentTask || "auto-task",
@@ -501,7 +501,7 @@ class SessionTracker {
         this.currentProject = project;
         this.currentTask = task;
         this.trackAction("Setting context");
-        this.agentStatus = "working";
+        this.agentStatus = "running";
         // Reset workflow tracker with project config
         this.workflow.reset(workflowConfig);
         // Store per-session so before_prompt_build can scope injection
@@ -695,9 +695,9 @@ function queueLiveAgents(reason, tracker) {
             model_provider: tracker.currentModelProvider,
             model_tier: tracker.currentModelTier,
             subagent_depth: 0,
-            action: "working",
+            action: "running",
             current_file: null,
-            agent_status: "working",
+            agent_status: "running",
             touched_files: [],
             action_history: [],
             token_usage: { input: 0, output: 0, total: 0 },
@@ -1136,7 +1136,7 @@ function generateStateFromEvents(project, dataDir, logger) {
             let idx = 1;
             for (const s of recentSessions.reverse()) {
                 const taskShort = (s.task || "").substring(0, 40);
-                const statusEmoji = s.status === "complete" ? "✅" : s.status === "blocked" ? "🔴" : s.status === "failed" ? "❌" : "🟡";
+                const statusEmoji = s.status === "done" ? "✅" : s.status === "blocked" ? "🔴" : s.status === "failed" ? "❌" : "🟡";
                 lines.push(`| ${idx++} | ${taskShort} | ${statusEmoji} ${s.status || ""} | ${s.model ? s.model.substring(0, 20) : "-"} | ${s.duration || "-"} |`);
             }
         }
@@ -1482,7 +1482,7 @@ class MaintenanceService {
                 }
                 // Check 2: Agent hasn't updated in too long despite having project context
                 // Skip actively-working statuses (prompting/running = AI is building a response)
-                if (status !== "idle" && status !== "complete" && status !== "shutdown" && status !== "prompting" && status !== "running" && elapsedSinceUpdate > stuckTimeout) {
+                if (status !== "idle" && status !== "done" && status !== "running" && elapsedSinceUpdate > stuckTimeout) {
                     this.logger.warn("safeguard", `Agent ${agentName} stuck (no update ${Math.round(elapsedSinceUpdate / 60000)}m, status: ${status})`);
                     this.safeguardLog.push(`[${new Date().toISOString()}] STUCK: ${agentName} no update ${Math.round(elapsedSinceUpdate / 60000)}m (${status})`);
                 }
@@ -2096,7 +2096,7 @@ function clearContextFn(dataDir, logger) {
         return {
             ok: false,
             error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-                `but hasn't logged completion. Call orchestrator_log_session with status="complete" (or "blocked"/"failed") ` +
+                `but hasn't logged completion. Call orchestrator_log_session with status="done" (or "blocked"/"failed") ` +
                 `first to document what was done. This ensures no work falls through the cracks.`,
         };
     }
@@ -2372,7 +2372,7 @@ const _plugin = definePluginEntry({
                 const isSubagent = !!subInfo;
                 const isMain = sk_end && sk_end === sessionTracker.sessionKey;
                 if (isMain) {
-                    sessionTracker.setStatus("complete");
+                    sessionTracker.setStatus("done");
                     sessionTracker.trackAction("session_ending");
                     writeLiveAgents("session_end", sessionTracker, logger);
                 }
@@ -2436,7 +2436,7 @@ const _plugin = definePluginEntry({
                     logSession(dataDir, {
                         project: info.project, task: info.task, model: info.model,
                         agent: sessionTracker.currentAgent || "system",
-                        status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "complete",
+                        status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "done",
                         duration: info.duration,
                         session_key: sk_end || sessionTracker.sessionKey || "",
                         parent_session_key: isSubagent && subInfo ? subInfo.parentKey || null : (sk_end && sk_end !== sessionTracker.sessionKey ? sessionTracker.sessionKey || null : null),
@@ -2531,7 +2531,7 @@ const _plugin = definePluginEntry({
                 return;
             const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
             sessionTracker.subagentDepth++;
-            sessionTracker.setStatus("working");
+            sessionTracker.setStatus("running");
             if (sessionTracker.currentProject) {
                 logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject} key=${subKey}`);
             }
@@ -2595,7 +2595,7 @@ const _plugin = definePluginEntry({
                                 const { project, task } = existingCtx;
                                 sessionTracker.sessionKey = ctxSessionKey;
                                 sessionTracker.setContext(project, task || "");
-                                sessionTracker.setStatus("prompting");
+                                sessionTracker.setStatus("running");
                             }
                             logger.info("hooks", `before_model_resolve: bridged synthetic→real: ${regSk} → ${ctxSessionKey}`);
                         }
@@ -2617,7 +2617,7 @@ const _plugin = definePluginEntry({
                     }
                 }
                 // Always update status but scope to the actual hook session
-                sessionTracker.setStatus("resolving");
+                sessionTracker.setStatus("running");
                 sessionTracker.trackAction("resolving_model");
                 writeLiveAgents("before_model_resolve", sessionTracker, logger);
                 // ═══ SESSION-GATED: Only resolve models for the registered session ═══
@@ -2748,7 +2748,7 @@ const _plugin = definePluginEntry({
                 // sessionTracker.sessionKey is shared across all sessions and may have
                 // been set by a different session's hooks. Always use hookCtx.sessionKey.
                 const hk = hookCtx?.sessionKey || "";
-                sessionTracker.setStatus("prompting");
+                sessionTracker.setStatus("running");
                 sessionTracker.trackAction("building_prompt");
                 writeLiveAgents("before_prompt_build", sessionTracker, logger);
                 // ═══ NO MUTATION: This hook NEVER modifies sessionTracker.sessionKey ═══
@@ -2913,7 +2913,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             logger.debug("hooks", `agent_end for ${sessionTracker.currentProject || "no-project"}`);
         });
         api.on("gateway_stop", async () => {
-            sessionTracker.setStatus("shutdown");
+            sessionTracker.setStatus("done");
             maintenanceSvc?.stop();
             logger.stop();
         });
@@ -3013,7 +3013,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({
                         ok: false,
                         error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-                            `but hasn't logged completion. Call orchestrator_log_session with status="complete" first ` +
+                            `but hasn't logged completion. Call orchestrator_log_session with status="done" first ` +
                             `to document what was done before unregistering.`,
                     });
                 }
@@ -3103,7 +3103,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 sessionTracker.trackAction(`log: ${params.task}`);
                 writeLiveAgents("tool_log_session", sessionTracker, logger);
                 // Mark completion logged so clearContext/unregister know work is documented
-                const terminal = ["complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
+                const terminal = ["done", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
                 if (terminal)
                     sessionTracker.markLoggedCompletion();
                 // Write state event for this session
@@ -3601,7 +3601,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                             if (ctx) {
                                 sessionTracker.sessionKey = hk;
                                 sessionTracker.setContext(ctx.project, ctx.task || "");
-                                sessionTracker.setStatus("resolving");
+                                sessionTracker.setStatus("running");
                                 addFix("Copied context \"" + ctx.project + "\" from " + sk + " to real key " + hk);
                             }
                             else {
@@ -3817,7 +3817,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return txt({
                         ok: false,
                         error: `❌ Task not logged. Session is bound to project "${bound}" but hasn't logged completion. ` +
-                            `Call orchestrator_log_session with status="complete" first to document what was done ` +
+                            `Call orchestrator_log_session with status="done" first to document what was done ` +
                             `before releasing the binding. Use force=true to override this check.`,
                     });
                 }
