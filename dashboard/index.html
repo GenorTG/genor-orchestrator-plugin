@@ -1386,8 +1386,8 @@ async function quickAction(action){
    ═══════════════════════════════════════════════════════════ */
 function routeFromHash(){
   const hash=location.hash.slice(1)||'dashboard';
-  let validTabs=['dashboard','projects','agents','models','logs','settings','safeguards'];// auto
-  return valid.includes(hash)?hash:'dashboard';
+  let validTabs=['dashboard','projects','agents','models','logs','settings','safeguards'];
+  return validTabs.includes(hash)?hash:'dashboard';
 }
 
 /* ═══════════════════════════════════════════════════════════
