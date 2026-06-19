@@ -1481,7 +1481,8 @@ class MaintenanceService {
                     }
                 }
                 // Check 2: Agent hasn't updated in too long despite having project context
-                if (status !== "idle" && status !== "complete" && status !== "shutdown" && elapsedSinceUpdate > stuckTimeout) {
+                // Skip actively-working statuses (prompting/running = AI is building a response)
+                if (status !== "idle" && status !== "complete" && status !== "shutdown" && status !== "prompting" && status !== "running" && elapsedSinceUpdate > stuckTimeout) {
                     this.logger.warn("safeguard", `Agent ${agentName} stuck (no update ${Math.round(elapsedSinceUpdate / 60000)}m, status: ${status})`);
                     this.safeguardLog.push(`[${new Date().toISOString()}] STUCK: ${agentName} no update ${Math.round(elapsedSinceUpdate / 60000)}m (${status})`);
                 }
