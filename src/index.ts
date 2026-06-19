@@ -60,16 +60,15 @@ const PLUGIN_ROOT = path.resolve(__dirname, "..");
 //  810-822 definePluginEntry({...}) + register() — init
 //  824-838 Cron scheduling (nightly auto-populate 3 AM)
 //  840-842   LOGGER init
-//  844-846   HOOKS (8 hooks)
-//  848-855   • session_start
-//  856-875   • session_end (auto-log + recovery doc)
+//  844-846   HOOKS (7 hooks)
+//  848-875   • session_end (auto-log + recovery doc)
 //  877-883   • subagent_spawned
 //  885-890   • subagent_ended
 //  892-925   • before_model_resolve (auto-routing)
 //  927-940   • before_prompt_build (context injection)
 //  942-946   • agent_end
 //  948-952   • gateway_stop
-//  954-956   TOOLS (12 registered via api.registerTool)
+//  954-956   TOOLS (40 registered via api.registerTool)
 //  957-969   • orchestrator_set_context
 //  970-978   • orchestrator_clear_context
 //  979-988   • orchestrator_get_status
@@ -2557,67 +2556,6 @@ const _plugin: Record<string, any> = definePluginEntry({
     // ═══════════════════════════════════════════════════════════
     //  HOOKS
     // ═══════════════════════════════════════════════════════════
-
-    api.on("session_start", async (event: any) => {
-      try {
-        const sk = (event.sessionKey || "").toString();
-        // Filter out background/dreaming/cron/subagent/acp sessions — their
-        // session keys would overwrite the interactive session key and cause
-        // mismatched session_key in auto-logged entries.
-        const isBackground = sk.includes("dreaming") || sk.includes(":cron:") || sk.includes(":subagent:") || sk.includes(":acp:");
-        if (isBackground) {
-          logger.debug("hooks", `session_start (skipped background): ${sk}`);
-          return;
-        }
-        // ═══ SESSION ISOLATION: Don't reset tracker for unregistered sessions ═══
-        // Calling start() on an unregistered session would nuke the registered
-        // session's context (project, task, model) from the singleton tracker.
-        // Only start() if this session is explicitly registered, or if there
-        // are ZERO registered sessions (first-time setup).
-        const hasRegisteredSessions = sessionTracker.getRegisteredSessions().length > 0;
-        if (sessionTracker.isSessionRegistered(sk) || !hasRegisteredSessions) {
-          sessionTracker.start(sk || "unknown", event.reason || "new");
-        } else {
-          // Unregistered session starting alongside an active registered session.
-          // Don't touch the tracker state — just log it.
-          sessionTracker.trackAction("session_started");
-          logger.debug("hooks", `session_start (unregistered, skipped tracker reset): ${sk}`);
-        }
-        // ═══ AUTO-REGISTER PROJECT SESSIONS spawned from dashboard ═══
-        // When the dashboard's handleSpawnProjectSession spawns a session, it
-        // writes a pending-project-sessions.json entry BEFORE calling
-        // subagent.run(). This hook picks it up and auto-registers + sets
-        // project context — so the spawned agent starts ready to work.
-        try {
-          const pendingPath = path.join(dataDir, "pending-project-sessions.json");
-          if (fs.existsSync(pendingPath)) {
-            const pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
-            const entry = pending[sk];
-            if (entry) {
-              // MUST call start() FIRST to set sessionTracker.sessionKey, otherwise
-              // registerSession/setContext will bind to the old session's key.
-              sessionTracker.start(sk || "unknown", "project-session-auto-register");
-              sessionTracker.registerSession(sk);
-              sessionTracker.setContext(entry.project, entry.task);
-              delete pending[sk];
-              // Clean up: remove file if empty, otherwise update
-              if (Object.keys(pending).length === 0) {
-                        try { fs.unlinkSync(pendingPath); } catch { /* */ }
-              } else {
-                fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
-              }
-              logger.info("hooks", `Auto-registered project session: ${sk} → ${entry.project}/${entry.task}`);
-            }
-          }
-        } catch (e: any) {
-          logger.warn("hooks", `Pending project-session auto-register failed: ${e.message}`);
-        }
-
-        sessionTracker.trackAction("session_started");
-        writeLiveAgents("session_start", sessionTracker, logger);
-        logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);
-      } catch (err: any) { logger.error("hooks", `session_start error: ${err.message}`); }
-    });
 
     api.on("session_end", async (event: any) => {
       try {
@@ -5484,13 +5422,12 @@ Focus specifically on: ${params.topic}` : "";
     // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
     try {
       const dashHandler = createDashboardHandler(api);
-      // Dashboard UI + API: auth:"plugin" for static serving, file ops
-      // trusted-operator scope gives HTTP handler access to api.runtime.subagent.run()
+      // Dashboard UI + API: "plugin" auth serves the dashboard and handles API calls
+      // No operator.write scope needed — dashboard handler uses OpenAI endpoint for spawns
       api.registerHttpRoute({
         path: "/orchestrator",
         auth: "plugin",
         match: "prefix",
-        gatewayRuntimeScopeSurface: "trusted-operator",
         handler: dashHandler,
       });
       logger.info("plugin", "Dashboard handler registered at /orchestrator");

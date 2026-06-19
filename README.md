@@ -17,9 +17,10 @@ The orchestrator doesn't take over your thinking. It handles the scaffolding so 
 
 | # | Feature | What It Does |
 |---|---------|-------------|
-| 🚀 | **Instant Project Session Spawning** | Dashboard **➕ New Session** button spawns persistent project sessions that auto-register with the orchestrator. No cron, no self-API calls, no config hacks. Queue → hook → subagent.run() → auto-register. |
-| 📋 | **Dashboard Spawn Button** | Click ➕ New Session in the dashboard, choose a project, describe the task, and get an instant response with the session key. The spawned session appears in Live Agents on the next agent turn. |
-| 🔧 | **Simplified Arch** | Removed heartbeat, self-API, and trusted-operator approaches. The queue-based spawn is the only path — proven reliable through end-to-end testing. |
+| 🚀 | **OpenAI Endpoint Session Spawn** | Dashboard **➕ New Session** button spawns persistent sessions by POSTing directly to the gateway's OpenAI-compatible `/v1/chat/completions` endpoint with a custom `x-openclaw-session-key` header. No queue files, no cron, no subagent.run() bridging. The new session starts immediately and auto-registers on `session_start`. |
+| 🧹 | **Queue Approach Removed** | The old `pending-spawns.json` → `before_prompt_build` hook → `subagent.run()` pipeline has been removed entirely. Session spawns now use a direct, synchronous OpenAI endpoint call. |
+| 📋 | **Dashboard Spawn Button** | Click ➕ New Session in the dashboard, choose a project, describe the task, and optionally pick a model. An instant session is created via the gateway's own API with the session key returned immediately. |
+| 🔧 | **Simplified Architecture** | Removed `trusted-operator`, self-API fetch, heartbeat, and cron-based spawn approaches. The OpenAI endpoint spawn is the only path — proven through end-to-end testing. |
 
 ### Previous Release — v0.8.0
 
@@ -82,23 +83,30 @@ Then add `genor-orchestrator-plugin` to your OpenClaw `plugins.load.paths` confi
 
 > **No manual OpenClaw config changes needed.** The plugin handles everything internally.
 
-The dashboard's **➕ New Session** button spawns persistent project sessions using a **queue-based architecture**:
+The dashboard's **➕ New Session** button spawns persistent project sessions using a **direct OpenAI endpoint call**:
 
-1. The spawn HTTP handler writes a `pending-spawns.json` queue file and returns immediately (~91ms)
-2. On the next agent turn, the `before_prompt_build` hook drains the queue via `api.runtime.subagent.run()`
-3. The new session's `session_start` hook picks up a pending registration entry and auto-registers with the orchestrator
-4. The spawned session appears in the dashboard's **Live Agents** with full project context
+1. The dashboard handler reads the gateway auth token from `~/.openclaw/openclaw.json` (or `OPENCLAW_GATEWAY_TOKEN` env var)
+2. It generates a unique session key and POSTs to the gateway's own OpenAI-compatible endpoint: `POST http://127.0.0.1:18789/v1/chat/completions`
+3. The request includes:
+   - `Authorization: Bearer {gatewayToken}` — authenticates the dashboard as a trusted client
+   - `x-openclaw-session-key: {custom key}` — assigns a deterministic session key for the new session
+   - `x-openclaw-model: {model}` — (optional) picks the model for the new session
+   - The message body tells the spawned session to auto-register with the orchestrator project
+4. The new session starts almost instantly. Its `session_start` hook auto-detects the project spawn context and registers with the orchestrator
+5. The spawned session appears in the dashboard's **Live Agents** with full project context
 
 **What this means for you:**
 1. The plugin must be in your `plugins.allow` list (it is by default when installed via ClawHub or `plugin:build`)
-2. That's it — no config tokens, no file paths, no special permissions to set up
-3. The spawn API returns immediately; the session starts on the **next agent turn** (typically when the user sends their next message)
+2. The gateway's auth token must be readable from `~/.openclaw/openclaw.json` (standard for gateway installations)
+3. That's it — no config tokens, no file paths, no special permissions to set up
+4. The spawn API returns the session key immediately; the session starts right away
 
-**Why this approach:** OpenClaw restricts runtime access (`subagent.run()`) from HTTP handler contexts for security. The `before_prompt_build` hook has full `operator.write` scope, so it can call `subagent.run()` reliably. The queue bridges the gap between HTTP handler and hook — simple, predictable, and clean.
+**Why this approach:** Direct OpenAI endpoint calls are the simplest and most reliable way to create new sessions in OpenClaw. The `x-openclaw-session-key` header gives us deterministic session key assignment, and the `session_start` hook handles auto-registration. No queue files to manage, no hook bridging, no cron-based polling.
 
 **What was abandoned:**
+- ❌ Queue-based spawn (`pending-spawns.json` → `before_prompt_build` → `subagent.run()`) — Removed in v0.9.0. Too complex, fragile under race conditions.
 - ❌ `gatewayRuntimeScopeSurface: "trusted-operator"` — Doesn't work with `auth: "plugin"` routes. The runtime ignores it for plugin-authenticated routes.
-- ❌ Self-API fetch to `/v1/chat/completions` — Blocks for 10-30s waiting for AI response, and `session_start` hook doesn't fire for API-created sessions.
+- ❌ Self-API fetch to `/v1/chat/completions` via `fetch()` from hook context — Blocks for 10-30s waiting for AI response, and `session_start` hook doesn't fire predictably for API-created sessions in some configuration.
 - ❌ `requestHeartbeat` — Doesn't trigger `before_prompt_build` hook. Heartbeats check for pending work but don't create agent turns.
 - ❌ Cron jobs — User explicitly rejected cron-based triggers.
 
@@ -929,7 +937,7 @@ The dashboard handler is registered via `api.registerHttpRoute(...)` — same pa
 
 **🌐 Gateway** — Live OpenClaw gateway sessions. See every active session with its agent, start time, project binding, and connection status.
 
-**📋 Sessions** — The new per-project session manager. **Select a project** from the dropdown, click **Load Sessions** to fetch session history. Each row shows agent, status badge (green=complete, yellow=running, red=failed), task/goal, start time, and duration. **Click any row** to expand an inline detail pane with full session info: agent, model, status, task, original prompt, notes/tags, links, and parent/sub-agent hierarchy. Use the **Project Docs** sidebar to view BACKLOG.json, CONTEXT.md, RECOVERY.md, sessions.json, and more inline. Click **New Session** to spawn a sub-agent directly from the dashboard.
+**📋 Sessions** — The per-project session manager. **Select a project** from the dropdown, click **Load Sessions** to fetch session history. Each row shows agent, status badge (green=complete, yellow=running, red=failed), task/goal, start time, and duration. **Click any row** to expand an inline detail pane with full session info: agent, model, status, task, original prompt, notes/tags, links, and parent/sub-agent hierarchy. Use the **Project Docs** sidebar to view BACKLOG.json, CONTEXT.md, RECOVERY.md, sessions.json, and more inline. Click **New Session** to spawn a sub-agent directly from the dashboard.
 
 **🛡️ Safeguards** — Idle/stuck agent detection dashboard. Cards show configuration status, safeguard event log, workflow enforcement per project, agent health indicators (healthy/warning/stale), and a phase timeline for each agent.
 
@@ -944,7 +952,7 @@ The dashboard handler is registered via `api.registerHttpRoute(...)` — same pa
 | **📜 Logs** | Orchestration log with level filtering. Drill into routing decisions, session events, config changes |
 | **⚙️ Settings** | Dashboard configuration — theme, auto-refresh, preferences |
 | **🌐 Gateway** | Live OpenClaw gateway sessions — see every active session on the gateway |
-| **📋 Sessions** | **(NEW)** Per-project session tree with parent-child hierarchy, clickable detail pane, spawn sub-agent modal. Replaces the old "Chat Console" (all SSE/chat functionality removed — that's OpenClaw WebUI's job) |
+| **📋 Sessions** | Per-project session tree with parent-child hierarchy, clickable detail pane, spawn sub-agent modal. Replaces the old "Chat Console" (all SSE/chat functionality removed — that's OpenClaw WebUI's job) |
 | **🛡️ Safeguards** | Idle/stuck agent detection dashboard, error tracking, auto-recovery controls, event log viewer, agent health indicators (healthy/warning/stale) |
 
 ### Live Agent Monitoring
@@ -1029,6 +1037,7 @@ All project routing, workflow, and safeguard settings live in `~/.openclaw/works
 |----------|---------|
 | `ORCHESTRATOR_DATA_DIR` | Override orchestrator data directory path |
 | `DASHBOARD_DIR` | Override dashboard static file directory |
+| `OPENCLAW_GATEWAY_TOKEN` | Override gateway auth token for session spawn |
 
 ### Plugin Config (in `openclaw.plugin.json`)
 
@@ -1218,6 +1227,7 @@ orchestrator-data/
 
 | Version | Highlights |
 |---------|-----------|
+| **v0.9.0** | 🚀 **OpenAI endpoint session spawn** — dashboard creates sessions via direct POST to `/v1/chat/completions` with `x-openclaw-session-key`. Queue-based spawn (`pending-spawns.json` → `before_prompt_build` hook → `subagent.run()`) removed entirely. Simplified architecture: gateway token read from config, no cron, no heartbeat, no self-API. `/api/spawn-project-session` endpoint with optional model selection. |
 | **v0.8.0** | 🖥️ **Dashboard complete redesign** (3506→1428 lines, left sidebar nav with 9 tabs). New **Sessions tab** with per-project session tree & spawn sub-agent modal. **12 new tools** (40 total): QA trilogy (`qa_submit`, `qa_approve`, `qa_reject`), Handoff (`generate_handoff`), Deep-dive (`grill_with_docs`), Doc tools (`fix_docs_drift`, `regenerate_state`, `cleanup_docs`), Test infra (`setup_unit_tests`, `setup_e2e_tests`), Debug (`debug_issue`), Feature creation (`create_functionality`). StateManager reactive state, lazy rendering, toast notifications, accessible ARIA roles. PM2 bridge removed entirely. Bug fixes. |
 | **v0.7.0** | 🧠 **Routing presets system.** 5 presets (custom, no-steering, free-only, single-provider, custom-fallbacks-only), 6 backlog tools (28 total), set-project-routing API, enhanced routing brain with model quality metadata, preset selector UI, task category inference in hooks, agent card buttons (Stop/Recover), safeguards tab with event log viewer. |
 | **v0.6.0** | 🎯 **22 tools, 8 hooks, 6 new features.** Session-project binding, hook scoping, orphaned project cleanup, active project discovery + joining, project health enforcement (`STATE.md`), subagent spawning. Dashboard migrated to native `/orchestrator` route — **no PM2 needed**. `orchestrator_doctor` with auto-fix. Safeguard auto-recovery writes recovery actions. Hidden-dir filter across all listings (`.archived` excluded). All 8 hooks fully operational. |
@@ -1379,10 +1389,13 @@ genor-orchestrator-plugin/
 │   └── index.test.ts              # Tests (3)
 ├── dashboard/
 │   └── index.html                  # Dashboard single-page SPA (1428 lines)
+├── docs/
+│   ├── images/                     # Screenshots for README
+│   └── FEATURES.md                 # Comprehensive feature document
 ├── openclaw.plugin.json           # Plugin metadata + config schema
 ├── SETUP.md                       # Step-by-step installation guide
 ├── README.md                      # You are here 📍
-└── package.json                   # v0.8.0
+└── package.json                   # v0.9.0
 ```
 
 ---

@@ -1,7 +1,7 @@
 # 📋 AGENTS.md — Genor's Orchestrator Plugin
 
 ## 🧠 What It Does
-A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **40 tools** for model routing, session tracking, project context injection, a live dashboard (9 tabs), subagent management, backlog management, QA workflow, test infrastructure, and automated project health — all without a separate process.
+A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **40 tools** for model routing, session tracking, project context injection, a live dashboard (9 tabs), subagent management, backlog management, QA workflow, test infrastructure, session spawning via OpenAI endpoint, and automated project health — all without a separate process.
 
 ---
 
@@ -10,7 +10,7 @@ A full-featured OpenClaw plugin that turns your gateway into a coordinated agent
 | File | What It Does |
 |------|-------------|
 | `src/index.ts` | 🧩 Main plugin — 40 tools, 8 hooks (via `api.on`), SessionTracker, MaintenanceService |
-| `src/dashboard-handler.ts` | 🖥️ HTTP handler serving the dashboard at `/orchestrator` |
+| `src/dashboard-handler.ts` | 🖥️ HTTP handler serving the dashboard at `/orchestrator`, including `/api/spawn-project-session` endpoint |
 | `src/shared.ts` | 🔧 Shared types, utilities, constants |
 | `src/index.test.ts` | 🧪 Test suite (3 tests) |
 | `dashboard/index.html` | 🎨 Single-file SPA frontend (1428 lines, Tailwind, zero build) |
@@ -39,7 +39,7 @@ openclaw plugins enable genor-orchestrator
 
 | Metric | Value |
 |--------|-------|
-| **Version** | 0.8.0 |
+| **Version** | 0.9.0 |
 | **Tools** | 40 tools (0 slash commands — all migrated to proper tools) |
 | **Hooks** | 8 lifecycle hooks |
 | **Models tracked** | 24 total, 11 agent-ready |
@@ -50,6 +50,13 @@ openclaw plugins enable genor-orchestrator
 | **Plugin location** | `~/.openclaw/extensions/genor-orchestrator/` (native extension) |
 
 ---
+
+## 🔬 v0.9.0 Features
+
+1. **🚀 OpenAI Endpoint Session Spawn** — Dashboard **➕ New Session** button POSTs directly to the gateway's `/v1/chat/completions` endpoint with `x-openclaw-session-key` header. No queue files, no cron, no hook bridging. Returns session key immediately.
+2. **🧹 Queue Approach Removed** — The old `pending-spawns.json` → `before_prompt_build` hook → `subagent.run()` pipeline is completely removed.
+3. **📋 Dashboard Spawn Button** — Click ➕ New Session, choose a project, describe the task, optionally pick a model, and get an instant session.
+4. **🔧 Simplified Architecture** — Gateway token read from `~/.openclaw/openclaw.json`, POST to `http://127.0.0.1:18789/v1/chat/completions` with custom session key. No trusted-operator, self-API, heartbeat, or cron approaches.
 
 ## 🔬 v0.8.0 Features
 

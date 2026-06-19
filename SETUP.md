@@ -90,6 +90,7 @@ curl http://localhost:18789/orchestrator/api/config | python3 -m json.tool
 
 | Problem | Fix |
 |---------|-----|
+| Spawn fails — "Gateway token not found" | Gateway token missing in `~/.openclaw/openclaw.json` or `OPENCLAW_GATEWAY_TOKEN` env var |
 | Plugin not found after install | Check `openclaw plugins list` — enable if disabled |
 | Dashboard 404 | Plugin may need restart. Check `openclaw gateway status` |
 | Auto-populate fails | Temp file rename issue. Run `orchestrator_auto_populate` manually |

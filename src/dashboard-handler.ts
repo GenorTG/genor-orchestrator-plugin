@@ -57,14 +57,21 @@ function sendError(res: ServerResponse, code: number, msg: string): void {
   sendJSON(res, { error: msg }, code);
 }
 
-function sendFile(res: ServerResponse, filePath: string): void {
+function sendFile(res: ServerResponse, filePath: string, extraVars?: Record<string, string>): void {
   if (!fs.existsSync(filePath)) {
     sendError(res, 404, "Not found");
     return;
   }
   const ext = path.extname(filePath);
   const ct = MIME[ext] || "application/octet-stream";
-  const content = fs.readFileSync(filePath);
+  let content = fs.readFileSync(filePath);
+  if (filePath.endsWith("index.html") && extraVars) {
+    let html = content.toString("utf-8");
+    for (const [key, val] of Object.entries(extraVars)) {
+      html = html.replaceAll(`__${key}__`, val);
+    }
+    content = Buffer.from(html, "utf-8");
+  }
   res.writeHead(200, { "Content-Type": ct, "Access-Control-Allow-Origin": "*" });
   res.end(content);
 }
@@ -991,55 +998,70 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
             return true;
           }
 
-          // Generate a unique session key for this new project session
           const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
           const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
 
-          // Build the task message for the spawned session
-          const message = [
-            `[Orchestrator: New Project Session]`,
-            ``,
-            `You have been spawned as an independent session for project: ${project}`,
-            `Your task:`,
-            task,
-            ``,
-            `You are auto-registered with the orchestrator. Project context is already set.`,
-            `Begin working on the task above.`,
-          ].join("\n");
-
-          // ═══ Write pending registration for session_start hook ═══
-          const pendingPath = path.join(getDataDir(), "pending-project-sessions.json");
-          let pending: Record<string, { project: string; task: string; spawnedAt: string; model?: string }> = {};
+          // ═══ Read gateway token from config ═══
+          let gatewayToken = "";
           try {
-            if (fs.existsSync(pendingPath)) {
-              pending = JSON.parse(fs.readFileSync(pendingPath, "utf-8"));
+            const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+            if (fs.existsSync(cfgPath)) {
+              const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+              gatewayToken = cfg?.gateway?.auth?.token || "";
             }
-          } catch { /* */ }
-          pending[sessionKey] = { project, task, model: model || undefined, spawnedAt: new Date().toISOString() };
-          fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
-
-          // ═══ Direct spawn via subagent.run() ═══
-          // With gatewayRuntimeScopeSurface:"trusted-operator", HTTP handler can
-          // call subagent.run() directly — no queue, no cron, no self-API calls.
-          try {
-            const result = await (api as any).runtime.subagent.run({
-              sessionKey,
-              message,
-              model: model || undefined,
-            });
-            api.logger.info(`Spawned ${sessionKey.slice(0, 50)} → runId: ${(result as any)?.runId?.slice(0, 8) || "?"}`);
-          } catch (e: any) {
-            api.logger.warn(`Direct spawn failed: ${e.message}`);
-            // Don't fail the HTTP response — the session might still be created
+          } catch { /* fallback to env */ }
+          if (!gatewayToken) {
+            gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || "";
           }
+          if (!gatewayToken) {
+            sendJSON(_res, { ok: false, error: "Gateway token not found — cannot spawn via OpenAI endpoint" }, 500);
+            return true;
+          }
+
+          api.logger.info(`spawn: Creating session via OpenAI endpoint -> ${sessionKey.slice(0, 50)}`);
+
+          // ═══ Create session via OpenAI-compatible endpoint ═══
+          // This call creates a new session with our custom key, sends the task,
+          // and the AI starts processing. We limit max_tokens for a quick response.
+          const gatewayPort = 18789;
+          const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${gatewayToken}`,
+              "Content-Type": "application/json",
+              "x-openclaw-session-key": sessionKey,
+              ...(model ? { "x-openclaw-model": model } : {}),
+            },
+            body: JSON.stringify({
+              model: "openclaw/main",
+              messages: [
+                {
+                  role: "user",
+                  content: `[Orchestrator: New Session for "${project}"]\n\nYou are a newly spawned session. Your task:\n\n${task}\n\nAuto-register with the orchestrator project "${project}" and begin working on the task above.`
+                }
+              ],
+              max_tokens: 50,
+            }),
+          });
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => "unknown error");
+            api.logger.warn(`spawn: OpenAI endpoint returned ${response.status}: ${errText.slice(0, 200)}`);
+            sendJSON(_res, { ok: false, error: `Endpoint returned ${response.status}: ${errText.slice(0, 200)}` }, 500);
+            return true;
+          }
+
+          const result = await response.json();
+          api.logger.info(`spawn: Created session: ${sessionKey.slice(0, 50)} (${result?.choices?.[0]?.message?.content?.slice(0, 40) || "?"})`);
 
           sendJSON(_res, {
             ok: true,
             session_key: sessionKey,
             project,
-            message: `Spawned new session for "${project}": ${sessionKey}`,
+            message: `Session created for "${project}": ${sessionKey}`,
           });
         } catch (e: any) {
+          api.logger.error(`spawn: Error: ${e.message}`);
           sendJSON(_res, { ok: false, error: e.message }, 500);
         }
         return true;

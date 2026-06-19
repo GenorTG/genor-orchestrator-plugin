@@ -84,6 +84,16 @@ export function createMockApi(): MockApiType {
     cron: {
       add: vi.fn((_job: any) => Promise.resolve({ ok: true, id: 'mock-cron-1' })),
     },
+    logger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      logRouting: vi.fn(),
+      logSession: vi.fn(),
+      logConfigChange: vi.fn(),
+      query: vi.fn(() => []),
+    },
     tools,
     hooks,
     commands,
