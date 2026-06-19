@@ -1440,7 +1440,11 @@ document.addEventListener('DOMContentLoaded',()=>{
   },10000);
 
   // Footer version
-  $('#sidebar-footer').textContent='GenorBoard v2';
+  // Show plugin version from API
+  API('/api/status').then(d=>{
+    if(d&&d.version&&d.version!='?')
+      $('#sidebar-footer').textContent='v'+d.version+' | genor-orchestrator';
+  });
 });
 </script>
 </body>

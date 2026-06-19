@@ -132,7 +132,18 @@ function handleSSE(res) {
 // ── API HANDLERS ──────────────────────────────────────────────
 function handleStatus(_req, res) {
     const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
+    // Read plugin version from manifest
+    let pluginVersion = "?";
+    try {
+        const manifestPath = path.join(PLUGIN_ROOT, "openclaw.plugin.json");
+        if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+            pluginVersion = manifest.version || "?";
+        }
+    }
+    catch { /* */ }
     sendJSON(res, {
+        version: pluginVersion,
         nightly_price_check: fs.existsSync(path.join(getDataDir(), "price_changes.log")) ? "Configured (2 AM)" : "Not configured",
         price_log_exists: fs.existsSync(path.join(getDataDir(), "price_changes.log")),
         data_dir: getDataDir(),
