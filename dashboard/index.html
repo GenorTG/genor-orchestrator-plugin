@@ -42,7 +42,7 @@
 html,body{height:100%}
 body{
   background:var(--bg);color:var(--text);font-family:var(--font-ui);
-  font-size:16px;line-height:1.6;overflow:hidden;
+  font-size:14px;line-height:1.6;overflow:hidden;
   -webkit-font-smoothing:antialiased;
 }
 a{color:var(--blue);text-decoration:none}
@@ -69,7 +69,7 @@ code,.code{font-family:var(--font)}
 .skip-link{
   position:absolute;top:-100px;left:8px;z-index:9999;
   background:var(--accent);color:#000;padding:6px 12px;
-  border-radius:var(--radius);font-weight:600;font-size:15px
+  border-radius:var(--radius);font-weight:600;font-size:14px
 }
 .skip-link:focus{top:8px}
 
@@ -87,14 +87,14 @@ code,.code{font-family:var(--font)}
   font-size:18px;padding:4px;border-radius:var(--radius);
   line-height:1;
 }
-.logo{display:flex;align-items:center;gap:6px;font-size:15px;font-weight:700;color:var(--text-bright);white-space:nowrap}
+.logo{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;color:var(--text-bright);white-space:nowrap}
 .logo span{color:var(--accent)}
 .header .sep{width:1px;height:16px;background:var(--border)}
 .status-indicator{display:flex;align-items:center;gap:5px;font-size:15px}
 .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .status-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
 .status-dot.off{background:var(--red)}
-.header-stats{display:flex;gap:12px;margin-left:auto;font-size:15px;color:var(--text-dim)}
+.header-stats{display:flex;gap:12px;margin-left:auto;font-size:14px;color:var(--text-dim)}
 .header-stats .s{display:flex;align-items:center;gap:3px}
 .header-stats .s .n{color:var(--text-bright);font-weight:600;font-family:var(--font);font-size:15px}
 .theme-btn{
@@ -123,7 +123,7 @@ code,.code{font-family:var(--font)}
 .nav-item{
   display:flex;align-items:center;gap:8px;padding:7px 10px;
   border-radius:var(--radius);border:none;background:none;
-  color:var(--text-dim);font-size:15px;cursor:pointer;
+  color:var(--text-dim);font-size:14px;cursor:pointer;
   transition:var(--transition);text-align:left;width:100%;
   white-space:nowrap;font-family:var(--font-ui);
 }
@@ -133,14 +133,14 @@ code,.code{font-family:var(--font)}
 .nav-item .label{overflow:hidden;text-overflow:ellipsis}
 .sidebar-footer{
   padding:8px;border-top:1px solid var(--border);
-  font-size:15px;color:var(--text-dim);text-align:center
+  font-size:14px;color:var(--text-dim);text-align:center
 }
 
 /* Main content */
 .main{flex:1;overflow-y:auto;padding:20px;min-width:0}
 .main.loading{display:flex;align-items:center;justify-content:center}
 .main.loading::after{
-  content:'⏳ Loading…';color:var(--text-dim);font-family:var(--font);font-size:15px
+  content:'⏳ Loading…';color:var(--text-dim);font-family:var(--font);font-size:14px
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -159,7 +159,7 @@ code,.code{font-family:var(--font)}
 .metric-card .mc-value{
   font-family:var(--font);font-size:24px;font-weight:700;color:var(--text-bright);line-height:1.2
 }
-.metric-card .mc-label{font-size:15px;color:var(--text-dim);margin-top:2px}
+.metric-card .mc-label{font-size:14px;color:var(--text-dim);margin-top:2px}
 .metric-card .mc-icon{position:absolute;top:10px;right:12px;font-size:18px;opacity:.25}
 
 /* Section */
@@ -169,7 +169,7 @@ code,.code{font-family:var(--font)}
   margin-bottom:10px;display:flex;align-items:center;gap:6px
 }
 .section-title .badge{
-  font-size:15px;background:var(--accent-bg);color:var(--accent);
+  font-size:14px;background:var(--accent-bg);color:var(--accent);
   padding:1px 6px;border-radius:3px;font-weight:500;font-family:var(--font)
 }
 
@@ -183,21 +183,21 @@ code,.code{font-family:var(--font)}
 .btn{
   display:inline-flex;align-items:center;gap:5px;
   padding:5px 12px;border-radius:var(--radius);border:1px solid var(--border);
-  background:var(--bg-alt);color:var(--text);font-size:15px;
+  background:var(--bg-alt);color:var(--text);font-size:14px;
   font-family:var(--font-ui);cursor:pointer;transition:var(--transition);
 }
 .btn:hover{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
 .btn-primary{background:var(--accent);border-color:var(--accent);color:#000;font-weight:600}
 .btn-primary:hover{background:var(--blue);color:#000}
 .btn-sm{padding:3px 8px;font-size:15px}
-.btn-icon{padding:4px;font-size:15px;line-height:1}
+.btn-icon{padding:4px;font-size:14px;line-height:1}
 .btn-group{display:flex;gap:6px;flex-wrap:wrap}
 
 /* Table */
 .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
-table{width:100%;border-collapse:collapse;font-size:15px}
+table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--bg-alt);color:var(--text-dim);font-weight:600;font-size:15px;white-space:nowrap}
+th{background:var(--bg-alt);color:var(--text-dim);font-weight:600;font-size:14px;white-space:nowrap}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--accent-bg)}
 tr.selected td{background:var(--accent-bg)}
@@ -205,7 +205,7 @@ tr.selected td{background:var(--accent-bg)}
 /* Status badges */
 .badge{
   display:inline-flex;align-items:center;gap:3px;
-  padding:1px 6px;border-radius:3px;font-size:15px;font-weight:600
+  padding:1px 6px;border-radius:3px;font-size:14px;font-weight:600
 }
 .badge-green{background:rgba(63,185,80,.15);color:var(--green)}
 .badge-red{background:rgba(248,81,73,.15);color:var(--red)}
@@ -221,28 +221,28 @@ tr.selected td{background:var(--accent-bg)}
 }
 .agent-card .ac-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .agent-card .ac-name{font-weight:600;color:var(--text-bright);font-size:15px}
-.agent-card .ac-task{font-size:15px;color:var(--text-dim);margin-bottom:6px}
-.agent-card .ac-meta{display:flex;gap:12px;font-size:15px;color:var(--text-dim);flex-wrap:wrap}
+.agent-card .ac-task{font-size:14px;color:var(--text-dim);margin-bottom:6px}
+.agent-card .ac-meta{display:flex;gap:12px;font-size:14px;color:var(--text-dim);flex-wrap:wrap}
 .agent-card .ac-meta span{display:flex;align-items:center;gap:3px}
 
 /* Activity feed */
-.activity{font-size:15px}
+.activity{font-size:14px}
 .activity .entry{
   display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);
   align-items:flex-start
 }
 .activity .entry:last-child{border:none}
-.activity .entry-time{font-family:var(--font);font-size:15px;color:var(--text-dim);white-space:nowrap;width:120px;flex-shrink:0}
+.activity .entry-time{font-family:var(--font);font-size:14px;color:var(--text-dim);white-space:nowrap;width:120px;flex-shrink:0}
 .activity .entry-msg{word-break:break-word}
-.activity .entry-lvl{font-size:15px;padding:0 4px;border-radius:2px;font-weight:600}
+.activity .entry-lvl{font-size:14px;padding:0 4px;border-radius:2px;font-weight:600}
 
 /* Project detail */
 .project-detail{padding:10px 0}
 .project-detail .pd-section{margin-bottom:14px}
-.project-detail .pd-title{font-size:15px;font-weight:600;color:var(--text-dim);margin-bottom:4px}
+.project-detail .pd-title{font-size:14px;font-weight:600;color:var(--text-dim);margin-bottom:4px}
 
 /* Log viewer */
-.log-viewer{font-family:var(--font);font-size:15px;line-height:1.6}
+.log-viewer{font-family:var(--font);font-size:14px;line-height:1.6}
 .log-viewer .log-entry{
   display:flex;gap:8px;padding:3px 6px;border-radius:2px
 }
@@ -255,7 +255,7 @@ tr.selected td{background:var(--accent-bg)}
   display:flex;flex-direction:column;gap:6px
 }
 .toast{
-  padding:8px 14px;border-radius:var(--radius);font-size:15px;
+  padding:8px 14px;border-radius:var(--radius);font-size:14px;
   background:var(--bg-card);border:1px solid var(--border);
   box-shadow:0 4px 12px rgba(0,0,0,.3);animation:slideIn .2s ease;
   display:flex;align-items:center;gap:8px;max-width:360px
@@ -264,7 +264,7 @@ tr.selected td{background:var(--accent-bg)}
 .toast-success{border-left:3px solid var(--green)}
 .toast-info{border-left:3px solid var(--blue)}
 .toast .toast-close{
-  background:none;border:none;color:var(--text-dim);font-size:15px;
+  background:none;border:none;color:var(--text-dim);font-size:14px;
   margin-left:auto;cursor:pointer;line-height:1;padding:2px
 }
 @keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
@@ -274,13 +274,13 @@ tr.selected td{background:var(--accent-bg)}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* Tag */
-.tag{display:inline-block;padding:0 5px;border-radius:3px;background:var(--accent-bg);color:var(--accent);font-size:15px;font-weight:500;margin:1px}
+.tag{display:inline-block;padding:0 5px;border-radius:3px;background:var(--accent-bg);color:var(--accent);font-size:14px;font-weight:500;margin:1px}
 
 /* Filter bar */
 .filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .filter-bar input,.filter-bar select{
   padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);
-  background:var(--bg-alt);color:var(--text);font-size:15px;font-family:var(--font-ui)
+  background:var(--bg-alt);color:var(--text);font-size:14px;font-family:var(--font-ui)
 }
 .filter-bar input:focus,.filter-bar select:focus{outline:2px solid var(--accent);outline-offset:-1px}
 
@@ -290,8 +290,8 @@ tr.selected td{background:var(--accent-bg)}
   padding:8px 0;border-bottom:1px solid var(--border)
 }
 .setting-row:last-child{border:none}
-.setting-row .s-label{font-size:15px}
-.setting-row .s-desc{font-size:15px;color:var(--text-dim);margin-top:1px}
+.setting-row .s-label{font-size:14px}
+.setting-row .s-desc{font-size:14px;color:var(--text-dim);margin-top:1px}
 .toggle{
   width:36px;height:20px;border-radius:10px;border:1px solid var(--border);
   background:var(--bg-alt);cursor:pointer;position:relative;transition:var(--transition);flex-shrink:0
@@ -315,17 +315,17 @@ tr.selected td{background:var(--accent-bg)}
   border-radius:var(--radius);max-width:720px;width:92%;
   max-height:85vh;overflow-y:auto;padding:24px
 }
-.modal-title{font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:12px}
+.modal-title{font-size:14px;font-weight:600;color:var(--text-bright);margin-bottom:12px}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
 
 /* Empty state */
-.empty{text-align:center;padding:30px;color:var(--text-dim);font-size:15px}
+.empty{text-align:center;padding:30px;color:var(--text-dim);font-size:14px}
 
 /* Tabs for sub-navigation */
 .tabs{display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid var(--border)}
 .tab-btn{
   padding:6px 14px;border:none;background:none;color:var(--text-dim);
-  font-size:15px;cursor:pointer;border-bottom:2px solid transparent;
+  font-size:14px;cursor:pointer;border-bottom:2px solid transparent;
   transition:var(--transition);font-family:var(--font-ui);margin-bottom:-1px
 }
 .tab-btn:hover{color:var(--text)}
@@ -363,6 +363,14 @@ tr.selected td{background:var(--accent-bg)}
   .filter-bar{flex-direction:column}
   .agent-card .ac-meta{flex-direction:column;gap:4px}
 }
+
+/* Scrollable list containers */
+.list-scroll{max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)}
+.list-scroll-sm{max-height:200px;overflow-y:auto}
+.filter-bar-scroll{margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.filter-bar-scroll input,.filter-bar-scroll select{background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;font:inherit;font-size:15px}
+.filter-bar-scroll input{flex:1;min-width:120px}
+.filter-bar-scroll select{min-width:100px}
 </style>
 </head>
 <body>
@@ -411,7 +419,74 @@ tr.selected td{background:var(--accent-bg)}
    STATE MANAGER
    ═══════════════════════════════════════════════════════════ */
 class StateManager {
-  constructor(){this.state={};this.subs={};this._seq=0}
+  constructor(){this.state={};
+
+window.filterDashLogs=function(){
+  const lvl=$('#dash-log-level')?.value||'';
+  const sort=$('#dash-log-sort')?.value||'newest';
+  const container=$('#dash-activity');
+  if(!container)return;
+  const entries=Array.from(container.querySelectorAll('.entry'));
+  entries.forEach(e=>{
+    const elvl=e.getAttribute('data-level')||'';
+    e.style.display=(!lvl||elvl===lvl)?'':'none';
+  });
+  if(sort==='oldest'){
+    const sorted=entries.sort((a,b)=>(a.getAttribute('data-ts')||'').localeCompare(b.getAttribute('data-ts')||''));
+    sorted.forEach(e=>container.appendChild(e));
+  }else{
+    const sorted=entries.sort((a,b)=>(b.getAttribute('data-ts')||'').localeCompare(a.getAttribute('data-ts')||''));
+    sorted.forEach(e=>container.appendChild(e));
+  }
+};
+
+window.filterSafeguards=function(){
+  const q=($('#safeguard-search')?.value||'').toLowerCase();
+  const evt=$('#safeguard-event')?.value||'';
+  const sort=$('#safeguard-sort')?.value||'newest';
+  const container=$('#safeguard-entries');
+  if(!container)return;
+  const entries=Array.from(container.querySelectorAll('.log-entry'));
+  entries.forEach(e=>{
+    const matchEvt=!evt||e.getAttribute('data-event')===evt;
+    const matchTxt=!q||(e.getAttribute('data-details')||'').includes(q);
+    e.style.display=(matchEvt&&matchTxt)?'':'none';
+  });
+  if(sort==='oldest'){
+    const sorted=entries.sort((a,b)=>(a.getAttribute('data-ts')||'').localeCompare(b.getAttribute('data-ts')||''));
+    sorted.forEach(e=>container.appendChild(e));
+  }else{
+    const sorted=entries.sort((a,b)=>(b.getAttribute('data-ts')||'').localeCompare(a.getAttribute('data-ts')||''));
+    sorted.forEach(e=>container.appendChild(e));
+  }
+};
+
+window.filterProjects=function(){
+  const q=($('#project-search')?.value||'').toLowerCase();
+  document.querySelectorAll('#projects-tbody .proj-row').forEach(e=>{
+    const name=e.getAttribute('data-name')||'';
+    e.style.display=name.includes(q)?'':'none';
+  });
+};
+
+window.filterProjSessions=function(){
+  const q=($('#proj-session-search')?.value||'').toLowerCase();
+  const st=$('#proj-session-status')?.value||'';
+  const sort=$('#proj-session-sort')?.value||'newest';
+  const tbody=document.querySelector('#proj-sessions-table tbody');
+  if(!tbody)return;
+  const entries=Array.from(tbody.querySelectorAll('.sess-row'));
+  entries.forEach(e=>{
+    const matchSt=!st||e.getAttribute('data-status')===st;
+    const matchTxt=!q||(e.getAttribute('data-task')||'').includes(q);
+    e.style.display=(matchSt&&matchTxt)?'':'none';
+  });
+  if(sort==='oldest'){
+    tbody.innerHTML='';
+    entries.reverse().forEach(e=>tbody.appendChild(e));
+  }
+};
+this.subs={};this._seq=0}
   get(k,d){const v=this.state;return k.split('.').reduce((o,p)=>(o&&o[p]!==undefined?o[p]:d),v)}
   set(k,v){
     const keys=k.split('.');const last=keys.pop();
@@ -563,17 +638,28 @@ function renderDashboard(data){
 
     <div class="section">
       <div class="section-title">📋 Recent Activity</div>
-      <div class="card">
-        <div class="activity">
-          ${(logs.entries||[]).slice(0,10).map(e=>`
-            <div class="entry">
-              <span class="entry-time">${fmtTime(e.ts)}</span>
-              <span class="entry-lvl" style="color:${e.level==='error'?'var(--red)':e.level==='warn'?'var(--yellow)':'var(--green)'}">${e.level||'info'}</span>
-              <span class="entry-msg">${esc(e.msg||e.message||'')}</span>
-            </div>
-          `).join('')}
-          ${(!logs.entries||!logs.entries.length)?'<div class="empty">No recent activity</div>':''}
-        </div>
+      <div class="filter-bar-scroll">
+        <select id="dash-log-level" onchange="filterDashLogs()">
+          <option value="">All levels</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+        <select id="dash-log-sort" onchange="filterDashLogs()">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+        <span style="font-size:15px;color:var(--text-dim)">Last 50</span>
+      </div>
+      <div class="list-scroll" id="dash-activity">
+        ${(logs.entries||[]).slice(0,50).map(e=>{
+          const lvlCls=e.level==='error'?'var(--red)':e.level==='warn'?'var(--yellow)':'var(--green)';
+          return '<div class="entry" data-level="'+(e.level||'info')+'" data-ts="'+(e.ts||'')+'">'+
+            '<span class="entry-time">'+fmtTime(e.ts)+'</span>'+
+            '<span class="entry-lvl" style="color:'+lvlCls+'">'+(e.level||'info')+'</span>'+
+            '<span class="entry-msg">'+esc(e.msg||e.message||'')+'</span></div>';
+        }).join('')}
+        ${(!logs.entries||!logs.entries.length)?'<div class="empty">No recent activity</div>':''}
       </div>
     </div>
 
@@ -603,13 +689,18 @@ function renderProjects(data){
   return `
   <div role="tabpanel" id="panel-projects" aria-labelledby="tab-projects">
     <div class="section-title">📁 Projects <span class="badge">${projects.length}</span></div>
-    <div class="table-wrap">
+    <div class="filter-bar-scroll">
+      <input type="text" id="project-search" placeholder="🔍 Search projects…" oninput="filterProjects()">
+      <span style="font-size:15px;color:var(--text-dim)">${projects.length} projects</span>
+    </div>
+    <div class="table-wrap list-scroll" style="max-height:400px">
       <table>
         <thead><tr><th>Name</th><th>Sessions</th><th>Created</th><th>Free Only</th><th>Routing</th><th></th></tr></thead>
-        <tbody>
-          ${projects.map(p=>`
-            <tr style="cursor:pointer" onclick="showProject('${esc(p.name)}')" title="Click for details">
-              <td><strong>${esc(p.name)}</strong></td>
+        <tbody id="projects-tbody">
+          ${projects.map((p,i)=>{
+            const safeName='proj-'+esc(p.name).replace(/[^a-z0-9]/gi,'_');
+            return '<tr class="proj-row" data-name="'+esc(p.name).toLowerCase()+'" id="'+safeName+'" style="cursor:pointer" onclick="showProject(''+esc(p.name)+'')" title="Click for details">'+
+              '<td><strong>'+esc(p.name)+'</strong></td>
               <td>${p.session_count||0}</td>
               <td>${fmtDate(p.created)}</td>
               <td>${p.free_only?'<span class="badge badge-yellow">Free only</span>':'<span class="badge badge-green">Flexible</span>'}</td>
@@ -677,7 +768,7 @@ function renderModels(data){
         ${[...new Set(models.map(m=>m.provider).filter(Boolean))].map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('')}
       </select>
     </div>
-    <div class="table-wrap">
+    <div class="table-wrap list-scroll" style="max-height:400px">
       <table>
         <thead><tr><th>ID</th><th>Provider</th><th>Tier</th><th>Status</th><th>Speed</th><th>Agent Ready</th><th>Verified</th></tr></thead>
         <tbody id="models-tbody">
@@ -721,11 +812,18 @@ function renderLogs(data){
       </select>
       <button class="btn btn-sm" onclick="refreshTab('logs')">🔄 Refresh</button>
     </div>
-    <div class="card log-viewer" id="log-entries">
+    <div class="filter-bar-scroll">
+      <select id="log-sort" onchange="filterLogs()">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+      </select>
+      <span style="font-size:15px;color:var(--text-dim)">${ldata.count||entries.length} entries</span>
+    </div>
+    <div class="list-scroll log-viewer" id="log-entries">
       ${entries.map(e=>{
         const lvl=e.level||'info';
         const color=lvl==='error'?'var(--red)':lvl==='warn'?'var(--yellow)':'var(--text-dim)';
-        return `<div class="log-entry" data-level="${lvl}" data-source="${esc(e.source||'')}" data-text="${esc(e.msg||e.message||'').toLowerCase()}">
+        return `<div class="log-entry" data-level="${lvl}" data-source="${esc(e.source||'')}" data-text="${esc(e.msg||e.message||'').toLowerCase()}" data-ts="${esc(e.ts||'')}">
           <span class="log-time">${fmtTime(e.ts)}</span>
           <span style="color:${color};font-weight:600;width:40px;flex-shrink:0">${lvl}</span>
           <span>[${esc(e.source||'?')}]</span>
@@ -803,14 +901,28 @@ function renderSafeguards(data){
 
     <div class="section">
       <div class="section-title">📋 Event Log</div>
-      <div class="log-viewer" style="max-height:400px;overflow-y:auto">
-        ${entries.map(e=>`
-          <div class="log-entry">
-            <span class="log-time">${fmtTime(e.timestamp)}</span>
-            <span class="badge ${e.event==='STUCK'?'badge-red':e.event==='RECOVER'?'badge-green':'badge-yellow'}" style="width:80px">${e.event||'—'}</span>
-            <span>${esc(e.details||'')}</span>
-          </div>
-        `).join('')}
+      <div class="filter-bar-scroll">
+        <input type="text" id="safeguard-search" placeholder="🔍 Search events…" oninput="filterSafeguards()" style="flex:1;min-width:120px">
+        <select id="safeguard-event" onchange="filterSafeguards()">
+          <option value="">All events</option>
+          <option value="STUCK">STUCK</option>
+          <option value="RECOVER">RECOVER</option>
+          <option value="WARNING">WARNING</option>
+        </select>
+        <select id="safeguard-sort" onchange="filterSafeguards()">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+      </div>
+      <div class="list-scroll log-viewer" id="safeguard-entries">
+        ${entries.map(e=>{
+          const badgeCls=e.event==='STUCK'?'badge-red':e.event==='RECOVER'?'badge-green':'badge-yellow';
+          const safeDetails=esc((e.details||'').toLowerCase());
+          return '<div class="log-entry" data-event="'+(e.event||'')+'" data-details="'+safeDetails+'" data-ts="'+(e.timestamp||'')+'">'+
+            '<span class="log-time">'+fmtTime(e.timestamp)+'</span>'+
+            '<span class="badge '+badgeCls+'" style="width:80px">'+(e.event||'—')+'</span>'+
+            '<span>'+esc(e.details||'')+'</span></div>';
+        }).join('')}
         ${!entries.length?'<div class="empty">No safeguard events</div>':''}
       </div>
     </div>
@@ -1436,12 +1548,26 @@ async function showProject(name){
 
       <div class="section">
         <div class="section-title">Sessions <span class="badge">${sessions.length}</span></div>
-        <div class="table-wrap" style="max-height:300px;overflow-y:auto">
+        <div class="filter-bar-scroll">
+          <input type="text" id="proj-session-search" placeholder="🔍 Search sessions…" oninput="filterProjSessions()" style="flex:1;min-width:120px">
+          <select id="proj-session-status" onchange="filterProjSessions()">
+            <option value="">All statuses</option>
+            <option value="done">done</option>
+            <option value="running">running</option>
+            <option value="failed">failed</option>
+            <option value="qa">qa</option>
+          </select>
+          <select id="proj-session-sort" onchange="filterProjSessions()">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+        <div class="table-wrap list-scroll" style="max-height:350px" id="proj-sessions-table">
           <table>
             <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>
             <tbody>
               ${(()=>{const rev=sessions.slice().reverse();window._projSessions=rev;return rev.map((s,i)=>`
-                <tr style="cursor:pointer" onclick="showSessionDetail(window._projSessions[${i}])">
+                <tr class="sess-row" style="cursor:pointer" onclick="showSessionDetail(window._projSessions[${i}])" data-status="${s.status||''}" data-task="${esc(s.goal||s.task||'').toLowerCase()}">
                   <td style="font-size:15px;max-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,24)}</td>
                   <td>${esc(s.agent||'—')}</td>
                   <td><span class="tag">${esc(s.model||'—')}</span></td>
@@ -1454,14 +1580,7 @@ async function showProject(name){
               ${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">Model Routing</div>
-        <div class="card" style="font-size:15px">
-          ${Object.entries(docs.model_routing||{}).map(([cat,models])=>`
-            <div style="margin-bottom:4px"><span style="color:var(--text-dim);font-weight:600">${cat}:</span> ${models.map(m=>`<span class="tag">${esc(m)}</span>`).join(' ')||'<span style="color:var(--text-dim)">none</span>'}</div>
+        </div><span class="tag">${esc(m)}</span>`).join(' ')||'<span style="color:var(--text-dim)">none</span>'}</div>
           `).join('')}
         </div>
       </div>
