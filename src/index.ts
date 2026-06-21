@@ -2465,6 +2465,56 @@ function _resolveBacklogCandidates(project: string, tasks: any[], filterLabels?:
 // Used by the module-level manifest export. Inlined to avoid duplication
 // between TOOL_METADATA and api.registerTool calls.
 const _collectedToolMeta: Array<{ name: string; label: string; description: string; parameters: any }> = [];
+
+// Static tool name array for metadata reflection at import time.
+// openclaw plugins build evaluates the module before register() is called,
+// so _collectedToolMeta would be empty. This static list ensures
+// contracts.tools is properly populated in openclaw.plugin.json.
+// Must be kept in sync with the actual api.registerTool calls below.
+const _staticToolNames: string[] = [
+  "orchestrator_advance_phase",
+  "orchestrator_auto_populate",
+  "orchestrator_backlog_add",
+  "orchestrator_backlog_dispatch",
+  "orchestrator_backlog_dispatch_all",
+  "orchestrator_backlog_list",
+  "orchestrator_backlog_update",
+  "orchestrator_check_models",
+  "orchestrator_cleanup_docs",
+  "orchestrator_clear_context",
+  "orchestrator_create_functionality",
+  "orchestrator_create_project",
+  "orchestrator_debug_issue",
+  "orchestrator_doctor",
+  "orchestrator_fix_docs_drift",
+  "orchestrator_generate_handoff",
+  "orchestrator_get_config",
+  "orchestrator_get_logs",
+  "orchestrator_get_models",
+  "orchestrator_get_project_docs",
+  "orchestrator_get_registered_sessions",
+  "orchestrator_get_routing",
+  "orchestrator_get_status",
+  "orchestrator_grill_with_docs",
+  "orchestrator_join_project",
+  "orchestrator_list_active_projects",
+  "orchestrator_log_decision",
+  "orchestrator_log_session",
+  "orchestrator_qa_approve",
+  "orchestrator_qa_reject",
+  "orchestrator_qa_submit",
+  "orchestrator_regenerate_state",
+  "orchestrator_register",
+  "orchestrator_release_project",
+  "orchestrator_set_context",
+  "orchestrator_setup_e2e_tests",
+  "orchestrator_setup_unit_tests",
+  "orchestrator_spawn_subagent",
+  "orchestrator_sync_project",
+  "orchestrator_unregister",
+  "orchestrator_verify_check",
+  "orchestrator_verify_work",
+];
 let _toolCount = 0;
 
 const PLUGIN_ID = "genor-orchestrator";
@@ -5837,7 +5887,12 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
       },
     },
     get tools() {
-      return _collectedToolMeta.length > 0 ? _collectedToolMeta : [];
+      // Prefer the full metadata when register() has populated it.
+      // Fall back to name-only entries for build-time reflection
+      // (openclaw plugins build evaluates the module before register()).
+      return _collectedToolMeta.length > 0
+        ? _collectedToolMeta
+        : _staticToolNames.map((name) => ({ name }));
     },
   },
   enumerable: false,
