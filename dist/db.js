@@ -869,7 +869,7 @@ export function addVerificationRun(run) {
     worker_session, reviewer_session, fixer_session,
     worker_output_path, reviewer_result, fixer_output_path, guidance,
     artifacts, messages, created_ts, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(run.pipeline_id, run.project, run.task, run.criteria, run.phase, run.iteration, run.max_iterations, run.worker_session || "", run.reviewer_session || "", run.fixer_session || "", run.worker_output_path || "", run.reviewer_result || "", run.fixer_output_path || "", run.guidance || "", run.artifacts || "[]", run.messages || "[]", run.created_ts || Math.floor(Date.now() / 1000), run.updated_ts || Math.floor(Date.now() / 1000));
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(run.pipeline_id, run.project, run.task, run.criteria, run.phase, run.iteration, run.max_iterations, run.worker_session || "", run.reviewer_session || "", run.fixer_session || "", run.worker_output_path || "", run.reviewer_result || "", run.fixer_output_path || "", run.guidance || "", run.artifacts || "[]", run.messages || "[]", run.created_ts || Math.floor(Date.now() / 1000), run.updated_ts || Math.floor(Date.now() / 1000));
 }
 export function getVerificationRun(pipelineId) {
     const row = getDb().prepare("SELECT * FROM verification_runs WHERE pipeline_id = ?").get(pipelineId);

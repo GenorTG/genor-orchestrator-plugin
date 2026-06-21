@@ -1061,7 +1061,7 @@ export function addVerificationRun(run: VerificationRun): void {
     worker_session, reviewer_session, fixer_session,
     worker_output_path, reviewer_result, fixer_output_path, guidance,
     artifacts, messages, created_ts, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     run.pipeline_id,
     run.project,
     run.task,
