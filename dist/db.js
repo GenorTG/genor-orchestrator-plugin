@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS verification_runs (
     worker_output_path TEXT DEFAULT '',
     reviewer_result TEXT DEFAULT '',
     fixer_output_path TEXT DEFAULT '',
+    guidance TEXT DEFAULT '',
     artifacts TEXT DEFAULT '[]',
     messages TEXT DEFAULT '[]',
     created_ts INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -298,6 +299,16 @@ const MIGRATIONS = [
       `);
             // ── Record this migration ──
             db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(2, "Add FK constraints, fix logged_at type, normalize timestamps", now);
+        },
+    },
+    {
+        version: 3,
+        name: "Add guidance column to verification_runs",
+        apply: () => {
+            const db = getDb();
+            db.exec("ALTER TABLE verification_runs ADD COLUMN guidance TEXT DEFAULT ''");
+            const now = Math.floor(Date.now() / 1000);
+            db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(3, "Add guidance column to verification_runs", now);
         },
     },
 ];
@@ -856,9 +867,9 @@ export function addVerificationRun(run) {
     db.prepare(`INSERT INTO verification_runs (
     pipeline_id, project, task, criteria, phase, iteration, max_iterations,
     worker_session, reviewer_session, fixer_session,
-    worker_output_path, reviewer_result, fixer_output_path,
+    worker_output_path, reviewer_result, fixer_output_path, guidance,
     artifacts, messages, created_ts, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(run.pipeline_id, run.project, run.task, run.criteria, run.phase, run.iteration, run.max_iterations, run.worker_session || "", run.reviewer_session || "", run.fixer_session || "", run.worker_output_path || "", run.reviewer_result || "", run.fixer_output_path || "", run.artifacts || "[]", run.messages || "[]", run.created_ts || Math.floor(Date.now() / 1000), run.updated_ts || Math.floor(Date.now() / 1000));
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(run.pipeline_id, run.project, run.task, run.criteria, run.phase, run.iteration, run.max_iterations, run.worker_session || "", run.reviewer_session || "", run.fixer_session || "", run.worker_output_path || "", run.reviewer_result || "", run.fixer_output_path || "", run.guidance || "", run.artifacts || "[]", run.messages || "[]", run.created_ts || Math.floor(Date.now() / 1000), run.updated_ts || Math.floor(Date.now() / 1000));
 }
 export function getVerificationRun(pipelineId) {
     const row = getDb().prepare("SELECT * FROM verification_runs WHERE pipeline_id = ?").get(pipelineId);
@@ -870,7 +881,7 @@ export function updateVerificationRun(pipelineId, updates) {
     const fields = [];
     const values = [];
     const allowed = ["phase", "iteration", "worker_session", "reviewer_session", "fixer_session",
-        "worker_output_path", "reviewer_result", "fixer_output_path", "artifacts", "messages"];
+        "worker_output_path", "reviewer_result", "fixer_output_path", "artifacts", "messages", "guidance"];
     for (const key of allowed) {
         if (updates[key] !== undefined) {
             fields.push(`${key} = ?`);
