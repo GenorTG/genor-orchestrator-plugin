@@ -92,18 +92,8 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
         agent: "Amy",
         status: "complete",
       });
-      // Verify disk persistence
-      const sessFile = path.join(
-        dd,
-        "projects",
-        "test-project",
-        "sessions.json",
-      );
-      expect(fs.existsSync(sessFile)).toBe(true);
-      const sessData = JSON.parse(fs.readFileSync(sessFile, "utf-8"));
-      expect(sessData.sessions.length).toBeGreaterThanOrEqual(1);
-      expect(sessData.sessions[0].project).toBe("test-project");
-      // Verify ADR persistence
+      // Sessions stored in SQLite (no file-based storage)
+      // Verify ADR persistence (still file-based)
       const adrDir = path.join(dd, "adrs");
       expect(fs.existsSync(adrDir)).toBe(true);
       const adrFiles = fs.readdirSync(adrDir).filter((f) => f.endsWith(".md"));

@@ -563,7 +563,12 @@ async function refreshAll(){
     ]);
     const d={};
     if(status.status==='fulfilled')d.status=status.value;
-    if(agentsData.status==='fulfilled')d.agents=agents.value; // fix: below
+    if(agentsData.status==='fulfilled')d.agents=agentsData.value;
+    if(modelsData.status==='fulfilled')d.models=modelsData.value;
+    if(projectsData.status==='fulfilled')d.projects=projectsData.value;
+    if(configData.status==='fulfilled')d.config=configData.value;
+    if(all.status==='fulfilled')d.all=all.value;
+    window._orchestratorCache=d;
   }catch(e){/* individual errors handled */}
 }
 
@@ -1507,7 +1512,7 @@ function clearSSE(){
    ═══════════════════════════════════════════════════════════ */
 async function showProject(name){
   const main=$('#main-content');
-  main.innerHTML=`<div class="loading"></div>`; // show spinner
+  main.innerHTML=`<div class="loading"></div>`;
 
   try{
     const [state,backlog,errors]=await Promise.allSettled([
@@ -1517,78 +1522,417 @@ async function showProject(name){
     ]);
 
     const st=state.status==='fulfilled'?state.value:{};
-    const bl=backlog.status==='fulfilled'?backlog.value:{};
+    const bl=backlog.status==='fulfilled'?backlog.value:{tasks:[]};
     const errs=errors.status==='fulfilled'?errors.value:{};
-
-    // Format sessions
     const sessions=st.sessions||[];
     const docs=st.config||{};
+    const tasks=bl.tasks||[];
 
-    main.innerHTML=`
-    <div role="tabpanel" id="panel-projects" aria-labelledby="tab-projects">
-      <button class="btn btn-sm" onclick="activateTab('projects')" style="margin-bottom:10px">← Back to Projects</button>
-      <div class="section-title">📁 ${esc(name)}</div>
+    window._projState={name,sessions,st,docs,tasks,errs,tab:'sessions'};
 
-      <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
-        <div class="metric-card"><div class="mc-value" style="font-size:16px">${sessions.length}</div><div class="mc-label">Sessions</div></div>
-        <div class="metric-card"><div class="mc-value" style="font-size:16px">${st.config?.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
-        <div class="metric-card"><div class="mc-value" style="font-size:16px">${bl.tasks?.length||0}</div><div class="mc-label">Backlog Tasks</div></div>
-        <div class="metric-card"><div class="mc-value" style="font-size:16px">${errs.errors?.length||0}</div><div class="mc-label">Errors</div></div>
-      </div>
+    // ── Render helpers ──
+    function renderMetrics(){
+      const ps=window._projState;
+      if(!ps) return '';
+      return '<div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">'+
+        '<div class="metric-card"><div class="mc-value" style="font-size:16px">'+ps.sessions.length+'</div><div class="mc-label">Sessions</div></div>'+
+        '<div class="metric-card"><div class="mc-value" style="font-size:16px">'+(ps.st?.config?.workflow?.current_phase||'&mdash;')+'</div><div class="mc-label">Phase</div></div>'+
+        '<div class="metric-card"><div class="mc-value" style="font-size:16px">'+ps.tasks.length+'</div><div class="mc-label">Backlog Tasks</div></div>'+
+        '<div class="metric-card"><div class="mc-value" style="font-size:16px">'+(ps.errs?.errors?.length||0)+'</div><div class="mc-label">Errors</div></div>'+
+        '</div>';
+    }
 
-      <div class="section">
-        <div class="section-title">Workflow</div>
-        <div class="card" style="font-size:15px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
-          <span style="color:var(--text-dim)">Enabled:</span><span>${docs.workflow?.enabled?'✅ Yes':'❌ No'}</span>
-          <span style="color:var(--text-dim)">Include QA:</span><span>${docs.workflow?.include_qa?'✅ Yes':'❌ No'}</span>
-          <span style="color:var(--text-dim)">Auto Commit:</span><span>${docs.workflow?.auto_commit?'✅ Yes':'❌ No'}</span>
-          <span style="color:var(--text-dim)">QA Retries:</span><span>${docs.workflow?.qa_retries||0}</span>
-          <span style="color:var(--text-dim)">Routing:</span><span class="tag">${docs.routing_preset||'default'}</span>
-        </div>
-      </div>
+    function renderTabBar(active){
+      const tabs=[{id:'sessions',icon:'\ud83d\udccb',label:'Sessions'},{id:'backlog',icon:'\ud83d\udce6',label:'Backlog'},{id:'settings',icon:'\u2699\ufe0f',label:'Settings'},{id:'routing',icon:'\ud83e\udde0',label:'Routing'},{id:'docs',icon:'\ud83d\udcc4',label:'Docs'}];
+      return '<div class="filter-bar-scroll" style="margin:10px 0;gap:4px">'+
+        tabs.map(t=>'<button class="btn btn-sm'+(active===t.id?' btn-primary':'')+'" onclick="showProjTab(\''+t.id+'\')">'+t.icon+' '+t.label+'</button>').join('')+
+        '</div>';
+    }
 
-      <div class="section">
-        <div class="section-title">Sessions <span class="badge">${sessions.length}</span></div>
-        <div class="filter-bar-scroll">
-          <input type="text" id="proj-session-search" placeholder="🔍 Search sessions…" oninput="filterProjSessions()" style="flex:1;min-width:120px">
-          <select id="proj-session-status" onchange="filterProjSessions()">
-            <option value="">All statuses</option>
-            <option value="done">done</option>
-            <option value="running">running</option>
-            <option value="failed">failed</option>
-            <option value="qa">qa</option>
-          </select>
-          <select id="proj-session-sort" onchange="filterProjSessions()">
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-          </select>
-        </div>
-        <div class="table-wrap list-scroll" style="max-height:350px" id="proj-sessions-table">
-          <table>
-            <thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>
-            <tbody>
-              ${(()=>{const rev=sessions.slice().reverse();window._projSessions=rev;return rev.map((s,i)=>`
-                <tr class="sess-row" style="cursor:pointer" onclick="showSessionDetail(window._projSessions[${i}])" data-status="${s.status||''}" data-task="${esc(s.goal||s.task||'').toLowerCase()}">
-                  <td style="font-size:15px;max-width:90px;overflow:hidden;text-overflow:ellipsis">${esc(s.id||s.session_key||'').slice(0,24)}</td>
-                  <td>${esc(s.agent||'—')}</td>
-                  <td><span class="tag">${esc(s.model||'—')}</span></td>
-                  <td><span class="badge ${s.status==='qa'?'badge-yellow':s.status==='done'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow'}">${s.status||'—'}</span></td>
-                  <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:15px">${esc(s.goal||s.task||'—')}</td>
-                  <td style="font-size:15px">${fmtDate(s.start_time)}${(!s.duration||s.duration==='0s'||(s.start_time&&s.end_time&&new Date(s.start_time).getTime()===new Date(s.end_time).getTime()))?' <span style="font-size:15px;color:var(--red)" title="Legacy session — timestamps unreliable">⚠</span>':''}</td>
-                  <td>${s.duration&&s.duration!=='0s'?s.duration:'—'}</td>
-                </tr>
-              `).join('')})()}
-              ${!sessions.length?'<tr><td colspan="7" class="empty">No sessions</td></tr>':''}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>`;
+    function renderSessionsTab(){
+      const ps=window._projState;
+      if(!ps) return '';
+      const rev=(ps.sessions||[]).slice().reverse();
+      window._projSessions=rev;
+      let rows=rev.map((s,i)=>{
+        let tagsHtml='&mdash;';
+        if(s.tags){
+          if(Array.isArray(s.tags)) tagsHtml=s.tags.map(t=>'<span class="tag" style="font-size:12px">'+escHtml(t)+'</span>').join(' ');
+          else tagsHtml=escHtml(String(s.tags));
+        }
+        const badgeClass=s.status==='qa'?'badge-yellow':s.status==='done'?'badge-green':s.status==='failed'?'badge-red':'badge-yellow';
+        return '<tr class="sess-row" style="cursor:pointer" onclick="showSessionDetail(window._projSessions['+i+'])" data-status="'+(s.status||'')+'" data-task="'+esc(s.goal||s.task||'').toLowerCase()+'" data-tags="'+(s.tags?Array.isArray(s.tags)?s.tags.join(' '):String(s.tags):'')+'">'+
+          '<td style="font-size:15px;max-width:90px;overflow:hidden;text-overflow:ellipsis">'+esc(s.id||s.session_key||'').slice(0,24)+'</td>'+
+          '<td>'+esc(s.agent||'&mdash;')+'</td>'+
+          '<td><span class="tag">'+esc(s.model||'&mdash;')+'</span></td>'+
+          '<td style="font-size:15px">'+tagsHtml+'</td>'+
+          '<td><span class="badge '+badgeClass+'">'+(s.status||'&mdash;')+'</span></td>'+
+          '<td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;font-size:15px">'+esc(s.goal||s.task||'&mdash;')+'</td>'+
+          '<td style="font-size:15px">'+fmtDate(s.start_time)+((!s.duration||s.duration==='0s'||(s.start_time&&s.end_time&&new Date(s.start_time).getTime()===new Date(s.end_time).getTime()))?' <span style="font-size:15px;color:var(--red)" title="Legacy session — timestamps unreliable">\u26a0</span>':'')+'</td>'+
+          '<td>'+(s.duration&&s.duration!=='0s'?s.duration:'&mdash;')+'</td></tr>';
+      }).join('');
+      if(!rev.length) rows='<tr><td colspan="8" class="empty">No sessions</td></tr>';
+      return '<div class="section-title">Sessions <span class="badge">'+ps.sessions.length+'</span></div>'+
+        '<div class="filter-bar-scroll">'+
+        '<input type="text" id="proj-session-search" placeholder="\ud83d\udd0d Search sessions\u2026" oninput="filterProjSessions()" style="flex:1;min-width:120px">'+
+        '<select id="proj-session-status" onchange="filterProjSessions()"><option value="">All statuses</option><option value="done">done</option><option value="running">running</option><option value="failed">failed</option><option value="qa">qa</option></select>'+
+        '<select id="proj-session-sort" onchange="filterProjSessions()"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select>'+
+        '</div>'+
+        '<div class="table-wrap list-scroll" style="max-height:400px" id="proj-sessions-table">'+
+        '<table><thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Tags</th><th>Status</th><th>Task</th><th>Start</th><th>Duration</th></tr></thead>'+
+        '<tbody>'+rows+'</tbody></table></div>';
+    }
+
+    function renderBacklogTab(){
+      const ps=window._projState;
+      if(!ps) return '';
+      const tasks=ps.tasks||[];
+      if(!tasks.length) return '<div class="card" style="text-align:center;padding:20px;color:var(--text-dim)">No backlog tasks</div>';
+      const todo=tasks.filter(t=>t.status==='todo');
+      const done=tasks.filter(t=>t.status==='done'||t.status==='complete');
+      let h='<div class="section-title">Backlog <span class="badge">'+tasks.length+'</span>'+
+        '<button class="btn btn-sm" style="margin-left:8px" onclick="cleanupDoneTasks(\''+esc(name)+'\')">\ud83e\uddf9 Cleanup Done</button></div>'+
+        '<div class="card" style="margin-bottom:8px;font-size:14px;color:var(--text-dim)">'+done.length+'/'+tasks.length+' completed &middot; '+todo.length+' pending</div>'+
+        '<div class="table-wrap list-scroll" style="max-height:500px"><table>'+
+        '<thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+      const sorted=[...tasks].sort((a,b)=>{
+        const pa={p0:0,p1:1,p2:2,p3:3,high:1,medium:2,low:3};
+        return (pa[a.priority]??99)-(pa[b.priority]??99);
+      });
+      for(const t of sorted){
+        const sc=t.status==='done'||t.status==='complete'?'badge-green':t.status==='in_progress'?'badge-yellow':t.status==='blocked'?'badge-red':'badge-yellow';
+        const isDone=t.status==='done'||t.status==='complete';
+        h+='<tr>'+
+          '<td style="font-size:14px">'+esc(t.id)+'</td>'+
+          '<td style="font-size:14px;max-width:250px;overflow:hidden;text-overflow:ellipsis">'+esc(t.title)+'</td>'+
+          '<td><span class="tag" style="font-size:12px">'+esc(t.priority||'&mdash;')+'</span></td>'+
+          '<td><span class="badge '+sc+'" style="font-size:12px">'+esc(t.status)+'</span></td>'+
+          '<td>'+
+          (!isDone?'<button class="btn btn-sm" onclick="completeBacklogTask(\''+esc(name)+'\',\''+esc(t.id)+'\')">\u2714 Complete</button> ':'')+
+          '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteBacklogTask(\''+esc(name)+'\',\''+esc(t.id)+'\')">\u2715</button>'+
+          '</td></tr>';
+      }
+      return h+'</tbody></table></div>';
+    }
+
+    function renderSettingsTab(){
+      const ps=window._projState;
+      if(!ps) return '';
+      const docs=ps.docs||{};
+      const pn=ps.name;
+      const wf=docs.workflow||{};
+      return '<div class="section-title">\u2699\ufe0f Settings</div>'+
+        '<div class="card" style="margin-bottom:12px">'+
+        '<div class="setting-row"><div><div class="s-label">Free-only mode</div><div class="s-desc">Only use free models</div></div>'+
+        '<button class="toggle '+(docs.free_only?'on':'')+'" onclick="toggleProjSetting(\''+esc(name)+'\',\'free_only\','+(!docs.free_only)+')" aria-label="Toggle free-only"></button></div>'+
+        '<div class="setting-row"><div><div class="s-label">Workflow enabled</div><div class="s-desc">Enforce phase workflow</div></div>'+
+        '<button class="toggle '+(wf.enabled?'on':'')+'" onclick="toggleProjSetting(\''+esc(name)+'\',\'workflow_enabled\','+(!wf.enabled)+')" aria-label="Toggle workflow"></button></div>'+
+        '<div class="setting-row"><div><div class="s-label">Include QA</div><div class="s-desc">Require QA review phase</div></div>'+
+        '<button class="toggle '+(wf.include_qa?'on':'')+'" onclick="toggleProjSetting(\''+esc(name)+'\',\'workflow_include_qa\','+(!wf.include_qa)+')" aria-label="Toggle QA"></button></div>'+
+        '<div class="setting-row"><div><div class="s-label">Auto Commit</div><div class="s-desc">Auto-commit on phase advance</div></div>'+
+        '<button class="toggle '+(wf.auto_commit?'on':'')+'" onclick="toggleProjSetting(\''+esc(name)+'\',\'workflow_auto_commit\','+(!wf.auto_commit)+')" aria-label="Toggle auto-commit"></button></div>'+
+        '<div class="setting-row"><div><div class="s-label">QA Retries</div><div class="s-desc">Max QA retry attempts</div></div>'+
+        '<input id="proj-qa-retries" type="number" value="'+(wf.qa_retries||3)+'" min="0" max="10" style="width:60px">'+
+        '<button class="btn btn-sm" onclick="saveQaRetries(\''+esc(name)+'\')">Save</button></div>'+
+        '</div>';
+    }
+
+    function renderRoutingTab(){
+      const ps=window._projState;
+      if(!ps) return '';
+      const docs=ps.docs||{};
+      const routing=docs.model_routing||{};
+      const cats=Object.keys(routing);
+      const pn=ps.name;
+      
+      // Fetch model list for dropdown options - async
+      const modelCache=window._modelCache||[];
+      let allModels=modelCache;
+      // Trigger async fetch if not cached
+      if(!window._modelCacheFetching){
+        window._modelCacheFetching=true;
+        API('/api/models').then(md=>{
+          window._modelCache=(md.models||[]).map(m=>m.id);
+        }).catch(()=>{});
+      }
+      
+      let h='<div class="section-title">\ud83e\udde0 Model Routing</div>'+
+        '<div class="card" style="margin-bottom:12px">';
+      
+      if(!cats.length){
+        h+='<div style="text-align:center;padding:12px;color:var(--text-dim);margin-bottom:8px">No model routing configured</div>';
+      }
+      
+      h+='<div id="routing-edit-rows">';
+      for(const c of cats){
+        const models=routing[c]||[];
+        h+='<div class="setting-row">'+
+          '<div><div class="s-label">'+esc(c)+'</div></div>'+
+          '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">'+
+          '<select class="routing-model-select" multiple style="min-width:200px;max-height:80px;background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:2px 4px;font-size:13px;font-family:var(--font)">'+
+          allModels.map(m=>'<option value="'+esc(m)+'" '+(models.includes(m)?'selected':'')+'>'+esc(m)+'</option>').join('')+
+          '</select>'+
+          '<button class="btn btn-sm" onclick="saveRoutingRow(\''+esc(pn)+'\',\''+esc(c)+'\',this)">\ud83d\udcbe Save</button>'+
+          '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteRoutingCategory(\''+esc(pn)+'\',\''+esc(c)+'\')">\u2715</button>'+
+          '</div></div>';
+      }
+      h+='</div>'+
+        '<div style="display:flex;gap:4px;margin-top:8px;align-items:center">'+
+        '<input id="new-routing-cat" type="text" placeholder="New category name" style="flex:1;background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;font-size:14px">'+
+        '<button class="btn btn-sm btn-primary" onclick="addRoutingCategory(\''+esc(pn)+'\')">+ Add Category</button></div>'+
+        '</div>'+
+        '<div style="margin-top:8px;font-size:13px;color:var(--text-dim)">Hold Ctrl/Cmd to select/deselect multiple models</div>';
+      
+      return h;
+    }
+    function renderProjContent(tab){
+      const renders={sessions:renderSessionsTab,backlog:renderBacklogTab,settings:renderSettingsTab,routing:renderRoutingTab,docs:renderDocsTab};
+      return (renders[tab]||renders.sessions)();
+    }
+
+    window._projRender={renderMetrics,renderTabBar,renderProjContent};
+    window._projTabRenders={sessions:renderSessionsTab,backlog:renderBacklogTab,settings:renderSettingsTab,routing:renderRoutingTab,docs:renderDocsTab};
+
+    main.innerHTML='<button class="btn btn-sm" onclick="activateTab(\'projects\')" style="margin-bottom:10px">\u2190 Back to Projects</button>'+
+      '<div class="section-title">\ud83d\udcc1 '+esc(name)+'</div>'+
+      renderMetrics()+
+      renderTabBar('sessions')+
+      '<div id="proj-tab-content">'+
+      renderProjContent('sessions')+
+      '</div>';
   }catch(e){
-    main.innerHTML=renderProjects(data); // fallback
+    main.innerHTML='<div class="card" style="padding:20px;color:var(--red)">Failed to load project: '+esc(e.message)+'</div>';
     toast('Failed to load project detail: '+e.message,'error');
   }
 }
+
+// ═══ SUB-TAB SWITCHING ═══
+
+
+// ═══ DOCS TAB ═══
+function renderDocsTab(){
+  return '<div class="section-title">\ud83d\udcc4 Project Docs</div>'+
+    '<div class="card" style="padding:0;overflow:hidden">'+
+    '<div style="display:flex;gap:0;border-bottom:1px solid var(--border)">'+
+    '<button class="btn btn-sm doc-tab-btn" style="border-radius:0;flex:1" onclick="showDocTab(\''+esc(name)+'\',\'STATE\')" id="doc-btn-STATE">\ud83d\udcca State</button>'+
+    '<button class="btn btn-sm doc-tab-btn" style="border-radius:0;flex:1" onclick="showDocTab(\''+esc(name)+'\',\'ROADMAP\')" id="doc-btn-ROADMAP">\ud83d\udce4 Roadmap</button>'+
+    '<button class="btn btn-sm doc-tab-btn" style="border-radius:0;flex:1" onclick="showDocTab(\''+esc(name)+'\',\'CONTEXT\')" id="doc-btn-CONTEXT">\ud83d\udcdd Context</button>'+
+    '<button class="btn btn-sm doc-tab-btn" style="border-radius:0;flex:1" onclick="showDocTab(\''+esc(name)+'\',\'NOTES\')" id="doc-btn-NOTES">\ud83d\udccb Notes</button>'+
+    '</div>'+
+    '<div id="doc-content" style="padding:12px;max-height:500px;overflow:auto;font-size:14px;white-space:pre-wrap;font-family:var(--font)"><span style="color:var(--text-dim)">Select a document tab above</span></div>'+
+    '</div>';
+}
+
+// ═══ SHOW DOC TAB ═══
+window.showDocTab=async function(project,docName){
+  // Highlight active button
+  document.querySelectorAll('.doc-tab-btn').forEach(b=>b.classList.remove('btn-primary'));
+  const btn=document.getElementById('doc-btn-'+docName);
+  if(btn) btn.classList.add('btn-primary');
+  
+  const content=document.getElementById('doc-content');
+  if(!content){toast('Doc content container not found - is the Docs tab active?','error');return;}
+  content.innerHTML='<span style="color:var(--text-dim)">Loading...</span>';
+  
+  try{
+    const r=await API('/api/project-doc?name='+encodeURIComponent(project)+'&file='+docName+'.md');
+    if(r&&r.content) content.innerHTML=esc(r.content);
+    else content.innerHTML='<span style="color:var(--text-dim)">(empty or not found)</span>';
+  }catch(e){
+    content.innerHTML='<span style="color:var(--red)">Error: '+esc(e.message)+'</span>';
+  }
+};
+
+// ═══ BACKLOG: Show task detail modal ═══
+window.showBacklogTaskDetail=function(project,id){
+  const ps=window._projState;
+  if(!ps||!ps.tasks) return;
+  const task=ps.tasks.find(t=>t.id===id);
+  if(!task){toast('Task '+id+' not found','error');return;}
+  
+  // Format fields
+  const f=function(label,val){
+    if(val===null||val===undefined||val==='') return '';
+    if(Array.isArray(val)&&!val.length) return '';
+    return '<div class=\"setting-row\" style=\"padding:4px 0\"><div><div class=\"s-label\">'+esc(label)+'</div></div><div style=\"font-size:14px;text-align:right\">'+(Array.isArray(val)?val.map(v=>'<span class=\"tag\" style=\"font-size:12px\">'+esc(v)+'</span>').join(' '):esc(String(val)))+'</div></div>';
+  };
+  
+  const detailHtml='<div style=\"position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center\" onclick="closeBacklogDetail()">'+
+    '<div style=\"background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);max-width:600px;width:90%;max-height:80vh;overflow:auto;padding:20px\" onclick="event.stopPropagation()">'+
+    '<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px\">'+
+    '<div class=\"section-title\" style=\"margin:0\">'+esc(task.id)+'</div>'+
+    '<button class=\"btn btn-sm\" onclick="closeBacklogDetail()">\u2715 Close</button></div>'+
+    '<div style=\"font-size:16px;margin-bottom:12px;color:var(--text-bright)\"><strong>'+esc(task.title)+'</strong></div>'+
+    (task.description?'<div style=\"background:var(--bg-alt);padding:10px;border-radius:var(--radius);margin-bottom:12px;font-size:14px;line-height:1.5;white-space:pre-wrap\">'+esc(task.description)+'</div>':'')+
+    f('Status',task.status)+
+    f('Priority',task.priority)+
+    f('Created',task.created)+
+    f('Updated',task.updated)+
+    f('Completed',task.completed)+
+    f('Tags',task.tags)+
+    f('Labels',task.labels)+
+    f('Session Refs',task.session_refs)+
+    '</div></div>';
+  
+  // Create modal container
+  const modal=document.createElement('div');
+  modal.id='backlog-detail-modal';
+  modal.innerHTML=detailHtml;
+  document.body.appendChild(modal);
+};
+
+
+window.closeBacklogDetail=function(){
+  var modal=document.getElementById('backlog-detail-modal');
+  if(modal) modal.remove();
+};
+
+// ═══ ROUTING: Save routing row ═══
+window.saveRoutingRow=async function(project,category,btn){
+  const select=btn.closest('.setting-row').querySelector('.routing-model-select');
+  if(!select){toast('Could not find model select','error');return;}
+  const selected=Array.from(select.selectedOptions).map(o=>o.value);
+  try{
+    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify({project,model_routing:{[category]:selected}}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){
+      toast('Routing for \''+category+'\' saved','success');
+      showProjTab('routing');
+    }else toast('Failed: '+(r&&r.error||'unknown'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ ROUTING: Add category ═══
+window.addRoutingCategory=async function(project){
+  const inp=document.getElementById('new-routing-cat');
+  const cat=inp&&inp.value.trim();
+  if(!cat){toast('Enter a category name','error');return;}
+  try{
+    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify({project,model_routing:{[cat]:[]}}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){
+      toast('Category \''+cat+'\' added','success');
+      inp.value='';
+      showProjTab('routing');
+    }else toast('Failed: '+(r&&r.error||'unknown'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ ROUTING: Delete category ═══
+window.deleteRoutingCategory=async function(project,category){
+  if(!confirm('Delete routing category \''+category+'\'?')) return;
+  try{
+    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify({project,model_routing:{[category]:null}}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){
+      toast('Category \''+category+'\' deleted','success');
+      showProjTab('routing');
+    }else toast('Failed: '+(r&&r.error||'unknown'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+window.showProjTab=async function(tab){
+  const ps=window._projState;
+  if(!ps) return;
+  const oldTab=ps.tab;
+  ps.tab=tab;
+  const content=document.getElementById('proj-tab-content');
+  if(!content) return;
+  
+  // Re-fetch data for data-dependent tabs
+  if(tab!=='sessions'&&tab!=='docs'){
+    try{
+      const [state,backlog]=await Promise.allSettled([
+        API('/api/project-state?name='+encodeURIComponent(ps.name)),
+        API('/api/project-backlog?project='+encodeURIComponent(ps.name)),
+      ]);
+      if(state.status==='fulfilled'&&state.value.config){
+        const st=state.value;
+        const bl=backlog.status==='fulfilled'?backlog.value:{tasks:[]};
+        ps.docs=st.config||{};
+        ps.st=st;
+        ps.sessions=st.sessions||ps.sessions;
+        ps.tasks=bl.tasks||ps.tasks;
+      }
+    }catch(e){}
+  }
+  
+  const renders=window._projTabRenders;
+  if(renders&&renders[tab]){
+    const result=renders[tab]();
+    // Handle async render functions (routing tab returns promise)
+    if(result&&typeof result.then==='function'){
+      content.innerHTML='<div style="text-align:center;padding:20px"><span class="spinner"></span></div>';
+      const resolved=await result;
+      content.innerHTML=resolved;
+    }else{
+      content.innerHTML=result;
+    }
+  }
+  // Update tab bar active state
+  const container=document.getElementById('main-content');
+  if(container){
+    const bar=container.querySelector('.filter-bar-scroll');
+    if(bar){
+      bar.querySelectorAll('.btn').forEach(b=>{
+        const labels={sessions:'Sessions',backlog:'Backlog',settings:'Settings',routing:'Routing',docs:'Docs'};const isActive=b.textContent.includes(labels[tab]||'');
+        b.classList.toggle('btn-primary',isActive);
+      });
+    }
+  }
+};
+
+// ═══ BACKLOG: Complete task ═══
+window.completeBacklogTask=async function(project,id){
+  try{
+    const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'done'}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){toast('Task '+id+' completed','success');showProjTab('backlog');}
+    else toast('Failed: '+(r&&r.error||'unknown error'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ BACKLOG: Delete task ═══
+window.deleteBacklogTask=async function(project,id){
+  if(!confirm('Delete task '+id+'?')) return;
+  try{
+    const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'deleted'}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){toast('Task '+id+' deleted','success');showProjTab('backlog');}
+    else toast('Failed: '+(r&&r.error||'unknown error'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ BACKLOG: Cleanup done/completed/decomposed ═══
+window.cleanupDoneTasks=async function(project){
+  if(!confirm('Delete all done/complete/decomposed tasks?')) return;
+  try{
+    const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,status:'cleanup_done'}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){toast('Cleaned up '+r.count+' tasks','success');showProjTab('backlog');}
+    else toast('Failed: '+(r&&r.error||'unknown error'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ SETTINGS: Toggle project setting ═══
+window.toggleProjSetting=async function(project,key,value){
+  try{
+    const body={project};
+    if(key==='free_only') body.free_only=value;
+    else if(key==='workflow_enabled') body.workflow={enabled:value};
+    else if(key==='workflow_include_qa') body.workflow={include_qa:value};
+    else if(key==='workflow_auto_commit') body.workflow={auto_commit:value};
+    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok){toast(key+' updated','success');showProjTab('settings');}
+    else toast('Failed: '+(r&&r.error||'unknown error'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
+// ═══ SETTINGS: Save QA retries ═══
+window.saveQaRetries=async function(project){
+  const inp=document.getElementById('proj-qa-retries');
+  const val=parseInt(inp&&inp.value)||3;
+  try{
+    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify({project,workflow:{qa_retries:val}}),headers:{'Content-Type':'application/json'}});
+    if(r&&r.ok) toast('QA retries saved','success');
+    else toast('Failed: '+(r&&r.error||'unknown error'),'error');
+  }catch(e){toast('Error: '+e.message,'error');}
+};
+
 
 /* ═══════════════════════════════════════════════════════════
    CONFIG TOGGLES & QUICK ACTIONS
@@ -1598,12 +1942,12 @@ async function toggleConfig(key){
     const cfg=await API('/api/config');
     let body={};
     if(key==='free_only_mode')body={free_only_mode:!cfg.free_only_mode};
-    else if(key==='safeguards_enabled')body={safeguards:{...cfg.safeguards,enabled:!cfg.safeguards?.enabled}};
-    else if(key==='auto_recover')body={safeguards:{...cfg.safeguards,auto_recover:!cfg.safeguards?.auto_recover}};
+    else if(key==='safeguards_enabled')body={safeguards:{...cfg.safeguards||{},enabled:!cfg.safeguards?.enabled}};
+    else if(key==='auto_recover')body={safeguards:{...cfg.safeguards||{},auto_recover:!cfg.safeguards?.auto_recover}};
     await API('/api/config',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});
     toast('Config updated','success');
     refreshTab('settings');
-  }catch(e){toast('Failed to update config','error')}
+  }catch(e){toast('Failed to update config: '+e.message,'error')}
 }
 
 async function quickAction(action){

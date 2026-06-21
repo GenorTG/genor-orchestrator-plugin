@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # resume-session.sh — Resume work from a previous session state file
 # Usage: bash scripts/resume-session.sh <session-id>

@@ -1,4 +1,8 @@
-# Plugin-Enforced Workflow Engine — Design Document
+# ⛔ SUPERSEDED — Plugin-Enforced Workflow Engine — Design Document
+
+> **Status:** SUPERSEDED — The workflow engine is now fully implemented and maintained in the plugin source code at `src/index.ts`.
+> This design document is kept for historical reference only. The current implementation may have diverged from this design.
+> **See:** [`AUDIT.md`](./AUDIT.md) for current state, `src/index.ts` for implementation.
 
 > **Date:** 2026-06-15
 > **Status:** Draft

@@ -49,7 +49,7 @@
 | **Status** | ✅ Active |
 | **Files** | `dashboard/index.html` (1428 lines), `src/dashboard-handler.ts` |
 
-**What it does:** Complete single-file SPA dashboard with 9-tab left sidebar navigation. Features StateManager reactive state, lazy panel rendering, toast notifications, and accessible ARIA roles. Replaced old top-tab-bar layout (was 3506 lines).
+**What it does:** Complete single-file SPA dashboard with 7-tab left sidebar navigation (Dashboard, Projects, Agents, Models, Logs, Settings, Safeguards). Features StateManager reactive state, lazy panel rendering, toast notifications, and accessible ARIA roles. Replaced old top-tab-bar layout (was 3506 lines).
 
 **Tabs:**
 | # | Tab | Purpose |
@@ -261,7 +261,7 @@
 | **Route** | `/orchestrator` via `api.registerHttpRoute(...)` |
 | **Handler** | `src/dashboard-handler.ts` |
 
-**What it does:** Single-file SPA served directly by OpenClaw at the `/orchestrator` gateway route. Expanded from 6 tabs (v0.6.0) to 9 tabs (v0.8.0). Uses StateManager reactive state, Tailwind CSS. No separate server or PM2 bridge.
+**What it does:** Single-file SPA served directly by OpenClaw at the `/orchestrator` gateway route. Expanded from 6 tabs (v0.6.0) to 9 tabs (v0.8.0), later consolidated to 7 tabs (v0.9.0, Chat Console and Sessions moved to OpenClaw WebUI). Uses StateManager reactive state, Tailwind CSS. No separate server or PM2 bridge.
 
 ---
 

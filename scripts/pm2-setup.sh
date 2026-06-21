@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/bin/bash
 # pm2-setup.sh — Configure PM2 for the Orchestration Dashboard
 # Usage: bash pm2-setup.sh [--start] [--stop] [--status] [--restart]

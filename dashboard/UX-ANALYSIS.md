@@ -1,3 +1,4 @@
+# ⛔ SUPERSEDED — Dashboard redesign completed in v0.8.0. This analysis doc kept for historical reference.
 # GenorBoard UX Analysis & Design Rationale
 
 ## Current State Audit

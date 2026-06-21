@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 
 import { createDashboardHandler } from "./dashboard-handler.js";
 import { getDataDir } from "./shared.js";
-
-// ═══════════════════════════════════════════════════════════════
+import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, updateProjectConfig, listSessions, getAllSessions, addSession, updateSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, deleteBacklogTask, deleteBacklogTasksByStatus, listModels, getModel, upsertModel, updateModel, countModels, getLiveAgents, setLiveAgents, getLiveSessions, setLiveSessions, getPendingRegistrations, addPendingRegistration, removePendingRegistration, getControlResults, addControlResult, getLogs as getDbLogs, addLog, addStateEvent, getStateEvents,
+  addVerificationRun, getVerificationRun, updateVerificationRun, listVerificationRuns,
+  VerificationRun, getDb } from "./db.js";
 //  PLUGIN ROOT — all paths resolve from here (no skill dir dependency!)
 // ═══════════════════════════════════════════════════════════════
 const __filename = fileURLToPath(import.meta.url);
@@ -38,16 +39,16 @@ const PLUGIN_ROOT = path.resolve(__dirname, "..");
 //  200-202 SESSION TRACKER — SessionTracker class
 //  202-275 SessionTracker methods
 //  277-279 LIVE AGENTS FILE
-//  283-338 writeLiveAgents() — writes live-agents.json + state.json
+//  283-338 queueLiveAgents() / flushLiveAgents() — writes live-agents.json + state.json
 //  340-342 PROJECT HELPERS
 //  344-443 getProjectLocation / buildProjectToc / syncProjectToOrchestrator
-//  392-406 normalizeSessionsJson
+
 //  409-433 generateRecoveryDoc
 //  435-443 readRecentSessions
 //  445-447 BACKGROUND MAINTENANCE — MaintenanceService class
 //  449-504 MaintenanceService.start() / tick() / stop()
 //  506-508 MODEL / DASHBOARD HELPERS
-//  510-539 isPaid / parseSessionLog / parsePriceLog / projDir
+//  510-539 isPaid / projDir
 //  541-543 TOOL LOGIC (pure functions behind each tool)
 //  545-793 getStatus / getConfig / filterModelsForProject / getModels
 //  633-658 checkModels / autoPopulate / logSession / logDecision
@@ -56,7 +57,7 @@ const PLUGIN_ROOT = path.resolve(__dirname, "..");
 //  738-746 getLogs — query orchestrator logs
 //  748-793 setContext / clearContextFn / syncProject / getProjectDocsFn
 //  795-797 PLUGIN ENTRY
-//  801-808 Constants: TOOL_NAMES (13 tools), PLUGIN_ID
+//  801-808 Constants: PLUGIN_ID
 //  810-822 definePluginEntry({...}) + register() — init
 //  824-838 Cron scheduling (nightly auto-populate 3 AM)
 //  840-842   LOGGER init
@@ -445,40 +446,148 @@ class WorkflowTracker {
   }
 }
 
+// ── PER-SESSION STATE ──
+// Each session gets its own state object to prevent cross-session pollution.
+// Scalar fields are exposed as getter/setter pairs on SessionTracker for
+// backward compatibility with the 250+ external references (e.g. sessionTracker.currentProject).
+
+interface SessionState {
+  currentProject: string | null;
+  currentTask: string | null;
+  currentModel: string | null;
+  currentModelProvider: string | null;
+  currentModelTier: number;
+  currentAgent: string;
+  sessionStartTimestamp: number;
+  sessionKey: string | null;
+  subagentDepth: number;
+  currentAction: string | null;
+  currentFile: string | null;
+  agentStatus: string;
+  touchedFiles: string[];
+  actionHistory: ActionEvent[];
+  tokenUsage: { input: number; output: number; total: number };
+  lastError: string | null;
+  lastActivityTimestamp: number;
+  errorCount: number;
+  loggedTaskCompletion: boolean;
+  qaStatus: "none" | "pending" | "approved" | "rejected";
+  qaFindings: Array<{ finding: string; timestamp: string }>;
+  qaApprovedAt: string | null;
+  qaRejectedAt: string | null;
+  qaRejectReason: string | null;
+  qaHistory: Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }>;
+  handoffGenerated: boolean;
+  handoffPath: string | null;
+  workflow: WorkflowTracker;
+}
+
+function newSessionState(): SessionState {
+  return {
+    currentProject: null,
+    currentTask: null,
+    currentModel: null,
+    currentModelProvider: null,
+    currentModelTier: 0,
+    currentAgent: "Amy",
+    sessionStartTimestamp: Date.now(),
+    sessionKey: null,
+    subagentDepth: 0,
+    currentAction: null,
+    currentFile: null,
+    agentStatus: "idle",
+    touchedFiles: [],
+    actionHistory: [],
+    tokenUsage: { input: 0, output: 0, total: 0 },
+    lastError: null,
+    lastActivityTimestamp: Date.now(),
+    errorCount: 0,
+    loggedTaskCompletion: false,
+    qaStatus: "none",
+    qaFindings: [],
+    qaApprovedAt: null,
+    qaRejectedAt: null,
+    qaRejectReason: null,
+    qaHistory: [],
+    handoffGenerated: false,
+    handoffPath: null,
+    workflow: new WorkflowTracker(),
+  };
+}
+
 class SessionTracker {
-  currentProject: string | null = null;
-  currentTask: string | null = null;
-  currentModel: string | null = null;
-  currentModelProvider: string | null = null;
-  currentModelTier: number = 0;
-  currentAgent: string = "Amy";
-  sessionStartTimestamp: number = Date.now();
-  sessionKey: string | null = null;
-  subagentDepth: number = 0;
-  currentAction: string | null = null;
-  currentFile: string | null = null;
-  agentStatus: string = "idle";
-  touchedFiles: string[] = [];
-  actionHistory: ActionEvent[] = [];
-  tokenUsage: { input: number; output: number; total: number } = { input: 0, output: 0, total: 0 };
-  lastError: string | null = null;
-  lastActivityTimestamp: number = Date.now();
-  errorCount: number = 0;
-  loggedTaskCompletion: boolean = false;
-  // ── QA GATE TRACKING ────────────────────────────────────────
-  // When workflow.include_qa is enabled, advancing from work→log
-  // requires QA approval. The gate is enforced in orchestrator_advance_phase.
-  qaStatus: "none" | "pending" | "approved" | "rejected" = "none";
-  qaFindings: Array<{ finding: string; timestamp: string }> = [];
-  qaApprovedAt: string | null = null;
-  qaRejectedAt: string | null = null;
-  qaRejectReason: string | null = null;
-  qaHistory: Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }> = [];
-  // ── HANDOFF DOC TRACKING ─────────────────────────────────────
-  // Required before finishing a task. Generated by orchestrator_generate_handoff.
-  handoffGenerated: boolean = false;
-  handoffPath: string | null = null;
-  workflow: WorkflowTracker = new WorkflowTracker();
+  // Per-session state map — keyed by sessionKey
+  private _states: Map<string, SessionState> = new Map();
+  // Fallback for operations before a session key is assigned
+  private _fallback: SessionState = newSessionState();
+  // Active session key — stored separately to avoid circular getter/setter dependency
+  private _activeSessionKey: string | null = null;
+
+  /** Resolve per-session state for the current active session key. */
+  private get _s(): SessionState {
+    if (this._activeSessionKey !== null && this._states.has(this._activeSessionKey)) {
+      return this._states.get(this._activeSessionKey)!;
+    }
+    return this._fallback;
+  }
+
+  // ── Per-session scalar field delegates ──
+  get currentProject(): string | null { return this._s.currentProject; }
+  set currentProject(v: string | null) { this._s.currentProject = v; }
+  get currentTask(): string | null { return this._s.currentTask; }
+  set currentTask(v: string | null) { this._s.currentTask = v; }
+  get currentModel(): string | null { return this._s.currentModel; }
+  set currentModel(v: string | null) { this._s.currentModel = v; }
+  get currentModelProvider(): string | null { return this._s.currentModelProvider; }
+  set currentModelProvider(v: string | null) { this._s.currentModelProvider = v; }
+  get currentModelTier(): number { return this._s.currentModelTier; }
+  set currentModelTier(v: number) { this._s.currentModelTier = v; }
+  get currentAgent(): string { return this._s.currentAgent; }
+  set currentAgent(v: string) { this._s.currentAgent = v; }
+  get sessionStartTimestamp(): number { return this._s.sessionStartTimestamp; }
+  set sessionStartTimestamp(v: number) { this._s.sessionStartTimestamp = v; }
+  get sessionKey(): string | null { return this._activeSessionKey; }
+  set sessionKey(v: string | null) { this._activeSessionKey = v; this._fallback.sessionKey = v; }
+  get subagentDepth(): number { return this._s.subagentDepth; }
+  set subagentDepth(v: number) { this._s.subagentDepth = v; }
+  get currentAction(): string | null { return this._s.currentAction; }
+  set currentAction(v: string | null) { this._s.currentAction = v; }
+  get currentFile(): string | null { return this._s.currentFile; }
+  set currentFile(v: string | null) { this._s.currentFile = v; }
+  get agentStatus(): string { return this._s.agentStatus; }
+  set agentStatus(v: string) { this._s.agentStatus = v; }
+  get touchedFiles(): string[] { return this._s.touchedFiles; }
+  set touchedFiles(v: string[]) { this._s.touchedFiles = v; }
+  get actionHistory(): ActionEvent[] { return this._s.actionHistory; }
+  set actionHistory(v: ActionEvent[]) { this._s.actionHistory = v; }
+  get tokenUsage(): { input: number; output: number; total: number } { return this._s.tokenUsage; }
+  set tokenUsage(v: { input: number; output: number; total: number }) { this._s.tokenUsage = v; }
+  get lastError(): string | null { return this._s.lastError; }
+  set lastError(v: string | null) { this._s.lastError = v; }
+  get lastActivityTimestamp(): number { return this._s.lastActivityTimestamp; }
+  set lastActivityTimestamp(v: number) { this._s.lastActivityTimestamp = v; }
+  get errorCount(): number { return this._s.errorCount; }
+  set errorCount(v: number) { this._s.errorCount = v; }
+  get loggedTaskCompletion(): boolean { return this._s.loggedTaskCompletion; }
+  set loggedTaskCompletion(v: boolean) { this._s.loggedTaskCompletion = v; }
+  get qaStatus(): "none" | "pending" | "approved" | "rejected" { return this._s.qaStatus; }
+  set qaStatus(v: "none" | "pending" | "approved" | "rejected") { this._s.qaStatus = v; }
+  get qaFindings(): Array<{ finding: string; timestamp: string }> { return this._s.qaFindings; }
+  set qaFindings(v: Array<{ finding: string; timestamp: string }>) { this._s.qaFindings = v; }
+  get qaApprovedAt(): string | null { return this._s.qaApprovedAt; }
+  set qaApprovedAt(v: string | null) { this._s.qaApprovedAt = v; }
+  get qaRejectedAt(): string | null { return this._s.qaRejectedAt; }
+  set qaRejectedAt(v: string | null) { this._s.qaRejectedAt = v; }
+  get qaRejectReason(): string | null { return this._s.qaRejectReason; }
+  set qaRejectReason(v: string | null) { this._s.qaRejectReason = v; }
+  get qaHistory(): Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }> { return this._s.qaHistory; }
+  set qaHistory(v: Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }>) { this._s.qaHistory = v; }
+  get handoffGenerated(): boolean { return this._s.handoffGenerated; }
+  set handoffGenerated(v: boolean) { this._s.handoffGenerated = v; }
+  get handoffPath(): string | null { return this._s.handoffPath; }
+  set handoffPath(v: string | null) { this._s.handoffPath = v; }
+  get workflow(): WorkflowTracker { return this._s.workflow; }
+  set workflow(v: WorkflowTracker) { this._s.workflow = v; }
   // Per-session project contexts — keyed by sessionKey.
   // A session only gets project context injected if it explicitly
   // registered via orchestrator_set_context. This prevents project
@@ -600,30 +709,14 @@ class SessionTracker {
   }
 
   start(key: string, reason: string): void {
-    this.sessionKey = key;
-    this.sessionStartTimestamp = Date.now();
-    this.subagentDepth = 0;
-    this.currentAction = null;
-    this.currentFile = null;
-    this.touchedFiles = [];
-    this.actionHistory = [];
-    this.agentStatus = "running";
-    this.lastError = null;
-    this.errorCount = 0;
-    this.qaStatus = "none";
-    this.qaFindings = [];
-    this.qaApprovedAt = null;
-    this.handoffGenerated = false;
-    this.handoffPath = null;
-    this.lastActivityTimestamp = Date.now();
-    // Always reset project context on session start — never carry over
-    // stale project/task/model from a previous session.
-    this.currentProject = null;
-    this.currentTask = null;
-    this.currentModel = null;
-    this.currentModelProvider = null;
-    this.currentModelTier = 0;
-    this.tokenUsage = { input: 0, output: 0, total: 0 };
+    // Create a fresh per-session state for this session key
+    const state = newSessionState();
+    state.sessionKey = key;
+    state.agentStatus = "running";
+    state.lastActivityTimestamp = Date.now();
+    this._states.set(key, state);
+    this._activeSessionKey = key;
+    this._fallback.sessionKey = key;
   }
 
   end(): { project: string; task: string; duration: string; model: string } | null {
@@ -631,12 +724,17 @@ class SessionTracker {
     const ms = Date.now() - this.sessionStartTimestamp;
     const dur = ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}min`;
     this.agentStatus = "done";
-    return {
+    const result = {
       project: this.currentProject,
       task: this.currentTask || "auto-task",
       duration: dur,
       model: this.currentModel || "auto",
     };
+    // Clean up per-session state — no longer needed
+    if (this._activeSessionKey) this._states.delete(this._activeSessionKey);
+    this._activeSessionKey = null;
+    this._fallback = newSessionState();
+    return result;
   }
 
   private formatElapsed(ms: number): string {
@@ -856,11 +954,6 @@ class SessionTracker {
 
 const LIVE_AGENTS_FILE = "live-agents.json";
 
-function writeLiveAgents(reason: string, tracker: SessionTracker, logger?: OrchestratorLogger): void {
-  // Debounced: queues write to disk, coalesces rapid sequential calls
-  queueLiveAgents(reason, tracker);
-}
-
 // Debounce: coalesce rapid sequential writes into one disk write every 500ms
 let _liveAgentsTimer: ReturnType<typeof setTimeout> | null = null;
 let _pendingData: { agents: any[]; agent_count: number; active_count: number; last_updated: string; reason: string } | null = null;
@@ -868,20 +961,28 @@ let _pendingState: { project: string | null; task: string | null; model: string 
 
 function flushLiveAgents(): void {
   _liveAgentsTimer = null;
+  // Atomic swap: grab pending data and reset in one operation
+  const data = _pendingData;
+  const state = _pendingState;
+  _pendingData = null;
+  _pendingState = null;
+  if (!data && !state) return;
   try {
     const dataDir = getDataDir();
-    if (_pendingData) {
-      const d = _pendingData;
-      _pendingData = null;
-      writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), d);
+    if (data) {
+      writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), data);
+      try { setLiveAgents(data.agents || []); } catch { console.error("[orchestrator] flushLiveAgents: setLiveAgents failed"); }
     }
-    if (_pendingState) {
-      const s = _pendingState;
-      _pendingState = null;
-      writeJSON(path.join(dataDir, "state.json"), s);
+    if (state) {
+      writeJSON(path.join(dataDir, "state.json"), state);
+      try { setGlobalConfig("state", state); } catch { console.error("[orchestrator] flushLiveAgents: setGlobalConfig failed"); }
     }
   } catch (e: any) {
-    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgents: ${e.message}\n`, 'utf-8'); } catch {}
+    try { console.error("[orchestrator] flushLiveAgents:", e.message); } catch { /* final fallback */ }
+  }
+  // If more data was queued during flush, schedule another pass
+  if (_pendingData || _pendingState) {
+    _liveAgentsTimer = setTimeout(flushLiveAgents, 500);
   }
 }
 
@@ -946,22 +1047,23 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
   // Only track registered sessions
   if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
   if (_liveAgentsTimer) { clearTimeout(_liveAgentsTimer); _liveAgentsTimer = null; }
-  _pendingData = null;
-  _pendingState = null;
+  // Don't clear _pendingData/_pendingState — they may have pending writes from concurrent queueLiveAgents() calls
   try {
     const dataDir = getDataDir();
     const main = tracker.toLiveState(reason);
     const agents: any[] = [];
     if (main.project || main.agent) agents.push(main);
-    writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), {
+    const liveData = {
       agents,
       agent_count: agents.length,
       active_count: agents.filter(a => a.project).length,
       last_updated: new Date().toISOString(),
       reason,
-    });
+    };
+    writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), liveData);
+    try { setLiveAgents(agents); } catch (e: any) { console.error("[orchestrator] flushLiveAgentsNow: setLiveAgents failed:", e.message); }
     if (tracker.currentProject) {
-      writeJSON(path.join(dataDir, "state.json"), {
+      const stateData = {
         project: tracker.currentProject,
         task: tracker.currentTask,
         model: tracker.currentModel,
@@ -969,10 +1071,12 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
         timestamp: new Date().toISOString(),
         subagent_depth: tracker.subagentDepth,
         action: tracker.currentAction,
-      });
+      };
+      writeJSON(path.join(dataDir, "state.json"), stateData);
+      try { setGlobalConfig("state", stateData); } catch (e: any) { console.error("[orchestrator] flushLiveAgentsNow: state failed:", e.message); }
     }
   } catch (e: any) {
-    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgentsNow(${reason}): ${e.message}\n`, 'utf-8'); } catch {}
+    try { console.error("[orchestrator] flushLiveAgentsNow:", e.message); } catch { /* final fallback */ }
   }
 }
 
@@ -992,8 +1096,10 @@ function agentDefaultSessionKey(): string {
 // ═══════════════════════════════════════════════════════════════
 
 function getProjectLocation(project: string, dataDir: string): string | null {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  return cfg.projects?.[project]?.location || null;
+  try {
+    const pc = getProjectConfig(project);
+    return pc?.location || null;
+  } catch { return null; }
 }
 
 function buildProjectToc(location: string): string[] {
@@ -1025,7 +1131,7 @@ function syncProjectToOrchestrator(project: string, dataDir: string, logger: Orc
   try {
     const pkg = readJSON(path.join(loc, "package.json"));
     if (pkg) context += `\n## Package\n- Name: ${pkg.name || "N/A"}\n- Version: ${pkg.version || "N/A"}\n`;
-  } catch { /* */ }
+  } catch (e: any) { logger.debug("sync", "Package.json read failed:", e.message); }
   const tocDisplay = toc.filter(f => !f.includes("node_modules") && !f.includes("/."));
   context += `\n## File Index (${tocDisplay.length} files)\n\n${tocDisplay.map(f => `- ${path.relative(loc, f)}`).join("\n")}\n`;
   fs.writeFileSync(path.join(pd, "CONTEXT.md"), context, "utf-8");
@@ -1039,42 +1145,20 @@ function syncProjectToOrchestrator(project: string, dataDir: string, logger: Orc
   logger.info("sync", `Synced ${project} from ${loc}: ${toc.length} files`);
 }
 
-function normalizeSessionsJson(project: string, dataDir: string): void {
-  const p = getProjDir(project, dataDir);
-  if (!p) return;
-  const sf = path.join(p, "sessions.json");
-  if (!fs.existsSync(sf)) return;
-  try {
-    const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-    let sessions: any[] = Array.isArray(raw) ? raw : (raw.sessions || []);
-    let changed = false;
-    sessions = sessions.map(s => {
-      const ns = { ...s };
-      const now = new Date().toISOString();
-      // Phase 4b: Per-entry schema version tracking
-      if (!ns.schema_version) { ns.schema_version = 2; changed = true; }
-      // Legacy: timestamp → date
-      if (ns.timestamp && !ns.date) { ns.date = ns.timestamp.split("T")[0]; changed = true; }
-      // Phase 3d: Ensure all timestamp fields
-      if (!ns.start_time) { ns.start_time = ns.timestamp || ns.logged_at || now; changed = true; }
-      if (!ns.started_at) { ns.started_at = ns.start_time; changed = true; }
-      if (!ns.ended_at && ns.end_time) { ns.ended_at = ns.end_time; changed = true; }
-      if (!ns.updated_at) { ns.updated_at = ns.logged_at || now; changed = true; }
-      if (!ns.logged_at) { ns.logged_at = now; changed = true; }
-      return ns;
-    });
-    if (changed) writeJSON(sf, { schema_version: 2, sessions });
-  } catch { /* */ }
-}
+
 
 function generateRecoveryDoc(project: string, dataDir: string, logger: OrchestratorLogger): void {
   const pd = getProjDir(project, dataDir);
   if (!pd) return; // Skip if project dir doesn't exist (archived/cleaned up)
   const loc = getProjectLocation(project, dataDir);
   const context = readFileContent(path.join(pd, "CONTEXT.md")) || "";
-  const blPath = path.join(pd, "BACKLOG.json");
-  let backlog: ProjectBacklogTask[] = [];
-  if (fs.existsSync(blPath)) { try { const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8")); backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []); } catch { /* */ } }
+  // Read backlog from DB (with JSON fallback for backward compat)
+  let backlog: any[] = [];
+  try { backlog = listBacklogTasks(project).map(t => ({ title: t.title, priority: t.priority, status: t.status, created: t.created_ts ? new Date(t.created_ts * 1000).toISOString() : "?" })); } catch (e: any) { logger.warn("context", "Backlog fetch failed:", e.message); }
+  if (backlog.length === 0) {
+    const blPath = path.join(pd, "BACKLOG.json");
+    if (fs.existsSync(blPath)) { try { const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8")); backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []); } catch (e: any) { logger.warn("context", "JSON backlog fallback failed:", e.message); } }
+  }
 
   const openTasks = backlog.filter(t => t.status === "todo" || t.status === "in_progress");
   const sessions = readRecentSessions(project, dataDir, 10);
@@ -1095,51 +1179,56 @@ function generateRecoveryDoc(project: string, dataDir: string, logger: Orchestra
 }
 
 function readRecentSessions(project: string, dataDir: string, n: number): any[] {
-  const p = getProjDir(project, dataDir);
-  if (!p) return [];
-  const sf = path.join(p, "sessions.json");
-  if (!fs.existsSync(sf)) return [];
   try {
-    const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-    const sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
-    return sessions.slice(-n);
+    const sessions = listSessions(project, n);
+    return sessions.map(s => ({
+      date: s.logged_at?.split("T")[0] || "",
+      task: s.task,
+      model: s.model,
+      agent: s.agent,
+      status: s.status,
+      duration: s.duration,
+      id: s.id,
+      session_key: s.session_key,
+    }));
   } catch { return []; }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  STATE EVENT LOG — append-only JSONL for project state
-//  Multiple sessions can write concurrently (no overwrites).
+//  STATE EVENT LOG — now stored in SQLite (state_events table).
+//  Keeps the same function signatures for backward compatibility.
 //  STATE.md is generated FROM this log, not LLM-written.
 // ═══════════════════════════════════════════════════════════════
 
-function stateEventLogPath(project: string, dataDir: string): string {
-  return path.join(projDir(project, dataDir), "state-events.jsonl");
-}
-
 function writeStateEvent(project: string, dataDir: string, event: Record<string, any>): void {
   try {
-    const p = stateEventLogPath(project, dataDir);
-    const dir = path.dirname(p);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const line = JSON.stringify({
+    addStateEvent(project, event.type || "event", {
       ...event,
       _ts: new Date().toISOString(),
       _id: crypto.randomUUID(),
-    }) + "\n";
-    // Append-only — safe for concurrent writers (atomic per write)
-    fs.appendFileSync(p, line, "utf-8");
-  } catch { /* best-effort */ }
+    });
+  } catch { /* best-effort — state log append */ }
 }
 
 function readStateEvents(project: string, dataDir: string): Record<string, any>[] {
   try {
-    const p = stateEventLogPath(project, dataDir);
-    if (!fs.existsSync(p)) return [];
-    const raw = fs.readFileSync(p, "utf-8");
-    return raw.split("\n").filter(Boolean).map(line => {
-      try { return JSON.parse(line); } catch { return null; }
-    }).filter(Boolean);
-  } catch { return []; }
+    // Prefer DB first, fall back to JSONL
+    const dbEvents = getStateEvents(project, 10000);
+    if (dbEvents.length > 0) {
+      return dbEvents.map((row: any) => {
+        let eventData: any = {};
+        if (typeof row.data === 'object') eventData = row.data;
+        else if (typeof row.data === 'string') { try { eventData = JSON.parse(row.data); } catch {} }
+        return {
+          ...eventData,
+          type: row.type,
+          _ts: row.ts ? new Date(row.ts * 1000).toISOString() : null,
+          _id: row.id,
+        };
+      });
+    }
+  } catch { /* fall through */ }
+  return [];
 }
 
 /**
@@ -1215,8 +1304,8 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
       if (!toolCount) {
         try {
           const content = fs.readFileSync(path.join(srcDir, "src", "index.ts"), "utf-8");
-          toolCount = countRegisteredTools(content);
-        } catch { /* */ }
+          toolCount = _toolCount;
+        } catch (e: any) { logger.debug("state", "Tool count read failed:", e.message); }
       }
       if (!testCount) {
         try {
@@ -1224,13 +1313,13 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
           if (fs.existsSync(tDir)) {
             testCount = fs.readdirSync(tDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
           }
-        } catch { /* */ }
+        } catch (e: any) { logger.debug("state", "Test count read failed:", e.message); }
       }
       if (!version || version === "0.0.1") {
         try {
           const pkg = JSON.parse(fs.readFileSync(path.join(srcDir, "package.json"), "utf-8"));
           if (pkg.version) version = pkg.version;
-        } catch { /* */ }
+        } catch (e: any) { logger.debug("state", "Version read failed:", e.message); }
       }
     }
 
@@ -1240,7 +1329,7 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
     const lines: string[] = [];
     lines.push(`# STATE: ${project} — v${version}`);
     lines.push("");
-    lines.push("> _Auto-generated from state-events.jsonl — edit events, not STATE.md._");
+    lines.push("> _Auto-generated from state event log — edit events, not STATE.md._");
     lines.push("");
 
     lines.push("## Overview");
@@ -1333,7 +1422,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
       const content = fs.readFileSync(srcPath, "utf-8");
       // Only count actual registerTool calls in the register(api) section
       // (not comment references like "// Each entry matches an api.registerTool")
-      toolCount = countRegisteredTools(content);
+      toolCount = _toolCount;
     }
 
     const testDir = path.join(srcDir, "tests");
@@ -1346,7 +1435,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
         version = pkg.version || "";
-      } catch { /* */ }
+      } catch (e: any) { logger.debug("state", "Snapshot version read failed:", e.message); }
     }
 
     // Write snapshot events only if changed vs latest in log
@@ -1375,7 +1464,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
 
     // Regenerate STATE.md
     generateStateFromEvents(project, dataDir, logger);
-  } catch { /* best-effort */ }
+  } catch (e: any) { logger.warn("state", "State regeneration failed:", e.message); }
 }
 
 /**
@@ -1386,7 +1475,7 @@ function tryFixDocsDrift(project: string | null, dataDir: string, logger: Orches
   try {
     writeStateEvent(project, dataDir, { type: "doc_synced", auto: true });
     snapshotState(project, dataDir, logger);
-  } catch { /* best-effort */ }
+  } catch (e: any) { logger.warn("state", "Doc sync failed:", e.message); }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1427,36 +1516,37 @@ function processSetContext(dataDir: string, params: Record<string, any>, logger:
   const task = params.task as string;
   if (!project) throw new Error("Missing project");
   sessionTracker.setContext(project, task || "");
-  writeLiveAgents("control_set_context", sessionTracker, logger);
+  queueLiveAgents("control_set_context", sessionTracker);
   return { project, task, ok: true };
 }
 
 function processClearContext(dataDir: string, _params: Record<string, any>, logger: OrchestratorLogger): any {
   const prev = sessionTracker.currentProject;
   sessionTracker.clearContext();
-  writeLiveAgents("control_clear_context", sessionTracker, logger);
+  queueLiveAgents("control_clear_context", sessionTracker);
   return { previous_project: prev, ok: true };
 }
 
 function processUpdateRouting(dataDir: string, params: Record<string, any>, logger: OrchestratorLogger): any {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {
-    free_only_mode: false, disabled_models: [], projects: {}
-  };
-  if (typeof params.free_only_mode === "boolean") cfg.free_only_mode = params.free_only_mode;
-  if (Array.isArray(params.disabled_models)) cfg.disabled_models = params.disabled_models;
+  if (typeof params.free_only_mode === "boolean") {
+    setGlobalConfig("free_only_mode", params.free_only_mode);
+  }
+  if (Array.isArray(params.disabled_models)) {
+    setGlobalConfig("disabled_models", params.disabled_models);
+  }
   if (typeof params.project === "string" && params.project_allowlist) {
-    cfg.projects = cfg.projects || {};
-    cfg.projects[params.project] = cfg.projects[params.project] || {};
-    cfg.projects[params.project].model_allowlist = params.project_allowlist;
+    const pc: any = getProjectConfig(params.project) || {};
+    pc.model_allowlist = params.project_allowlist;
+    setProjectConfig(params.project, pc);
   }
   if (typeof params.project === "string" && typeof params.project_free_only === "boolean") {
-    cfg.projects = cfg.projects || {};
-    cfg.projects[params.project] = cfg.projects[params.project] || {};
-    cfg.projects[params.project].free_only = params.project_free_only;
+    const pc: any = getProjectConfig(params.project) || {};
+    pc.free_only = params.project_free_only;
+    setProjectConfig(params.project, pc);
   }
-  writeJSON(path.join(dataDir, "dashboard-config.json"), cfg);
-  logger.info("control", `Routing updated: free_only=${cfg.free_only_mode}`);
-  return { ok: true, config: cfg };
+  const globalCfg = getAllGlobalConfig();
+  logger.info("control", `Routing updated: free_only=${globalCfg.free_only_mode}`);
+  return { ok: true, config: { ...globalCfg, projects: getAllProjectConfigs() } };
 }
 
 function processControlAction(dataDir: string, action: ControlAction, logger: OrchestratorLogger): void {
@@ -1533,16 +1623,13 @@ class MaintenanceService {
       );
       for (const p of projects) {
         try {
-          normalizeSessionsJson(p, this.dataDir);
+
           generateRecoveryDoc(p, this.dataDir, this.logger);
           if (getProjectLocation(p, this.dataDir)) {
             syncProjectToOrchestrator(p, this.dataDir, this.logger);
           }
           // Auto-generate state from event log on every tick
-          const stateLogPath = path.join(projDir(p, this.dataDir), "state-events.jsonl");
-          if (fs.existsSync(stateLogPath)) {
-            generateStateFromEvents(p, this.dataDir, this.logger);
-          }
+          generateStateFromEvents(p, this.dataDir, this.logger);
         } catch (err: any) {
           this.logger.warn("maintenance", `Error processing ${p}: ${err.message}`);
         }
@@ -1585,7 +1672,7 @@ class MaintenanceService {
         } catch (err: any) {
           this.logger.warn("control", `Error processing ${f}: ${err.message}`);
           // Remove malformed actions to avoid re-processing
-          try { fs.unlinkSync(fp); } catch { /* */ }
+          try { fs.unlinkSync(fp); } catch { /* non-critical - action file may already be gone */ }
         }
       }
     } catch (err: any) {
@@ -1595,9 +1682,7 @@ class MaintenanceService {
 
   detectStaleAgents(): void {
     try {
-      const laPath = path.join(this.dataDir, "live-agents.json");
-      if (!fs.existsSync(laPath)) return;
-      const cfg: DashboardConfig = readJSON(path.join(this.dataDir, "dashboard-config.json")) || {};
+      const cfg = getAllGlobalConfig();
       const safeguards = cfg.safeguards || {};
       if (safeguards.enabled === false) return;
 
@@ -1606,8 +1691,10 @@ class MaintenanceService {
       const maxErrors = safeguards.max_errors_before_escalation || 3;
       const now = Date.now();
 
-      const live = JSON.parse(fs.readFileSync(laPath, "utf-8"));
-      const agents = live.agents || [];
+        let agents: any[] = [];
+      try {
+        agents = getLiveAgents();
+      } catch (e: any) { this.logger.debug("maintenance", "Failed to fetch live agents:", e.message); }
       let recoveryNeeded = false;
 
       for (const a of agents) {
@@ -1701,26 +1788,7 @@ function isPaid(m: ModelEntry): boolean {
   return ["subscription", "payg", "pay_per_token"].includes(m.cost?.type || "");
 }
 
-function parseSessionLog(dd: string): any {
-  const c = readFileContent(path.join(dd, "session_log.md"));
-  if (!c) return { sessions: [], count: 0, projects: [] };
-  const sessions: any[] = [];
-  for (const l of c.split("\n")) {
-    const t = l.trim();
-    if (t.startsWith("|") && !t.startsWith("|---") && !t.startsWith("| Date")) {
-      const p = t.split("|").slice(1, -1).map(x => x.trim());
-      if (p.length >= 5) sessions.push({ date: p[0], project: p[1], task: p[2], model: p[3], agent: p[4] || "shell", status: p[5] || "", duration: p[6] || "", qa_done: p[7]?.includes("✓") || false, checked: p[8]?.includes("✓") || false, notes: p[9] || "" });
-    }
-  }
-  return { sessions, count: sessions.length, projects: [...new Set(sessions.map(s => s.project))] };
-}
 
-function parsePriceLog(dd: string): any {
-  const c = readFileContent(path.join(dd, "price_changes.log"));
-  if (!c) return { entries: [], count: 0 };
-  const entries = c.split("\n").filter(l => l.trim() && !l.startsWith("#")).map(l => ({ text: l.trim() }));
-  return { entries, count: entries.length };
-}
 
 function projDir(name: string, dd: string): string {
   const p = path.join(dd, "projects", name);
@@ -1781,13 +1849,15 @@ function validateSessions(dataDir: string, project?: string): {
   const checkProject = (projName: string) => {
     const pd = getProjDir(projName, dataDir);
     if (!pd) return;
-    const sf = path.join(pd, "sessions.json");
-    if (!fs.existsSync(sf)) return;
     let sessions: any[] = [];
     try {
-      const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-      sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
+      sessions = listSessions(projName).map(s => ({
+        ...s,
+        start_time: s.start_ts ? new Date(s.start_ts).toISOString() : s.logged_at,
+        session_key: s.session_key,
+      }));
     } catch { return; }
+    if (!sessions.length) return;
 
     projectsChecked.push(projName);
     const seenIds = new Map<string, number>();
@@ -1893,18 +1963,22 @@ function getBacklogPath(project: string, dataDir: string): string {
   return path.join(projDir(project, dataDir), "BACKLOG.json");
 }
 
-function readBacklog(project: string, dataDir: string): BacklogTask[] {
+function readBacklog(project: string, dataDir: string): any[] {
+  try {
+    return listBacklogTasks(project) as any[];
+  } catch { return []; }
+}
+
+function readBacklogJson(project: string, dataDir: string): any[] {
   const bp = getBacklogPath(project, dataDir);
   if (!fs.existsSync(bp)) return [];
   try {
     const raw = JSON.parse(fs.readFileSync(bp, "utf-8"));
     return Array.isArray(raw) ? raw : (raw.tasks || []);
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-function writeBacklog(project: string, dataDir: string, tasks: BacklogTask[]): void {
+function writeBacklog(project: string, dataDir: string, tasks: any[]): void {
   writeJSON(getBacklogPath(project, dataDir), { tasks });
 }
 
@@ -1915,23 +1989,43 @@ function backlogAdd(project: string, dataDir: string, opts: {
   labels?: string[];
   depends_on?: string[];
 }): { ok: boolean; id?: string; error?: string } {
-  const tasks = readBacklog(project, dataDir);
   const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const task: BacklogTask = {
-    id,
-    title: opts.title,
-    description: opts.description || "",
-    status: "todo",
-    priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2") as any,
-    created: new Date().toISOString(),
-    updated: new Date().toISOString(),
-    assigned_to: null,
-    depends_on: opts.depends_on || [],
-    labels: opts.labels || [],
-    session_key: null,
-  };
-  tasks.push(task);
-  writeBacklog(project, dataDir, tasks);
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    // Insert into DB
+    addBacklogTask({
+      id,
+      project,
+      title: opts.title,
+      description: opts.description || "",
+      priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2"),
+      status: "todo",
+      labels: JSON.stringify(opts.labels || []),
+      depends_on: JSON.stringify(opts.depends_on || []),
+      assigned_to: "",
+      session_refs: "[]",
+      created_ts: now,
+      updated_ts: now,
+    });
+    // Also write to JSON for backward compat (read from file to preserve existing tasks)
+    const tasks = readBacklogJson(project, dataDir);
+    tasks.push({
+      id,
+      title: opts.title,
+      description: opts.description || "",
+      status: "todo",
+      priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2"),
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      assigned_to: null,
+      depends_on: opts.depends_on || [],
+      labels: opts.labels || [],
+      session_key: null,
+    });
+    writeBacklog(project, dataDir, tasks);
+  } catch (e: any) {
+    return { ok: false, error: String(e) };
+  }
   return { ok: true, id };
 }
 
@@ -1939,11 +2033,18 @@ function backlogList(project: string, dataDir: string, opts?: {
   status?: string;
   priority?: string;
   label?: string;
-}): { ok: boolean; tasks: BacklogTask[] } {
+}): { ok: boolean; tasks: any[] } {
   let tasks = readBacklog(project, dataDir);
-  if (opts?.status) tasks = tasks.filter(t => t.status === opts.status);
-  if (opts?.priority) tasks = tasks.filter(t => t.priority === opts.priority);
-  if (opts?.label) tasks = tasks.filter(t => (t.labels || []).includes(opts.label!));
+  // Parse JSON string fields from DB rows for backward compat
+  tasks = tasks.map((t: any) => ({
+    ...t,
+    labels: typeof t.labels === "string" ? JSON.parse(t.labels) : (t.labels || []),
+    depends_on: typeof t.depends_on === "string" ? JSON.parse(t.depends_on) : (t.depends_on || []),
+    session_refs: typeof t.session_refs === "string" ? JSON.parse(t.session_refs) : (t.session_refs || []),
+  }));
+  if (opts?.status) tasks = tasks.filter((t: any) => t.status === opts.status);
+  if (opts?.priority) tasks = tasks.filter((t: any) => t.priority === opts.priority);
+  if (opts?.label) tasks = tasks.filter((t: any) => (t.labels || []).includes(opts.label!));
   return { ok: true, tasks };
 }
 
@@ -1955,18 +2056,30 @@ function backlogUpdate(project: string, dataDir: string, opts: {
   labels?: string[];
   session_key?: string;
 }): { ok: boolean; error?: string } {
-  const tasks = readBacklog(project, dataDir);
-  const idx = tasks.findIndex(t => t.id === opts.id);
-  if (idx === -1) return { ok: false, error: `Task ${opts.id} not found. Use orchestrator_backlog_list to see available tasks.` };
-  const task = tasks[idx];
-  if (opts.status && ["todo","in_progress","done","blocked"].includes(opts.status)) task.status = opts.status as any;
-  if (opts.priority && ["p0","p1","p2","p3"].includes(opts.priority)) task.priority = opts.priority as any;
-  if (opts.assigned_to !== undefined) task.assigned_to = opts.assigned_to || null;
-  if (opts.labels !== undefined) task.labels = opts.labels;
-  if (opts.session_key !== undefined) task.session_key = opts.session_key || null;
-  task.updated = new Date().toISOString();
-  tasks[idx] = task;
-  writeBacklog(project, dataDir, tasks);
+  try {
+    const task = getBacklogTask(opts.id);
+    if (!task) return { ok: false, error: `Task ${opts.id} not found. Use orchestrator_backlog_list to see available tasks.` };
+    const updates: any = {};
+    if (opts.status && ["todo","in_progress","done","blocked"].includes(opts.status)) updates.status = opts.status;
+    if (opts.priority && ["p0","p1","p2","p3"].includes(opts.priority)) updates.priority = opts.priority;
+    if (opts.assigned_to !== undefined) updates.assigned_to = opts.assigned_to || "";
+    if (opts.labels !== undefined) updates.labels = JSON.stringify(opts.labels);
+    if (opts.session_key !== undefined) updates.session_refs = JSON.stringify(opts.session_key ? [opts.session_key] : []);
+    updateBacklogTask(opts.id, updates);
+    // Also update JSON for backward compat
+    const tasks = readBacklogJson(project, dataDir);
+    const idx = tasks.findIndex((t: any) => t.id === opts.id);
+    if (idx >= 0) {
+      if (opts.status) tasks[idx].status = opts.status;
+      if (opts.priority) tasks[idx].priority = opts.priority;
+      if (opts.labels !== undefined) tasks[idx].labels = opts.labels;
+      if (opts.assigned_to !== undefined) tasks[idx].assigned_to = opts.assigned_to;
+      tasks[idx].updated = new Date().toISOString();
+      writeBacklog(project, dataDir, tasks);
+    }
+  } catch (e: any) {
+    return { ok: false, error: String(e) };
+  }
   return { ok: true };
 }
 
@@ -1975,24 +2088,16 @@ function backlogUpdate(project: string, dataDir: string, opts: {
 // ═══════════════════════════════════════════════════════════════
 
 function getStatus(dataDir: string, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const md = readJSON(path.join(dataDir, "models.json"));
-  const models: ModelEntry[] = md?.models || [];
-  const pd = path.join(dataDir, "projects");
-  const projects: string[] = [];
-  if (fs.existsSync(pd)) {
-    for (const e of fs.readdirSync(pd)) {
-      if (e.startsWith(".")) continue; // Skip hidden dirs (.archived)
-      if (fs.statSync(path.join(pd, e)).isDirectory()) projects.push(e);
-    }
-  }
+  const cfg = getAllGlobalConfig();
+  const models = listModels(false);
+  const allProjects = getAllProjectConfigs();
+  const projects = Object.keys(allProjects);
   logger.debug("status", "Status requested");
-  const sl = parseSessionLog(dataDir);
   return {
     total_models: models.length,
-    active_models: models.filter(m => m.status === "active").length,
-    agent_ready_models: models.filter(m => m.agent_ready).length,
-    sessions_logged: sl.count,
+    active_models: models.filter((m: any) => m.status === "active").length,
+    agent_ready_models: models.filter((m: any) => m.agent_ready).length,
+    sessions_logged: getAllSessions().length,
     projects,
     free_only_mode: cfg.free_only_mode || false,
     data_dir: dataDir,
@@ -2000,61 +2105,49 @@ function getStatus(dataDir: string, logger: OrchestratorLogger) {
 }
 
 function getConfig(dataDir: string, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json"));
-  if (!cfg) return { error: "No config found — run orchestrator_auto_populate first", data_dir: dataDir };
-  const models = readJSON(path.join(dataDir, "models.json"))?.models || [];
+  const cfg = getAllGlobalConfig();
+  const models = listModels(false);
+  const allProjects = getAllProjectConfigs();
   const pc: Record<string, number> = {};
   for (const m of models) { const p = m.provider || "unknown"; pc[p] = (pc[p] || 0) + 1; }
   logger.debug("config", "Config requested");
   return {
     free_only_mode: cfg.free_only_mode || false,
     disabled_models: cfg.disabled_models || [],
-    projects: Object.entries(cfg.projects || {}).map(([n, c]) => ({
+    projects: Object.entries(allProjects).map(([n, c]: [string, any]) => ({
       name: n,
       model_allowlist: c.model_allowlist || [],
       free_only: c.free_only || false,
-      whitelist_count: c.model_allowlist?.length || 0,
+      whitelist_count: (c.model_allowlist || []).length,
     })),
     total_models: models.length,
     providers: pc,
-    project_count: Object.keys(cfg.projects || {}).length,
+    project_count: Object.keys(allProjects).length,
   };
 }
 
-function filterModelsForProject(models: ModelEntry[], project: string | undefined, dataDir: string): ModelEntry[] {
-  if (!project) return [...models];
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  let f = [...models];
-  if (cfg.free_only_mode) f = f.filter(m => !isPaid(m));
-  const d = cfg.disabled_models || [];
-  if (d.length) f = f.filter(m => !d.includes(m.id));
-  const pc = cfg.projects?.[project];
-  if (pc) {
-    if (pc.model_allowlist?.length) f = f.filter(m => pc.model_allowlist!.includes(m.id));
-    if (pc.free_only) f = f.filter(m => !isPaid(m));
-  }
-  return f;
+function filterModelsForProject(project: string | undefined, dataDir: string): any[] {
+  return listModels(false, project);
 }
 
 function getModels(dataDir: string, opts: any, logger: OrchestratorLogger) {
-  const md = readJSON(path.join(dataDir, "models.json"));
-  let all: ModelEntry[] = md?.models || [];
-  let f = filterModelsForProject(all, opts.project, dataDir);
+  let all = listModels(false);
+  let f = filterModelsForProject(opts.project, dataDir);
   if (opts.status) {
     const ss = opts.status.split(",").map((s: string) => s.trim().toLowerCase());
-    f = f.filter(m => ss.includes((m.status || "").toLowerCase()));
+    f = f.filter((m: any) => ss.includes((m.status || "").toLowerCase()));
   }
-  if (opts.provider) f = f.filter(m => (m.provider || "").toLowerCase().includes(opts.provider.toLowerCase()));
+  if (opts.provider) f = f.filter((m: any) => (m.provider || "").toLowerCase().includes(opts.provider.toLowerCase()));
   if (opts.search) {
     const q = opts.search.toLowerCase();
-    f = f.filter(m => m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
+    f = f.filter((m: any) => m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
   }
-  if (opts.agent_ready !== undefined) f = f.filter(m => m.agent_ready === opts.agent_ready);
+  if (opts.agent_ready !== undefined) f = f.filter((m: any) => m.agent_ready === opts.agent_ready);
   logger.debug("models", `Listed ${f.length}/${all.length}`);
   return {
     total: all.length,
     filtered: f.length,
-    models: f.map(m => ({
+    models: f.map((m: any) => ({
       id: m.id, provider: m.provider, name: m.name, tier: m.tier,
       speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
       cost_type: m.cost?.type || "unknown", context_window: m.context_window || 0,
@@ -2064,25 +2157,24 @@ function getModels(dataDir: string, opts: any, logger: OrchestratorLogger) {
 }
 
 function checkModels(dataDir: string, project: string | undefined, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const md = readJSON(path.join(dataDir, "models.json"));
-  let eligible: ModelEntry[] = md?.models || [];
+  const cfg = getAllGlobalConfig();
+  let eligible = listModels(false, project);
   const filters: string[] = [];
-  if (cfg.free_only_mode) { eligible = eligible.filter(m => !isPaid(m)); filters.push("global_free_only"); }
-  const d = cfg.disabled_models || [];
-  if (d.length) { eligible = eligible.filter(m => !d.includes(m.id)); filters.push("global_disabled"); }
-  const pc = project ? cfg.projects?.[project] : undefined;
+  if (cfg.free_only_mode) { eligible = eligible.filter((m: any) => !isPaid(m)); filters.push("global_free_only"); }
+  const d: string[] = (cfg.disabled_models as string[]) || [];
+  if (d.length) { eligible = eligible.filter((m: any) => !d.includes(m.id)); filters.push("global_disabled"); }
+  const pc = project ? getProjectConfig(project) : undefined;
   if (pc) {
-    if (pc.model_allowlist?.length) { eligible = eligible.filter(m => pc.model_allowlist!.includes(m.id)); filters.push("project_allowlist"); }
-    if (pc.free_only) { eligible = eligible.filter(m => !isPaid(m)); filters.push("project_free_only"); }
+    if (pc.model_allowlist?.length) { eligible = eligible.filter((m: any) => pc.model_allowlist!.includes(m.id)); filters.push("project_allowlist"); }
+    if (pc.free_only) { eligible = eligible.filter((m: any) => !isPaid(m)); filters.push("project_free_only"); }
   }
-  const all = md?.models?.length || 0;
+  const all = listModels(false).length;
   logger.logRouting(eligible[0]?.id || "none", project || null, eligible.length, all, filters);
   return {
     project: project || null, free_only_mode: cfg.free_only_mode || false,
     disabled_models: d, filters_applied: filters, total_available: all,
     eligible_count: eligible.length,
-    eligible_models: eligible.map(m => ({
+    eligible_models: eligible.map((m: any) => ({
       id: m.id, provider: m.provider, name: m.name, tier: m.tier,
       speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
       cost_type: m.cost?.type || "unknown",
@@ -2097,8 +2189,9 @@ function autoPopulate(dataDir: string, logger: OrchestratorLogger) {
   try {
     logger.debug("populate", "Running...");
     const r = execSync(`python3 "${script}" 2>&1`, { cwd: path.dirname(script), encoding: "utf-8", timeout: 120_000 });
-    const md = readJSON(path.join(dataDir, "models.json"));
-    const t = md?.models?.length || 0;
+    // After auto-populate, re-init DB to pick up newly written models.json
+    initDb(dataDir);
+    const t = countModels().total;
     logger.info("populate", `Done: ${t} models`);
     return { success: true, total_models: t, output: r.trim() };
   } catch (err: any) {
@@ -2110,53 +2203,6 @@ function autoPopulate(dataDir: string, logger: OrchestratorLogger) {
 function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
   const date = new Date().toISOString().split("T")[0];
   const sp = opts.project.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const st = opts.task.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
-  const slp = path.join(dataDir, "session_log.md");
-  if (!fs.existsSync(slp)) {
-    fs.writeFileSync(slp, "# Session Log\n\n| Date | Project | Task | Model | Agent | Status | Duration | QA | Checked | Notes |\n|------|---------|------|-------|-------|--------|----------|----|---------|-------|\n", "utf-8");
-  }
-  fs.appendFileSync(slp, `| ${date} | ${opts.project} | ${opts.task} | ${opts.model} | ${opts.agent} | ${opts.status} | ${opts.duration || ""} | ${opts.qa ? "true" : "false"} | ${opts.checked ? "true" : "false"} | ${opts.notes || ""} |\n`, "utf-8");
-
-  // Write rich session detail file
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const sessionDir = path.join(dataDir, "sessions");
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const logDir2 = path.join(dataDir, "logs");
-  fs.mkdirSync(logDir2, { recursive: true });
-  const df = path.join(sessionDir, `${ts}-${sp}-${st}.md`);
-  fs.writeFileSync(df, [
-    `# Session: ${opts.project} / ${opts.task}`,
-    ``,
-    `**Date:** ${date}`,
-    `**Agent:** ${opts.agent}`,
-    `**Model:** ${opts.model}`,
-    `**Status:** ${opts.status}`,
-    `**Goal:** ${opts.goal || opts.task || "N/A"}`,
-    `**Session Key:** ${opts.session_key || "N/A"}`,
-    `**Duration:** ${opts.duration || "N/A"}`,
-    `**QA:** ${opts.qa ? "true" : "false"} | **Checked:** ${opts.checked ? "true" : "false"}`,
-    ``,
-    `## Notes`,
-    ``,
-    `${opts.notes || "None"}`,
-    ``,
-    `---`,
-    `*Auto-logged by Genor's Orchestrator plugin v0.4.3*`,
-  ].join("\n"), "utf-8");
-
-  // Append to project sessions.json (per-project session log)
-  const pd = path.join(dataDir, "projects", sp);
-  fs.mkdirSync(pd, { recursive: true });
-  const psf = path.join(pd, "sessions.json");
-  let ps: any[] = [];
-  if (fs.existsSync(psf)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(psf, "utf-8"));
-      if (Array.isArray(raw)) ps = raw;
-      else if (raw?.sessions && Array.isArray(raw.sessions)) ps = raw.sessions;
-    } catch { /* */ }
-  }
-  // Build entry in new canonical schema v2
   const sessId = `sess_${(opts.id || (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/[^a-zA-Z0-9_]/g, "").slice(0, 14)}`;
   // GUARANTEE session_key — generate synthetic stable key if missing
   let sessionKey = opts.session_key || "";
@@ -2179,51 +2225,46 @@ function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
   })();
   const tags = Array.isArray(opts.tags) ? opts.tags : extractTags(opts.task || "", opts.notes || "");
   const now = new Date().toISOString();
-  const newEntry: Record<string, any> = {
-    id: sessId,
-    session_key: sessionKey,
-    parent_session_key: parentSessionKey,
-    agent: agentNorm,
-    project: opts.project,
-    task: opts.task,
-    goal: opts.goal || opts.task || "",
-    original_prompt: opts.original_prompt || null,
-    model: opts.model,
-    status: opts.status,
-    // ═══ Timestamps (Phase 3d) ═══
-    start_time: opts.start_time || now,
-    started_at: opts.start_time || now,
-    end_time: opts.end_time || (opts.status === "running" ? null : now),
-    ended_at: opts.end_time || (opts.status === "running" ? null : now),
-    updated_at: now,
-    logged_at: now,
-    duration: opts.duration || "",
-    tags,
-    links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null, synthetic_key: syntheticKey },
-    notes: opts.notes || "",
-    qa: opts.qa || false,
-    checked: opts.checked || false,
-    // ═══ Rich session data (Phase 5c) ═══
-    action_history: opts.action_history || [],
-    touched_files: opts.touched_files || [],
-    token_usage: opts.token_usage || null,
-    workflow: opts.workflow || null,
-    qa_status: opts.qa_status || "none",
-    qa_history: opts.qa_history || [],
-    qa_findings: opts.qa_findings || [],
-    error_count: opts.error_count || 0,
-    last_error: opts.last_error || null,
-    last_activity_at: opts.last_activity_at || now,
-  };
-  // Check for duplicate by (session_key, task, status) — avoid log noise
-  const isDup = ps.some(e => e.session_key && e.session_key === newEntry.session_key
-    && e.task === newEntry.task && e.status === newEntry.status);
-  if (!isDup) {
-    ps.push(newEntry);
-    writeJSON(psf, { schema_version: 2, sessions: ps });
+  // Log to DB (primary store)
+  try {
+    addSession({
+      id: sessId,
+      project: opts.project,
+      agent: agentNorm,
+      model: opts.model || "",
+      tags: JSON.stringify(tags),
+      status: opts.status || "logged",
+      task: opts.task || "",
+      start_ts: opts.start_time ? Math.floor(new Date(opts.start_time).getTime() / 1000) : Math.floor(Date.now() / 1000),
+      end_ts: opts.end_time ? Math.floor(new Date(opts.end_time).getTime() / 1000) : (opts.status === "running" ? null : Math.floor(Date.now() / 1000)),
+      duration: opts.duration || "",
+      session_key: sessionKey,
+      extra: JSON.stringify({
+        parent_session_key: parentSessionKey,
+        goal: opts.goal || "",
+        original_prompt: opts.original_prompt,
+        notes: opts.notes || "",
+        qa: opts.qa || false,
+        checked: opts.checked || false,
+        action_history: opts.action_history,
+        touched_files: opts.touched_files,
+        token_usage: opts.token_usage,
+        workflow: opts.workflow,
+        qa_status: opts.qa_status,
+        qa_history: opts.qa_history,
+        qa_findings: opts.qa_findings,
+        error_count: opts.error_count,
+        last_error: opts.last_error,
+        last_activity_at: opts.last_activity_at,
+        model_provider: opts.model_provider,
+      }),
+      logged_at: now,
+    });
+  } catch (e: any) {
+    logger.warn("logSession", `DB write failed: ${e.message}`);
   }
   logger.logSession(opts.project, opts.task, opts.model, opts.agent, opts.status);
-  return { success: true, date, project: opts.project, task: opts.task, session_file: path.basename(df), total_project_sessions: ps.length };
+  return { success: true, date, project: opts.project, task: opts.task };
 }
 
 function logDecision(dataDir: string, opts: any, logger: OrchestratorLogger) {
@@ -2265,25 +2306,16 @@ function requireRegistration(): string | null {
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
   projDir(project, dataDir);
 
-  // Read per-project workflow config from dashboard-config.json
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const projCfg = cfg.projects?.[project] || {};
+  // Read per-project workflow config from DB
+  const projCfg = getProjectConfig(project) || {};
 
   sessionTracker.setContext(project, task, projCfg.workflow);
-  writeLiveAgents("context", sessionTracker);
+  queueLiveAgents("context", sessionTracker);
   const loc = getProjectLocation(project, dataDir);
   const toc = loc ? buildProjectToc(loc) : [];
 
   // Warn if this project has NO sessions logged yet (brand new / never worked on)
-  const pd = projDir(project, dataDir);
-  const psf = path.join(pd, "sessions.json");
-  let sessionCount = 0;
-  if (fs.existsSync(psf)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(psf, "utf-8"));
-      sessionCount = (Array.isArray(raw) ? raw : (raw.sessions || [])).length;
-    } catch { /* */ }
-  }
+  let sessionCount = countSessions(project);
   const isFresh = sessionCount === 0;
 
   // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
@@ -2333,7 +2365,7 @@ function clearContextFn(dataDir: string, logger: OrchestratorLogger) {
   sessionTracker.clearContext();
   if (prev) {
     logger.info("context", `Context cleared: ${prev}`);
-    writeLiveAgents("clear_context", sessionTracker);
+    queueLiveAgents("clear_context", sessionTracker);
   }
   return { ok: true, previous_project: prev };
 }
@@ -2344,7 +2376,7 @@ function syncProject(dataDir: string, project: string, logger: OrchestratorLogge
     return { error: `No valid location for ${project}`, project };
   }
   sessionTracker.trackAction(`syncing_project: ${project}`);
-  writeLiveAgents("sync_project", sessionTracker);
+  queueLiveAgents("sync_project", sessionTracker);
   syncProjectToOrchestrator(project, dataDir, logger);
   return { ok: true, project, location: loc };
 }
@@ -2368,95 +2400,73 @@ function getProjectDocsFn(dataDir: string, project: string, logger: Orchestrator
 
 let maintenanceSvc: MaintenanceService | null = null;
 
-const TOOL_NAMES = [
-  "orchestrator_set_context", "orchestrator_clear_context", "orchestrator_get_status",
-  "orchestrator_get_config", "orchestrator_get_models", "orchestrator_check_models",
-  "orchestrator_auto_populate", "orchestrator_log_session", "orchestrator_log_decision",
-  "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
-  "orchestrator_advance_phase", "orchestrator_get_routing",
-  "orchestrator_register", "orchestrator_unregister", "orchestrator_get_registered_sessions",
-  "orchestrator_release_project",
-  "orchestrator_list_active_projects",
-  "orchestrator_join_project",
-  "orchestrator_spawn_subagent",
-  "orchestrator_create_project",
-  "orchestrator_backlog_add",
-  "orchestrator_backlog_list",
-  "orchestrator_backlog_update",
-  "orchestrator_backlog_dispatch",
-  "orchestrator_backlog_dispatch_all",
-  "orchestrator_qa_submit",
-  "orchestrator_qa_approve",
-  "orchestrator_qa_reject",
-  "orchestrator_generate_handoff",
-] as const;
-
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
-// Each entry matches an api.registerTool({...}) call in register() below.
-// Parameters use OpenClaw's TypeBox schema compiled to JSON Schema.
-const TOOL_METADATA: Array<{ name: string; label: string; description: string; parameters: any }> = [
-  { name: "orchestrator_set_context", label: "Orchestrator Set Context", description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name (e.g., kfinance, kotw)." }, task: { type: "string", description: "Describe the task you are about to do." }, original_prompt: { type: "string", description: "OPTIONAL: The original user request that triggered this task." } }, required: ["project", "task"] } },
-  { name: "orchestrator_clear_context", label: "Orchestrator Clear Context", description: "Clear active project context. Disables auto-routing and auto-logging.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_register", label: "Orchestrator Register", description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_unregister", label: "Orchestrator Unregister", description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_status", label: "Status", description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_config", label: "Config", description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_models", label: "Models", description: "List models from the model inventory with optional filters (status, provider, search, project routing).", parameters: { type: "object", properties: { status: { type: "string", description: "Filter by status: active, discovered, offline, removed. Comma-separated." }, provider: { type: "string", description: "Filter by provider name (partial match)." }, search: { type: "string", description: "Search by model ID or name (partial match)." }, agent_ready: { type: "boolean", description: "Filter by agent_ready flag." }, project: { type: "string", description: "Apply project routing filters to results." } } } },
-  { name: "orchestrator_check_models", label: "Check Models (routing)", description: "Check which models are eligible for a project, applying all routing filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name for per-project routing rules. Omit for global-only check." } } } },
-  { name: "orchestrator_auto_populate", label: "Auto-Populate", description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_log_session", label: "Log Session", description: "Log a completed session to the per-project session log. Writes a structured session entry with full metadata.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, task: { type: "string", description: "Task description." }, model: { type: "string", description: "Model used." }, agent: { type: "string", description: "Agent name." }, status: { type: "string", description: "Session status." } }, required: ["project", "task", "model"] } },
-  { name: "orchestrator_log_decision", label: "Log Decision", description: "Log an architecture decision record (ADR) to the project.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Decision title." }, context: { type: "string", description: "Why this decision was needed." }, decision: { type: "string", description: "What was decided." } }, required: ["project", "title", "context", "decision"] } },
-  { name: "orchestrator_get_logs", label: "Logs", description: "Query orchestration logs: routing decisions, model choices, session activity, config changes.", parameters: { type: "object", properties: { limit: { type: "number", description: "Max entries (default: 50)." }, level: { type: "string", description: "Minimum level: debug, info, warn, error." }, source: { type: "string", description: "Filter by source (e.g., routing, session, models)." }, since: { type: "string", description: "ISO timestamp filter." } } } },
-  { name: "orchestrator_sync_project", label: "Sync Project", description: "Sync a registered project with the orchestrator: regenerates CONTEXT.md and KEY_FILES.md from the project source.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, commit: { type: "boolean", description: "Auto-commit changes to the project repo." } }, required: ["project"] } },
-  { name: "orchestrator_get_project_docs", label: "Project Docs", description: "Get project documentation files (CONTEXT.md, KEY_FILES.md, RECOVERY.md) from the orchestrator data directory.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." } }, required: ["project"] } },
-  { name: "orchestrator_advance_phase", label: "Advance Workflow Phase", description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish).", parameters: { type: "object", properties: { phase: { type: "string", description: "Target phase to transition to. Omit to auto-advance." }, skip: { type: "boolean", description: "Mark current phase as skipped." } } } },
-  { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
-  { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data'" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
-  { name: "orchestrator_release_project", label: "Release Project Binding", description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project and need to switch contexts with a fresh start.", parameters: { type: "object", properties: { force: { type: "boolean", description: "Force release even if migration in progress (default: false)" } } } },
-  { name: "orchestrator_list_active_projects", label: "List Active Projects", description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
-  { name: "orchestrator_spawn_subagent", label: "Spawn Subagent", description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.", parameters: { type: "object", properties: { task: { type: "string", description: "Task description for the subagent." }, model: { type: "string", description: "Optional model override. Omit to use project routing rules." }, taskName: { type: "string", description: "Optional stable name for subagent (lowercase_underscores)." }, timeoutSeconds: { type: "number", description: "Optional timeout in seconds (default: 300, max: 1800)." } }, required: ["task"] } },
-  { name: "orchestrator_create_project", label: "Create Project", description: "Create a new project in orchestrator-data. Sets up project directory, STATE.md, and dashboard-config.json entry. Optionally spawns a dedicated session.", parameters: { type: "object", properties: { name: { type: "string", description: "Project name." }, directory: { type: "string", description: "Absolute path to project directory." }, description: { type: "string", description: "Short project description." }, spawn: { type: "boolean", description: "Schedule an immediate session." }, spawn_task: { type: "string", description: "Initial task description." } }, required: ["name"] } },
-  { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
-  { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
-  { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
-  { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
-  { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
-  { name: "orchestrator_qa_submit", label: "QA Submit Finding", description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.", parameters: { type: "object", properties: { finding: { type: "string", description: "Describe the QA finding, issue, or observation." }, review_model: { type: "string", description: "Optional model for the QA review subagent." } }, required: ["finding"] } },
-  { name: "orchestrator_qa_approve", label: "QA Approve", description: "Approve the current work. Unblocks the work→log transition when QA gate is active.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_qa_reject", label: "QA Reject", description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.", parameters: { type: "object", properties: { reason: { type: "string", description: "Why the work was rejected. Describe what needs to be fixed." } }, required: ["reason"] } },
-  { name: "orchestrator_generate_handoff", label: "Generate Handoff", description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.", parameters: { type: "object", properties: {} } },
-  // ── Quick Action Tools ────────────────────────────────────
-  { name: "orchestrator_grill_with_docs", label: "Grill Me With Docs", description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.", parameters: { type: "object", properties: { topic: { type: "string", description: "Optional focus topic." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_fix_docs_drift", label: "Fix Docs Drift", description: "Scans project docs for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current state.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
-  { name: "orchestrator_regenerate_state", label: "Regenerate State", description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events, safe for concurrent writers.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
-  { name: "orchestrator_cleanup_docs", label: "Clean Up & Organize Docs", description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.", parameters: { type: "object", properties: { scope: { type: "string", description: "Scope: all, readme, adrs, docs, tests." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_setup_unit_tests", label: "Set Up Unit Tests", description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.", parameters: { type: "object", properties: { framework: { type: "string", description: "Test framework: vitest, jest, mocha, pytest, etc." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_setup_e2e_tests", label: "Set Up E2E Tests", description: "Spawns a subagent that sets up E2E test infrastructure and creates initial test scenarios.", parameters: { type: "object", properties: { framework: { type: "string", description: "Framework: playwright, cypress, puppeteer, etc." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_debug_issue", label: "Debug Issue", description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.", parameters: { type: "object", properties: { issue_description: { type: "string", description: "Describe the bug or issue in detail." }, model: { type: "string", description: "Optional model override." } }, required: ["issue_description"] } },
-  { name: "orchestrator_create_functionality", label: "Create New Functionality", description: "Spawns a subagent to design and implement new features or functionality in the project.", parameters: { type: "object", properties: { description: { type: "string", description: "Describe the new functionality — requirements and constraints." }, model: { type: "string", description: "Optional model override." } }, required: ["description"] } },
-];
+// ═══════════════════════════════════════════════════════════════
+//  SHARED BACKLOG HELPERS — extracted to eliminate duplicate code
+//  between backlog_dispatch and backlog_dispatch_all
+// ═══════════════════════════════════════════════════════════════
 
-
-// ── REGISTERED TOOL COUNTER ────────────────────────────────────
-/** Count registerTool calls, excluding those inside line comments. */
-function countRegisteredTools(sourceText: string): number {
-  const prefix = "api.";
-  const suffix = "registerTool({";
-  const target = prefix + suffix;
-  let count = 0, pos = 0;
-  while (pos < sourceText.length) {
-    const idx = sourceText.indexOf(target, pos);
-    if (idx === -1) break;
-    const lineStart = sourceText.lastIndexOf("\n", idx) + 1;
-    if (lineStart === 0) { pos = idx + 1; continue; }
-    const lineBefore = sourceText.slice(lineStart, idx).trimStart();
-    if (!lineBefore.startsWith("//")) count++;
-    pos = idx + 1;
+function _parseTaskField(val: any): any[] {
+  if (typeof val === "string") {
+    try { const p = JSON.parse(val); return Array.isArray(p) ? p : []; } catch { return []; }
   }
-  return count;
+  return Array.isArray(val) ? val : [];
 }
+
+function _resolveBacklogCandidates(project: string, tasks: any[], filterLabels?: string, maxCount = 10): {
+  candidates: any[];
+  selected: any[];
+  dispatchList: any[];
+} {
+  let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
+  if (filterLabels) {
+    const fl = filterLabels.split(",").map((l: string) => l.trim().toLowerCase());
+    candidates = candidates.filter((t: any) => _parseTaskField(t.labels).some((l: string) => fl.includes(l.toLowerCase())));
+  }
+  const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
+  candidates = candidates.filter((t: any) => _parseTaskField(t.depends_on).every((d: string) => doneIds.has(d)));
+  const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+  candidates.sort((a: any, b: any) => {
+    const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return (a.created || "").localeCompare(b.created || "");
+  });
+  const selected = candidates.slice(0, maxCount);
+  const dispatchList = selected.map((task: any) => {
+    const taskLabels = _parseTaskField(task.labels);
+    const taskDeps = _parseTaskField(task.depends_on);
+    const labels = taskLabels.join(", ");
+    const deps = taskDeps.map((d: string) => {
+      const dt = tasks.find((t2: any) => t2.id === d);
+      return dt ? `${d} — ${dt.title}` : d;
+    });
+    return {
+      task_id: task.id,
+      title: task.title,
+      description: task.description || "",
+      priority: task.priority || "p2",
+      labels,
+      depends_on: deps,
+      spawn: [
+        `🎯 Task: ${task.title}`,
+        `ID: ${task.id}`,
+        task.description ? `Description: ${task.description}` : "",
+        `Priority: ${task.priority || "p2"}`,
+        labels ? `Labels: ${labels}` : "",
+        deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+      ].filter(Boolean).join("\n"),
+    };
+  });
+  return { candidates, selected, dispatchList };
+}
+
+// ── Tool metadata collector ────────────────────────────────────
+// Automatically populated by the registerTool wrapper inside register().
+// Used by the module-level manifest export. Inlined to avoid duplication
+// between TOOL_METADATA and api.registerTool calls.
+const _collectedToolMeta: Array<{ name: string; label: string; description: string; parameters: any }> = [];
+let _toolCount = 0;
+
 const PLUGIN_ID = "genor-orchestrator";
 
 const _plugin: Record<string, any> = definePluginEntry({
@@ -2469,6 +2479,11 @@ const _plugin: Record<string, any> = definePluginEntry({
     const logLevel = (cfg.logLevel as string) || "info";
     const logRetention = (cfg.logRetentionDays as number) || 30;
     const logger = new OrchestratorLogger(dataDir, logLevel, logRetention);
+
+    // ═══ Initialize SQLite database ═══
+    // Replaces all ad-hoc JSON file I/O with a single orchestrator.db
+    initDb(dataDir);
+    logger.info("db", "SQLite database initialized");
 
     for (const sub of ["logs", "sessions", "adrs", "projects"]) {
       const p = path.join(dataDir, sub);
@@ -2513,6 +2528,14 @@ const _plugin: Record<string, any> = definePluginEntry({
           });
           logger.info("boot", "First-run: default dashboard config created");
         }
+        // Init DB global config defaults if empty
+        const existingCfg = getAllGlobalConfig();
+        if (!existingCfg.free_only_mode && !existingCfg.disabled_models) {
+          setGlobalConfig("free_only_mode", false);
+          setGlobalConfig("disabled_models", []);
+          setGlobalConfig("safeguards", {});
+          logger.info("boot", "First-run: DB global config initialized");
+        }
       } catch (e: any) {
         logger.warn("boot", `First-run: dashboard config creation skipped — ${e.message}`);
       }
@@ -2526,14 +2549,7 @@ const _plugin: Record<string, any> = definePluginEntry({
             if (!fs.statSync(pp).isDirectory() || e.startsWith(".")) continue;
             const statePath = path.join(pp, "STATE.md");
             if (!fs.existsSync(statePath)) {
-              const sf = path.join(pp, "sessions.json");
-              let sessCount = 0;
-              if (fs.existsSync(sf)) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-                } catch { /* */ }
-              }
+              let sessCount = countSessions(e);
               const loc = getProjectLocation(e, dataDir);
               const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run orchestrator_sync_project)";
               const stateContent = [
@@ -2608,7 +2624,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         if (isMain) {
           sessionTracker.setStatus("done");
           sessionTracker.trackAction("session_ending");
-          writeLiveAgents("session_end", sessionTracker, logger);
+          queueLiveAgents("session_end", sessionTracker);
         }
         const info = sessionTracker.end();
         if (info && (isMain || isSubagent)) {
@@ -2748,7 +2764,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           }
           
           sessionTracker.currentAction = "session_complete";
-          writeLiveAgents("session_complete", sessionTracker, logger);
+          queueLiveAgents("session_complete", sessionTracker);
           logger.info("hooks", `Session auto-logged: ${info.project}/${info.task} (${info.duration})`);
         }
         logger.debug("hooks", `session_end: ${event.reason}`);
@@ -2783,7 +2799,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           startedAt: new Date().toISOString(),
         });
       }
-      writeLiveAgents("subagent_spawned", sessionTracker, logger);
+      queueLiveAgents("subagent_spawned", sessionTracker);
     });
 
     api.on("subagent_ended", async (event: any) => {
@@ -2793,7 +2809,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       sessionTracker.subagentDepth = Math.max(0, sessionTracker.subagentDepth - 1);
       if (subKey) sessionTracker.untrackSubagent(subKey);
       if (sessionTracker.currentProject) {
-        writeLiveAgents("subagent_ended", sessionTracker, logger);
+        queueLiveAgents("subagent_ended", sessionTracker);
       }
     });
 
@@ -2862,7 +2878,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         // Always update status but scope to the actual hook session
         sessionTracker.setStatus("running");
         sessionTracker.trackAction("resolving_model");
-        writeLiveAgents("before_model_resolve", sessionTracker, logger);
+        queueLiveAgents("before_model_resolve", sessionTracker);
         
         // ═══ SESSION-GATED: Only resolve models for the registered session ═══
         // Don't enter model resolution if this session isn't registered.
@@ -2871,10 +2887,9 @@ const _plugin: Record<string, any> = definePluginEntry({
         }
         if (!sessionTracker.currentProject) return;
 
-        const md = readJSON(path.join(dataDir, "models.json"));
-        const allModels: ModelEntry[] = md?.models || [];
-        const cfg2: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-        const pc = cfg2.projects?.[sessionTracker.currentProject];
+        const allModels: any[] = listModels(false);
+        const cfg2: Record<string, any> = getAllGlobalConfig();
+        const pc = sessionTracker.currentProject ? getProjectConfig(sessionTracker.currentProject) : null;
         
         // ── Resolve routing preset ──
         const routingPreset = pc?.routing_preset || "custom";
@@ -2999,7 +3014,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         
         sessionTracker.setStatus("running");
         sessionTracker.trackAction("building_prompt");
-        writeLiveAgents("before_prompt_build", sessionTracker, logger);
+        queueLiveAgents("before_prompt_build", sessionTracker);
         
         // ═══ NO MUTATION: This hook NEVER modifies sessionTracker.sessionKey ═══
         // Previous code had a "safety net" that mutated sessionTracker.sessionKey
@@ -3115,12 +3130,12 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
         
         return { prependContext: ctx };
-      } catch { /* */ }
+      } catch (e: any) { logger.warn("context", "before_prompt_build failed:", e.message); }
     });
 
     api.on("agent_end", async () => {
       sessionTracker.trackAction("agent_stopped");
-      writeLiveAgents("agent_end", sessionTracker, logger);
+      queueLiveAgents("agent_end", sessionTracker);
       
       // ═══ AUTO-LOG UNREPORTED TASKS ═══
       // If the session has active project context but never logged completion,
@@ -3180,6 +3195,63 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
     //  TOOLS
     // ═══════════════════════════════════════════════════════════
+
+    // ── Workflow helpers (extracted to eliminate advance_phase duplication) ──
+    const _checkQaGate = (): string | null => {
+      if (!sessionTracker.workflow.includeQa) return null;
+      if (sessionTracker.canAdvanceFromWork()) return null;
+      const qs = sessionTracker.qaStatus;
+      if (qs === "none") return "QA review required before advancing. Run orchestrator_qa_submit with your findings first.";
+      if (qs === "pending") return "QA review is pending approval. A reviewer must call orchestrator_qa_approve or orchestrator_qa_reject.";
+      if (qs === "rejected") return "QA review rejected the previous submission. Fix the reported issues and call orchestrator_qa_submit again.";
+      return "QA gate not passed. Submit findings with orchestrator_qa_submit.";
+    };
+    const _checkHandoffGate = (): string | null => {
+      if (!sessionTracker.canFinish()) return "Handoff document required before finishing. Run orchestrator_generate_handoff to create one.";
+      if (!sessionTracker.loggedTaskCompletion) return "Task must be explicitly logged before finishing. Call orchestrator_log_session with status=complete first.";
+      return null;
+    };
+    const _checkGitStatus = (): void => {
+      const project = sessionTracker.currentProject;
+      if (!project) return;
+      const loc = getProjectLocation(project, dataDir);
+      if (!loc || !fs.existsSync(path.join(loc, ".git"))) return;
+      try {
+        const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+        const changed = statusRaw.trim().split("\n").filter(Boolean);
+        if (changed.length > 0) logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase. Consider committing or stashing first.`);
+      } catch { /* git check non-fatal */ }
+    };
+    const _checkAdrPresence = (): void => {
+      const project = sessionTracker.currentProject;
+      if (!project) return;
+      const adrsDir = path.join(dataDir, "adrs");
+      let adrCount = 0;
+      if (fs.existsSync(adrsDir)) {
+        adrCount = fs.readdirSync(adrsDir).filter((f: string) => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
+      }
+      if (adrCount === 0) {
+        const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
+        if (fs.existsSync(projAdrsDir2)) {
+          adrCount = fs.readdirSync(projAdrsDir2).filter((f: string) => f.endsWith(".md")).length;
+        }
+      }
+      if (adrCount === 0) logger.warn("workflow", "No ADR found. Consider documenting decisions with orchestrator_log_decision before implementing.");
+    };
+
+    // ── Wrap api.registerTool to auto-collect metadata ──
+    // This eliminates TOOL_METADATA duplication (single source of truth).
+    const _origRegister = api.registerTool.bind(api);
+    api.registerTool = ((meta: any) => {
+      _collectedToolMeta.push({
+        name: meta.name,
+        label: meta.label,
+        description: meta.description,
+        parameters: JSON.parse(JSON.stringify(meta.parameters)),
+      });
+      _toolCount++;
+      return _origRegister(meta);
+    }) as typeof api.registerTool;
 
     api.registerTool({
       name: "orchestrator_set_context",
@@ -3245,7 +3317,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (newly) {
           if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
           sessionTracker.trackAction("session_registered");
-          writeLiveAgents("register", sessionTracker, logger);
+          queueLiveAgents("register", sessionTracker);
           logger.info("registration", `session registered: ${sk} (total: ${existingSessions.length + 1})`);
           // Return descriptive message so LLM + user can see what happened
           return txt({
@@ -3280,7 +3352,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         sessionTracker.unregisterSession(sk);
         sessionTracker.clearContext();
         sessionTracker.trackAction("session_unregistered");
-        writeLiveAgents("unregister", sessionTracker, logger);
+        queueLiveAgents("unregister", sessionTracker);
         logger.info("hooks", `session unregistered: ${sk}`);
         return txt("unregistered");
       },
@@ -3365,7 +3437,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`log: ${params.task}`);
-        writeLiveAgents("tool_log_session", sessionTracker, logger);
+        queueLiveAgents("tool_log_session", sessionTracker);
         // Mark completion logged so clearContext/unregister know work is documented
         const terminal = ["done", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
         if (terminal) sessionTracker.markLoggedCompletion();
@@ -3427,7 +3499,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`sync: ${params.project}`);
-        writeLiveAgents("tool_sync_project", sessionTracker, logger);
+        queueLiveAgents("tool_sync_project", sessionTracker);
         return txt(syncProject(dataDir, params.project, logger));
       },
     });
@@ -3460,145 +3532,46 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           return txt({ ok: false, error: "Workflow enforcement is not enabled for this project. Set workflow.enabled in dashboard-config.json" });
         }
         const currentPhase = wf.currentPhase;
+        const target = params.phase?.toLowerCase();
         
-        if (params.phase) {
-          // Check transition is valid
-          if (!wf.canTransitionTo(params.phase.toLowerCase() as any)) {
+        if (target) {
+          // Validate transition direction
+          if (!wf.canTransitionTo(target as any)) {
             return txt({ ok: false, error: `Cannot transition to '${params.phase}' from current phase '${currentPhase}'. Workflow must go forward: ${WORKFLOW_ORDER.join(" → ")}` });
           }
           
-          // ═══ QUALITY GATES — Enforced ═══
-          const target = params.phase.toLowerCase();
-          
-          // work → log: QA GATE (when include_qa is enabled)
-          if (currentPhase === "work" && target === "log" && wf.includeQa) {
-            if (!sessionTracker.canAdvanceFromWork()) {
-              const qaStatus = sessionTracker.qaStatus;
-              if (qaStatus === "none") {
-                return txt({ ok: false, error: "QA review required before advancing. Run orchestrator_qa_submit with your findings first.", qa_required: true });
-              }
-              if (qaStatus === "pending") {
-                return txt({ ok: false, error: "QA review is pending approval. A reviewer must call orchestrator_qa_approve or orchestrator_qa_reject.", qa_pending: true });
-              }
-              if (qaStatus === "rejected") {
-                return txt({ ok: false, error: "QA review rejected the previous submission. Fix the reported issues and call orchestrator_qa_submit again.", qa_rejected: true });
-              }
-              return txt({ ok: false, error: "QA gate not passed. Submit findings with orchestrator_qa_submit." });
-            }
+          // ═══ ENFORCED GATES ═══
+          if (currentPhase === "work" && target === "log") {
+            const qaErr = _checkQaGate();
+            if (qaErr) return txt({ ok: false, error: qaErr, qa_required: true });
           }
-          
-          // log → finish: HANDOFF GATE
           if (currentPhase === "log" && target === "finish") {
-            if (!sessionTracker.canFinish()) {
-              return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff to create one.", handoff_required: true });
-            }
-            if (!sessionTracker.loggedTaskCompletion) {
-              return txt({ ok: false, error: "Task must be explicitly logged before finishing. Call orchestrator_log_session with status=complete first.", log_required: true });
-            }
-            // Auto-fix docs drift before finalizing
+            const hfErr = _checkHandoffGate();
+            if (hfErr) return txt({ ok: false, error: hfErr, handoff_required: true, log_required: !sessionTracker.loggedTaskCompletion });
             tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
-          // work → log: GIT CHECK (soft warning, non-blocking)
-          if (currentPhase === "work" && target === "log") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const loc = getProjectLocation(project, dataDir);
-              if (loc && fs.existsSync(path.join(loc, ".git"))) {
-                try {
-                  const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                  const changed = statusRaw.trim().split("\n").filter(Boolean);
-                  if (changed.length > 0) {
-                    logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase. Consider committing or stashing first.`);
-                  }
-                } catch { /* git check non-fatal */ }
-              }
-            }
-          }
-          
-          // document → work: ADR CHECK (soft warning, non-blocking)
-          if (currentPhase === "document" && target === "work") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const adrsDir = path.join(dataDir, "adrs");
-              let adrCount = 0;
-              if (fs.existsSync(adrsDir)) {
-                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
-              }
-              if (adrCount === 0) {
-                const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
-                if (fs.existsSync(projAdrsDir2)) {
-                  adrCount = fs.readdirSync(projAdrsDir2).filter(f => f.endsWith(".md")).length;
-                }
-              }
-              if (adrCount === 0) {
-                logger.warn("workflow", "No ADR found. Consider documenting decisions with orchestrator_log_decision before implementing.");
-              }
-            }
-          }
+          // ═══ SOFT WARNINGS ═══
+          if (currentPhase === "work" && target === "log") _checkGitStatus();
+          if (currentPhase === "document" && target === "work") _checkAdrPresence();
           
           wf.completePhase(currentPhase, params.skip);
           wf.enterPhase(target as any);
         } else {
           // Auto-advance with quality gates
-          
-          // work → next: QA GATE CHECK (when include_qa)
           if (currentPhase === "work" && wf.includeQa) {
-            if (!sessionTracker.canAdvanceFromWork()) {
-              const qaSummary = sessionTracker.getQaSummary();
-              return txt({ ok: false, error: `QA review required. ${qaSummary}`, qa_required: true, qa_status: sessionTracker.qaStatus });
-            }
+            const qaErr = _checkQaGate();
+            if (qaErr) return txt({ ok: false, error: `QA review required. ${sessionTracker.getQaSummary()}`, qa_required: true, qa_status: sessionTracker.qaStatus });
+          }
+          if (currentPhase === "log") {
+            if (!sessionTracker.loggedTaskCompletion) return txt({ ok: false, error: "Task must be logged before finishing. Call orchestrator_log_session with status=complete.", log_required: true });
+            if (!sessionTracker.canFinish()) return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff.", handoff_required: true });
+            tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
-          // log → finish: LOG CHECK
-          if (currentPhase === "log" && !sessionTracker.loggedTaskCompletion) {
-            return txt({ ok: false, error: "Task must be logged before finishing. Call orchestrator_log_session with status=complete.", log_required: true });
-          }
-          
-          // log → finish: HANDOFF GATE
-          if (currentPhase === "log" && !sessionTracker.canFinish()) {
-            return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff.", handoff_required: true });
-          }
-          // Auto-fix docs drift before finalizing
-          tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
-          
-          // document → next: ADR CHECK (soft warning)
-          if (currentPhase === "document") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const adrsDir = path.join(dataDir, "adrs");
-              let adrCount = 0;
-              if (fs.existsSync(adrsDir)) {
-                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
-              }
-              if (adrCount === 0) {
-                const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
-                if (fs.existsSync(projAdrsDir2)) {
-                  adrCount = fs.readdirSync(projAdrsDir2).filter(f => f.endsWith(".md")).length;
-                }
-              }
-              if (adrCount === 0) {
-                logger.warn("workflow", "No ADR found. Suggest documenting with orchestrator_log_decision before coding.");
-              }
-            }
-          }
-          
-          // work → next: GIT CHECK (soft warning)
-          if (currentPhase === "work") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const loc = getProjectLocation(project, dataDir);
-              if (loc && fs.existsSync(path.join(loc, ".git"))) {
-                try {
-                  const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                  const changed = statusRaw.trim().split("\n").filter(Boolean);
-                  if (changed.length > 0) {
-                    logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase.`);
-                  }
-                } catch { /* git check non-fatal */ }
-              }
-            }
-          }
+          // Soft warnings
+          if (currentPhase === "document") _checkAdrPresence();
+          if (currentPhase === "work") _checkGitStatus();
           
           const next = wf.advance();
           if (!next) {
@@ -3617,7 +3590,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
 
         sessionTracker.trackAction(`workflow: ${wf.currentPhase}`);
-        writeLiveAgents("workflow_advance", sessionTracker, logger);
+        queueLiveAgents("workflow_advance", sessionTracker);
         logger.info("workflow", `Phase advanced: ${wf.currentPhase} (${wf.getProgress()})`);
         return txt({ ok: true, phase: wf.currentPhase, progress: wf.getProgress(), elapsed: wf.getPhaseElapsed(), phase_history: wf.phaseHistory });
       },
@@ -3695,19 +3668,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
       async execute(_id: string, params: any) {
-        const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
         const proj = params.project || sessionTracker.currentProject;
         if (!proj) {
           return txt({ ok: false, error: "No project specified and no project context set. Use orchestrator_set_context first or pass a project name." });
         }
-        const pc = cfg.projects?.[proj];
+        const pc = getProjectConfig(proj);
         if (!pc) {
-          return txt({ ok: false, error: `Project '${proj}' not found in dashboard-config.json` });
+          return txt({ ok: false, error: `Project '${proj}' not found.` });
         }
         
         // Load model inventory for quality data
-        const md = readJSON(path.join(dataDir, "models.json"));
-        const allModels: ModelEntry[] = md?.models || [];
+        const allModels: any[] = listModels(false);
         
         const preset = pc.routing_preset || "custom";
         const singleProvider = pc.routing_single_provider || null;
@@ -3785,8 +3756,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
         
         // Enrich with model quality data
-        const enriched = models.map(id => {
-          const found = allModels.find(m => m.id === id);
+        const enriched = models.map((id: string) => {
+          const found = allModels.find((m: any) => m.id === id);
           return found ? {
             id: found.id,
             provider: found.provider,
@@ -3798,8 +3769,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           } : { id, provider: "?", tier: 0, speed: 0, context: 0, status: "unknown", agent_ready: false };
         });
         
-        const available = enriched.filter(m => m.status === "active" && m.agent_ready);
-        const blocked = enriched.filter(m => m.status !== "active" || !m.agent_ready);
+        const available = enriched.filter((m: any) => m.status === "active" && m.agent_ready);
+        const blocked = enriched.filter((m: any) => m.status !== "active" || !m.agent_ready);
         
         return txt({
           ok: true,
@@ -3807,9 +3778,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           category: cat,
           preset,
           routing_preset: preset,
-          recommended: available[0]?.id || enriched[0]?.id || models[0],
-          fallbacks: available.slice(1).map(m => m.id),
-          blocked_chain: blocked.length > 0 ? blocked.map(m => m.id) : undefined,
+          recommended: (available[0]?.id as string) || (enriched[0]?.id as string) || (models[0] as string),
+          fallbacks: available.slice(1).map((m: any) => m.id),
+          blocked_chain: blocked.length > 0 ? blocked.map((m: any) => m.id) : undefined,
           all: models,
           model_quality: enriched,
           source: "dashboard-config.json projects." + proj + ".model_routing",
@@ -3926,19 +3897,14 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
         // -- 3. DATA HEALTH --
         if (checks === "all" || checks === "data") {
-          const modelsPath = path.join(dataDir, "models.json");
-          if (fs.existsSync(modelsPath)) {
-            try {
-              const md = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
-              const activeModels = (md.models || []).filter((m: any) => m.status === "active").length;
-              if (activeModels === 0) addIssue("models.json has 0 active models. Run orchestrator_auto_populate.");
-            } catch (e: any) {
-              addIssue("models.json is corrupt: " + e.message + ". Run orchestrator_auto_populate.");
-              if (autoFix) { try { fs.unlinkSync(modelsPath); addFix("Deleted corrupt models.json"); } catch {} }
-            }
+          const mc = countModels();
+          if (mc.total === 0) addIssue("Model inventory is empty. Run orchestrator_auto_populate.");
+          else if (mc.active === 0) addIssue("Model inventory has 0 active models. Run orchestrator_auto_populate.");
+          // Check DB has global config
+          const dbCfg: any = getAllGlobalConfig();
+          if (!dbCfg || (!dbCfg.free_only_mode && !(dbCfg.disabled_models?.length))) {
+            addIssue("Global config not initialized in DB.");
           }
-          const cfgPath = path.join(dataDir, "dashboard-config.json");
-          if (!fs.existsSync(cfgPath)) addIssue("dashboard-config.json not found.");
           const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
           if (fs.existsSync(logPath)) {
             const stat = fs.statSync(logPath);
@@ -3976,28 +3942,18 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             for (const e of fs.readdirSync(pd)) {
               const pp = path.join(pd, e);
               if (!fs.statSync(pp).isDirectory()) continue;
-              // Check if project has any sessions
-              const sf = path.join(pp, "sessions.json");
-              let sessCount = 0;
-              if (fs.existsSync(sf)) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-                } catch {}
-              }
+              // Check if project has any sessions via DB
+              const projectSessions = listSessions(e);
+              const sessCount = projectSessions.length;
               // Check required docs
               const missingDocs = REQUIRED_PROJECT_DOCS.filter(doc => !fs.existsSync(path.join(pp, doc)));
               // Check for stale sessions (running entries older than 24h)
               let staleSessions = 0;
               if (sessCount > 0) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  const sessList = Array.isArray(d) ? d : (d.sessions || []);
-                  staleSessions = sessList.filter((s: any) =>
-                    s.status === "running" && s.start_time &&
-                    (Date.now() - new Date(s.start_time).getTime()) > 86400000
-                  ).length;
-                } catch {}
+                staleSessions = projectSessions.filter((s: any) =>
+                  s.status === "running" && s.start_ts &&
+                  (Date.now() - s.start_ts) > 86400000
+                ).length;
               }
 
               if (sessCount === 0) {
@@ -4088,7 +4044,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
         const released = sessionTracker.releaseProjectBinding(sk);
         sessionTracker.trackAction(`released_project: ${released}`);
-        writeLiveAgents("release_project", sessionTracker, logger);
+        queueLiveAgents("release_project", sessionTracker);
         logger.info("sessions", `Released project binding: ${released} (session=${sk})`);
         return txt({
           ok: true,
@@ -4112,14 +4068,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           for (const e of fs.readdirSync(pd)) {
             const pp = path.join(pd, e);
             if (!fs.statSync(pp).isDirectory()) continue;
-            const sf = path.join(pp, "sessions.json");
             let sessCount = 0;
-            if (fs.existsSync(sf)) {
-              try {
-                const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-              } catch { /* */ }
-            }
+            try { sessCount = countSessions(e); } catch { /* non-critical — project may have no sessions */ }
             const loc = getProjectLocation(e, dataDir);
             const hasState = fs.existsSync(path.join(pp, "STATE.md"));
             allProjects.push({
@@ -4222,7 +4172,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         });
 
         sessionTracker.trackAction(`spawn_subagent: ${taskName}`);
-        writeLiveAgents("spawn_subagent", sessionTracker, logger);
+        queueLiveAgents("spawn_subagent", sessionTracker);
 
         // Build the spawn message with full context
         const spawnTask = [
@@ -4291,77 +4241,26 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (reg) return txt({ ok: false, error: reg });
         const project = params.project || sessionTracker.currentProject;
         if (!project) return txt({ ok: false, error: "No project selected. Set context via orchestrator_set_context or pass project param." });
-        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
-        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json found for project "${project}".` });
-        let backlog: any;
-        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
-        const tasks = backlog.tasks || [];
-        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
-        if (params.filter_labels) {
-          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
-          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
-        }
-        if (params.task_id) {
-          candidates = candidates.filter((t: any) => t.id === params.task_id);
-          if (!candidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
-        }
-        // Resolve dependencies — only tasks whose deps are done
-        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
-        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
-        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
-        // Sort: priority then creation time
-        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
-        candidates.sort((a: any, b: any) => {
-          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
-          if (pa !== pb) return pa - pb;
-          return (a.created || "").localeCompare(b.created || "");
-        });
+        const tasks = listBacklogTasks(project);
 
-        // Phase 2c: Support parallel dispatch — take up to max_dispatch tasks
+        // Specific-task mode — filter early before shared resolution
+        let taskIdCandidates = tasks;
+        if (params.task_id) {
+          taskIdCandidates = tasks.filter((t: any) => t.id === params.task_id);
+          if (!taskIdCandidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
+        }
+
         const maxD = Math.max(1, Math.min(params.max_dispatch || 1, 10));
-        const selected = candidates.slice(0, maxD);
+        const { candidates, selected, dispatchList } = _resolveBacklogCandidates(project, taskIdCandidates, params.filter_labels, maxD);
+        if (!candidates.length) return txt({ ok: false, error: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
 
         // Auto-claim selected tasks
         if (params.auto_claim) {
-          const claimedIds: string[] = [];
-          for (const task of selected) {
-            for (const t of tasks) {
-              if (t.id === task.id) {
-                t.status = "in_progress";
-                claimedIds.push(task.id);
-                break;
-              }
-            }
-          }
-          backlog.tasks = tasks;
-          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+          const claimedIds = selected.map((t: any) => { updateBacklogTask(t.id, { status: "in_progress" }); return t.id; });
           logger.info("dispatch", `Claimed ${claimedIds.length} tasks: ${claimedIds.join(", ")}`);
         }
 
         const loc = getProjectLocation(project, dataDir);
-        const dispatchList = selected.map((task: any) => {
-          const labels = (task.labels || []).join(", ");
-          const deps = (task.depends_on || []).map((d: string) => {
-            const dt = tasks.find((t2: any) => t2.id === d);
-            return dt ? `${d} — ${dt.title}` : d;
-          });
-          return {
-            task_id: task.id,
-            title: task.title,
-            description: task.description || "",
-            priority: task.priority || "p2",
-            labels,
-            depends_on: deps,
-            spawn: [
-              `🎯 Task: ${task.title}`,
-              `ID: ${task.id}`,
-              task.description ? `Description: ${task.description}` : "",
-              `Priority: ${task.priority || "p2"}`,
-              labels ? `Labels: ${labels}` : "",
-              deps.length ? `Dependencies: ${deps.join("; ")}` : "",
-            ].filter(Boolean).join("\n"),
-          };
-        });
 
         const result: any = {
           ok: true,
@@ -4376,8 +4275,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         // Single-task mode: backward-compatible top-level fields
         if (selected.length === 1) {
           const task = selected[0];
-          const labels = (task.labels || []).join(", ");
-          const deps = (task.depends_on || []).map((d: string) => {
+          const taskLabels: string[] = typeof task.labels === "string" ? (() => { try { return JSON.parse(task.labels); } catch { return []; } })() : (task.labels || []);
+          const taskDeps: string[] = typeof task.depends_on === "string" ? (() => { try { return JSON.parse(task.depends_on); } catch { return []; } })() : (task.depends_on || []);
+          const labels = taskLabels.join(", ");
+          const deps = taskDeps.map((d: string) => {
             const dt = tasks.find((t2: any) => t2.id === d);
             return dt ? `${d} — ${dt.title}` : d;
           });
@@ -4416,51 +4317,16 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (reg) return txt({ ok: false, error: reg });
         const project = params.project || sessionTracker.currentProject;
         if (!project) return txt({ ok: false, error: "No project selected." });
-        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
-        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json for "${project}".` });
-        let backlog: any;
-        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
-        const tasks = backlog.tasks || [];
-        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
-        if (params.filter_labels) {
-          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
-          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
-        }
-        // Resolve dependencies
-        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
-        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
-        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch." });
-        // Sort
-        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
-        candidates.sort((a: any, b: any) => {
-          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
-          if (pa !== pb) return pa - pb;
-          return (a.created || "").localeCompare(b.created || "");
-        });
+        const tasks = listBacklogTasks(project);
         const maxD = Math.max(1, Math.min(params.max_dispatch || 5, 20));
-        const selected = candidates.slice(0, maxD);
-        // Auto-claim
+        const { candidates, selected, dispatchList } = _resolveBacklogCandidates(project, tasks, params.filter_labels, maxD);
+        if (!candidates.length) return txt({ ok: false, error: "No available tasks to dispatch." });
+        // Auto-claim (default true for dispatch_all)
         const autoClaim = params.auto_claim !== false;
         if (autoClaim) {
-          for (const task of selected) {
-            for (const t of tasks) { if (t.id === task.id) { t.status = "in_progress"; break; } }
-          }
-          backlog.tasks = tasks;
-          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+          for (const task of selected) updateBacklogTask(task.id, { status: "in_progress" });
         }
         const loc = getProjectLocation(project, dataDir);
-        const dispatchList = selected.map((task: any) => ({
-          task_id: task.id,
-          title: task.title,
-          description: task.description || "",
-          priority: task.priority || "p2",
-          labels: (task.labels || []).join(", "),
-          depends_on: (task.depends_on || []).map((d: string) => {
-            const dt = tasks.find((t2: any) => t2.id === d);
-            return dt ? `${d} — ${dt.title}` : d;
-          }),
-          spawn_key: `task_${task.id.replace(/[^a-z0-9]/gi, "_")}`,
-        }));
         return txt({
           ok: true,
           project,
@@ -4724,6 +4590,12 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
         fs.mkdirSync(projDir2, { recursive: true });
 
+        // Create project config entry in DB FIRST (so FK constraints on state_events don't fail)
+        setProjectConfig(projectName, {
+          location: params.directory || null,
+          workflow: { enabled: true },
+        });
+
         // Write project_created state event (append-only, no overwrites)
         writeStateEvent(projectName, dataDir, {
           type: "project_created",
@@ -4733,21 +4605,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         });
         // Generate initial STATE.md from event log
         generateStateFromEvents(projectName, dataDir, logger);
-
-        // Create dashboard-config.json entry
-        const configPath = path.join(dataDir, "dashboard-config.json");
-        let cfg: any = {};
-        try {
-          if (fs.existsSync(configPath)) {
-            cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          }
-        } catch { /* */ }
-        if (!cfg.projects) cfg.projects = {};
-        cfg.projects[projectName] = {
-          location: params.directory || null,
-          workflow: { enabled: true },
-        };
-        writeJSON(configPath, cfg);
 
         logger.info("project", `Created project: ${projectName}${params.directory ? " @ " + params.directory : ""}`);
 
@@ -5139,9 +4996,7 @@ Focus specifically on: ${params.topic}` : "";
               const content = fs.readFileSync(srcPath, "utf-8");
               const toolMatches = content.match(/api\.registerTool\(\{/g);
               if (toolMatches) {
-                // Subtract comment references (they contain "api.registerTool" in comments)
-                // Actual tool registrations start after the // ── line separating Metadata from register()
-                toolCount = countRegisteredTools(content);
+                toolCount = _toolCount;
               }
             }
             const testDir = path.join(srcDir, "tests");
@@ -5153,9 +5008,9 @@ Focus specifically on: ${params.topic}` : "";
               try {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
                 version = pkg.version || "";
-              } catch { /* */ }
+              } catch (e2: any) { logger.debug("doctor", "Version read failed:", e2.message); }
             }
-          } catch { /* */ }
+          } catch { /* doctor — project may not exist */ }
         }
 
         // Fix CONTEXT.md badges
@@ -5235,7 +5090,7 @@ Focus specifically on: ${params.topic}` : "";
     api.registerTool({
       name: "orchestrator_regenerate_state",
       label: "Regenerate State",
-      description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events. Safe for concurrent writers since events are append-only.",
+      description: "Regenerate STATE.md from the project state event log (SQLite). Computed from actual events, no LLM involved.",
       parameters: Type.Object({
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
@@ -5262,6 +5117,465 @@ Focus specifically on: ${params.topic}` : "";
     });
 
     // ═══════════════════════════════════════════════════════════
+    //  MULTI-AGENT VERIFICATION PIPELINE
+    //  Work → Review → Fix → loop until pass or max iterations
+    // ═══════════════════════════════════════════════════════════
+
+    // ═══ Pipeline temp directory helper — deterministic from pipeline_id ═══
+    function pipelineWorkDir(pipelineId: string): string {
+      return path.join(os.tmpdir(), `verify_${pipelineId.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
+    }
+
+    // ═══ Atomic phase transition — returns true if transition succeeded ═══
+    function transitionPhase(pipelineId: string, fromPhase: string, toPhase: string, updates?: Record<string, any>): boolean {
+      const fields = ["phase = ?"];
+      const values: any[] = [toPhase];
+      if (updates) {
+        for (const [k, v] of Object.entries(updates)) {
+          fields.push(`${k} = ?`);
+          values.push(v);
+        }
+      }
+      fields.push("updated_ts = ?");
+      values.push(Math.floor(Date.now() / 1000));
+      values.push(pipelineId);
+      values.push(fromPhase);
+      const result = getDb().prepare(
+        `UPDATE verification_runs SET ${fields.join(", ")} WHERE pipeline_id = ? AND phase = ?`
+      ).run(...values);
+      return result.changes > 0;
+    }
+
+    // ═══ Pipeline cleanup — removes temp dir ═══
+    function cleanupPipeline(pipelineId: string): void {
+      try {
+        const dir = pipelineWorkDir(pipelineId);
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch (e: any) {
+        logger.warn("verification", `Cleanup failed for ${pipelineId}: ${e.message}`);
+      }
+    }
+
+    api.registerTool({
+      name: "orchestrator_verify_work",
+      label: "Verify Work",
+      description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Call orchestrator_verify_check to advance the pipeline.",
+      parameters: Type.Object({
+        task: Type.String({ description: "Description of the work to be done." }),
+        criteria: Type.String({ description: "Verification criteria — what the reviewer should check for." }),
+        max_iterations: Type.Optional(Type.Number({ description: "Maximum review-fix cycles (default: 3)." })),
+        worker_model: Type.Optional(Type.String({ description: "Model override for the worker subagent." })),
+        reviewer_model: Type.Optional(Type.String({ description: "Model override for the reviewer subagent." })),
+        fixer_model: Type.Optional(Type.String({ description: "Model override for the fixer subagent." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        if (!sessionTracker.currentProject) {
+          return txt({ ok: false, error: "No active project. Set project context first." });
+        }
+        if (!params.task) {
+          return txt({ ok: false, error: "Task description is required." });
+        }
+        if (!params.criteria) {
+          return txt({ ok: false, error: "Verification criteria is required." });
+        }
+
+        const pipelineId = `verify_${crypto.randomUUID().slice(0, 12)}`;
+        const maxIter = params.max_iterations || 3;
+        const workDir = pipelineWorkDir(pipelineId);
+        const workerOutputPath = path.join(workDir, "worker-output.md");
+        const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+        const fixerOutputPath = path.join(workDir, "fixer-output.md");
+
+        try { fs.mkdirSync(workDir, { recursive: true }); } catch (e: any) { logger.warn("verification", `Failed to create workDir ${workDir}: ${e.message}`); }
+
+        const project = sessionTracker.currentProject!;
+        const parentKey = sessionTracker.sessionKey || "";
+        const workerTask = [
+          `[Verification Pipeline — Worker #1 — Auto-spawned by Orchestrator Plugin]`,
+          `Project: ${project}`,
+          `Parent Session: ${parentKey}`,
+          ``,
+          `You are the WORKER in a multi-agent verification pipeline. Complete the following task.`,
+          ``,
+          `## Task`,
+          params.task,
+          ``,
+          `## Instructions`,
+          `1. Complete the task thoroughly — write code, make changes, produce required output.`,
+          `2. When finished, write your complete work output to: ${workerOutputPath}`,
+          `3. Be thorough and self-contained — your output will be reviewed independently.`,
+        ].filter(Boolean).join("\n");
+
+        try {
+          const workerSessionKey = `agent:main:subagent:verify-worker-${crypto.randomUUID().slice(0, 8)}`;
+          await api.runtime.subagent.run({
+            sessionKey: workerSessionKey,
+            message: workerTask,
+            model: params.worker_model || undefined,
+            lightContext: true,
+          });
+
+          const msgs = JSON.stringify([
+            { ts: Date.now(), level: "info", msg: `Worker #1 spawned (session: ${workerSessionKey})` },
+          ]);
+
+          addVerificationRun({
+            pipeline_id: pipelineId,
+            project,
+            task: params.task,
+            criteria: params.criteria,
+            phase: "working",
+            iteration: 1,
+            max_iterations: maxIter,
+            worker_session: workerSessionKey,
+            reviewer_session: "",
+            fixer_session: "",
+            worker_output_path: workerOutputPath,
+            reviewer_result: "",
+            fixer_output_path: fixerOutputPath,
+            artifacts: JSON.stringify({ workDir, reviewerPath, fixerOutputPath }),
+            messages: msgs,
+            created_ts: Math.floor(Date.now() / 1000),
+            updated_ts: Math.floor(Date.now() / 1000),
+          });
+
+          addLog("info", "verification", `Pipeline ${pipelineId}: worker spawned for ${project}`);
+          logger.info("verification", `Pipeline ${pipelineId} started for project=${project}`);
+
+          return txt({
+            ok: true,
+            pipeline_id: pipelineId,
+            project,
+            phase: "working",
+            iteration: 1,
+            max_iterations: maxIter,
+            worker_session: workerSessionKey,
+            message: `✅ Pipeline started. Worker #1 spawned. Call orchestrator_verify_check pipeline_id="${pipelineId}" to check.`,
+          });
+        } catch (err: any) {
+          logger.error("verification", `Pipeline ${pipelineId} spawn failed: ${err.message}`);
+          cleanupPipeline(pipelineId);
+          return txt({ ok: false, error: `Failed to start pipeline: ${err.message}` });
+        }
+      },
+    });
+
+    api.registerTool({
+      name: "orchestrator_verify_check",
+      label: "Verify Check Progress",
+      description: "Check and advance a multi-agent verification pipeline. Reads the current state, checks if the current subagent has completed (via output marker file), and spawns the next agent in the pipeline. Call repeatedly to advance through work→review→fix→loop.",
+      parameters: Type.Object({
+        pipeline_id: Type.String({ description: "Pipeline ID from orchestrator_verify_work." }),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        if (!params.pipeline_id) {
+          return txt({ ok: false, error: "Pipeline ID is required." });
+        }
+
+        const run2 = getVerificationRun(params.pipeline_id);
+        if (!run2) {
+          return txt({ ok: false, error: `Pipeline "${params.pipeline_id}" not found.` });
+        }
+        const run = run2!;
+
+        // Terminal states — just report
+        if (run.phase === "pass") {
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: "✅ PASSED", reviewer_result: run.reviewer_result });
+        }
+        if (run.phase === "fail") {
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: "❌ FAILED — max iterations", reviewer_result: run.reviewer_result });
+        }
+
+        const msgs: any[] = JSON.parse(run.messages || "[]");
+        const maxIter = run.max_iterations || 3;
+        const workDir = pipelineWorkDir(run.pipeline_id);
+
+        // ── Helper: log + persist messages ──
+        function pushMsg(level: string, msg: string): void {
+          msgs.push({ ts: Date.now(), level, msg });
+        }
+        function saveMsgs(): void {
+          updateVerificationRun(run.pipeline_id, { messages: JSON.stringify(msgs) });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: WORKING — worker subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "working") {
+          // Timeout check: 30 min
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Worker #${run.iteration} timed out after ${elapsed}s`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Worker #${run.iteration} timed out after 30 min.` });
+          }
+
+          const workerPath = run.worker_output_path;
+          if (!workerPath || !fs.existsSync(workerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "working", iteration: run.iteration, worker_session: run.worker_session, message: `⏳ Worker #${run.iteration} still running...` });
+          }
+
+          // Atomic: working → reviewing. If this fails, another caller already advanced.
+          const workerOutput = fs.readFileSync(workerPath, "utf-8");
+          const reviewerSessionKey = `agent:main:subagent:verify-reviewer-${crypto.randomUUID().slice(0, 8)}`;
+          const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+
+          // Delete old reviewer file if present
+          try { if (fs.existsSync(reviewerPath)) fs.unlinkSync(reviewerPath); } catch { /* */ }
+
+          const reviewerTask = [
+            `[Verification Pipeline — Reviewer #${run.iteration}]`,
+            `Project: ${run.project}`,
+            ``,
+            `Review the work against criteria.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Criteria`,
+            run.criteria,
+            `## Worker Output`,
+            workerOutput,
+            ``,
+            `## Instructions`,
+            `1. Check correctness, completeness, edge cases, code quality.`,
+            `2. Write verdict to: ${reviewerPath}`,
+            `3. First line MUST be "PASS" or "FAIL".`,
+            `   PASS = explain why it meets all criteria.`,
+            `   FAIL = explain what needs fixing.`,
+          ].filter(Boolean).join("\n");
+
+          if (!transitionPhase(run.pipeline_id, "working", "reviewing", {
+            reviewer_session: reviewerSessionKey,
+            messages: JSON.stringify(msgs),
+          })) {
+            // Another invocation already transitioned
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `Pipeline was already advanced by another call — reviewer spawning. Check again.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: reviewerSessionKey,
+              message: reviewerTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Reviewer #${run.iteration} spawned`);
+            saveMsgs();
+            addLog("info", "verification", `Pipeline ${run.pipeline_id}: worker done → reviewer #${run.iteration}`);
+            logger.info("verification", `Pipeline ${run.pipeline_id}: worker #${run.iteration} done → reviewer`);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `✅ Worker done. Reviewer #${run.iteration} spawned. Check again for verdict.` });
+          } catch (err: any) {
+            pushMsg("error", `Reviewer spawn failed: ${err.message}`);
+            saveMsgs();
+            addLog("error", "verification", `Pipeline ${run.pipeline_id}: reviewer spawn failed: ${err.message}`);
+            return txt({ ok: false, error: `Reviewer spawn failed: ${err.message}` });
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: REVIEWING — reviewer subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "reviewing") {
+          // Timeout check: 30 min
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            // Derive reviewer path from workDir
+            const rPath = path.join(workDir, "reviewer-verdict.md");
+            // If a partial verdict file exists, try to use it
+            if (fs.existsSync(rPath)) {
+              const partial = fs.readFileSync(rPath, "utf-8");
+              pushMsg("warn", `Reviewer timed out, using partial verdict`);
+              // Write partial verdict as the reviewer_result and transition to fail
+              updateVerificationRun(run.pipeline_id, { reviewer_result: partial, phase: "fail" });
+              cleanupPipeline(run.pipeline_id);
+              return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `⏰ Reviewer timed out. Partial verdict recovered.`, reviewer_result: partial });
+            }
+            pushMsg("error", `Reviewer #${run.iteration} timed out`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Reviewer #${run.iteration} timed out after 30 min.` });
+          }
+
+          const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+          if (!fs.existsSync(reviewerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `⏳ Reviewer #${run.iteration} still reviewing...` });
+          }
+
+          const verdict = fs.readFileSync(reviewerPath, "utf-8");
+          const firstLine = verdict.trim().split("\n")[0].trim().toUpperCase();
+          const passed = firstLine.startsWith("PASS");
+
+          pushMsg("info", `Reviewer #${run.iteration} verdict: ${passed ? "PASS" : "FAIL"}`);
+          updateVerificationRun(run.pipeline_id, { reviewer_result: verdict, messages: JSON.stringify(msgs) });
+          addLog("info", "verification", `Pipeline ${run.pipeline_id}: reviewer verdict = ${passed ? "PASS" : "FAIL"}`);
+
+          if (passed) {
+            // Atomic: reviewing → pass
+            if (transitionPhase(run.pipeline_id, "reviewing", "pass")) {
+              cleanupPipeline(run.pipeline_id);
+              logger.info("verification", `Pipeline ${run.pipeline_id}: PASSED after ${run.iteration} iteration(s)`);
+              return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: `✅ PASSED after ${run.iteration} iteration(s)!`, reviewer_result: verdict });
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", message: "Already passed by another call.", reviewer_result: verdict });
+          }
+
+          // FAIL — check max iterations
+          if (run.iteration >= maxIter) {
+            if (transitionPhase(run.pipeline_id, "reviewing", "fail")) {
+              cleanupPipeline(run.pipeline_id);
+              logger.info("verification", `Pipeline ${run.pipeline_id}: FAILED after ${maxIter} iterations`);
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations.`, reviewer_result: verdict });
+          }
+
+          // Spawn fixer
+          const nextIter = run.iteration + 1;
+          const fixerSessionKey = `agent:main:subagent:verify-fixer-${crypto.randomUUID().slice(0, 8)}`;
+          const fixerPath = path.join(workDir, "fixer-output.md");
+
+          // Save original worker output before fixer overwrites it
+          const origWorkerPath = path.join(workDir, "worker-original.md");
+          if (fs.existsSync(run.worker_output_path) && !fs.existsSync(origWorkerPath)) {
+            try { fs.copyFileSync(run.worker_output_path, origWorkerPath); } catch { /* */ }
+          }
+
+          const workerOutput = fs.existsSync(run.worker_output_path) ? fs.readFileSync(run.worker_output_path, "utf-8") : "(no worker output)";
+
+          const fixerTask = [
+            `[Verification Pipeline — Fixer #${nextIter}]`,
+            `Project: ${run.project}`,
+            ``,
+            `Fix the issues found by the reviewer.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Worker Output`,
+            workerOutput,
+            `## Reviewer's FAIL Verdict`,
+            verdict,
+            ``,
+            `## Instructions`,
+            `1. Address ALL issues in the verdict.`,
+            `2. Write your complete fixed output to: ${fixerPath}`,
+          ].filter(Boolean).join("\n");
+
+          // Atomic: reviewing → fixing
+          if (!transitionPhase(run.pipeline_id, "reviewing", "fixing", {
+            iteration: nextIter,
+            fixer_session: fixerSessionKey,
+            fixer_output_path: fixerPath,
+            messages: JSON.stringify(msgs),
+          })) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: nextIter, message: `Pipeline already advanced — fixer spawning.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: fixerSessionKey,
+              message: fixerTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Fixer #${nextIter} spawned`);
+            saveMsgs();
+            addLog("info", "verification", `Pipeline ${run.pipeline_id}: fixer #${nextIter} spawned`);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: nextIter, message: `🔧 Fixer #${nextIter} spawned. Check again for fixer progress.` });
+          } catch (err: any) {
+            pushMsg("error", `Fixer spawn failed: ${err.message}`);
+            saveMsgs();
+            return txt({ ok: false, error: `Fixer spawn failed: ${err.message}` });
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: FIXING — fixer subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "fixing") {
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Fixer #${run.iteration} timed out`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Fixer #${run.iteration} timed out.` });
+          }
+
+          const fixerPath = run.fixer_output_path;
+          if (!fixerPath || !fs.existsSync(fixerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: run.iteration, message: `⏳ Fixer #${run.iteration} still working...` });
+          }
+
+          const fixerOutput = fs.readFileSync(fixerPath, "utf-8");
+          pushMsg("info", `Fixer #${run.iteration} completed`);
+
+          // Write fixer output to worker path for re-review (worker output is the canonical "current state" for review)
+          try { fs.writeFileSync(run.worker_output_path, fixerOutput, "utf-8"); } catch (e: any) { logger.warn("verification", `Failed to update worker output: ${e.message}`); }
+
+          // Clear old reviewer verdict file
+          const oldReviewerPath = path.join(workDir, "reviewer-verdict.md");
+          try { if (fs.existsSync(oldReviewerPath)) fs.unlinkSync(oldReviewerPath); } catch (e: any) { logger.warn("verification", `Failed to clear old verdict: ${e.message}`); }
+
+          // Spawn re-review
+          const reviewerSessionKey = `agent:main:subagent:verify-reviewer-${crypto.randomUUID().slice(0, 8)}`;
+
+          const reReviewTask = [
+            `[Verification Pipeline — Reviewer #${run.iteration} (re-review)]`,
+            `Project: ${run.project}`,
+            ``,
+            `Re-review the fixed work.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Criteria`,
+            run.criteria,
+            `## Fixed Output`,
+            fixerOutput,
+            `## Previous Review (FAIL)`,
+            run.reviewer_result || "N/A",
+            ``,
+            `## Instructions`,
+            `1. Check ALL previous issues were addressed.`,
+            `2. Write verdict to: ${oldReviewerPath}`,
+            `3. First line MUST be "PASS" or "FAIL".`,
+          ].filter(Boolean).join("\n");
+
+          // Atomic: fixing → reviewing
+          if (!transitionPhase(run.pipeline_id, "fixing", "reviewing", {
+            reviewer_session: reviewerSessionKey,
+            reviewer_result: "",
+            messages: JSON.stringify(msgs),
+          })) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `Pipeline already advanced — re-review spawning.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: reviewerSessionKey,
+              message: reReviewTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Re-review reviewer #${run.iteration} spawned`);
+            saveMsgs();
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `✅ Fixer done. Re-review spawned. Check again for verdict.` });
+          } catch (err: any) {
+            pushMsg("error", `Re-review spawn failed: ${err.message}`);
+            saveMsgs();
+            return txt({ ok: false, error: `Re-review spawn failed: ${err.message}` });
+          }
+        }
+
+        // ── Phase: error or unknown ──
+        const recent = msgs.slice(-3).map((m: any) => m.msg).join("; ");
+        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: run.phase, message: `State: "${run.phase}". ${recent}` });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
     //  BACKGROUND MAINTENANCE
     // ═══════════════════════════════════════════════════════════
 
@@ -5281,11 +5595,11 @@ Focus specifically on: ${params.topic}` : "";
     // Shared: quick counts
     let modelCount = 0, sessionCount = 0;
     try {
-      const mf = path.join(dataDir, "models.json");
-      if (fs.existsSync(mf)) modelCount = JSON.parse(fs.readFileSync(mf, "utf-8")).models?.length || 0;
+      const mc = countModels();
+      modelCount = mc.total;
       const sf = path.join(dataDir, "session_log.md");
       if (fs.existsSync(sf)) sessionCount = fs.readFileSync(sf, "utf-8").split("\n").filter(l => l.startsWith("|") && !l.includes("Date") && !l.includes("---")).length;
-    } catch { /* */ }
+    } catch (e: any) { logger.debug("status", "Session count failed:", e.message); }
 
     //  SLASH COMMANDS
     //  Individually registered for Discord autocomplete:
@@ -5489,7 +5803,9 @@ Focus specifically on: ${params.topic}` : "";
       logger.warn("plugin", "Dashboard route registration failed: " + (dhErr?.message || String(dhErr)));
     }
 
-    logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
+    // Count actual registered tools from metadata
+  const toolCount = _collectedToolMeta.length;
+  logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${toolCount} tools, 5 slash commands`);
   },
 });
 
@@ -5520,12 +5836,9 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
         maintenanceIntervalMs: { type: "number", description: "Background maintenance interval in ms. (default: 1800000 = 30min)" },
       },
     },
-    tools: TOOL_METADATA.map(t => ({
-      name: t.name,
-      label: t.label,
-      description: t.description,
-      parameters: t.parameters,
-    })),
+    get tools() {
+      return _collectedToolMeta.length > 0 ? _collectedToolMeta : [];
+    },
   },
   enumerable: false,
 });

@@ -1,3 +1,4 @@
+# ⛔ SUPERSEDED — Dashboard redesign completed in v0.8.0. This planning doc kept for historical reference.
 # UI Redesign Plan — GenorBoard Dashboard
 
 ## A. Current State Analysis

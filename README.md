@@ -3,17 +3,26 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.9.0-blue)
-![Tools](https://img.shields.io/badge/tools-40-success)
-![Hooks](https://img.shields.io/badge/hooks-8-ff69b4)
+![Version](https://img.shields.io/badge/version-0.9.1-blue)
+![Tools](https://img.shields.io/badge/tools-47-success)
+![Hooks](https://img.shields.io/badge/hooks-7-ff69b4)
 
-> **✨ 40 tools + 8 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
+> **✨ 47 tools + 7 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
 
 The orchestrator doesn't take over your thinking. It handles the scaffolding so your LLM can focus on what matters: **coding, solving problems, and building cool stuff.** 🚀
 
 ---
 
-## 🚀 What's New in v0.9.0
+## 🚀 What's New in v0.9.1
+
+| # | Feature | What It Does |
+|---|---------|-------------|
+| 🔍 | **Full Code Audit** | Complete P0–P2 audit of all 15k+ lines across 70+ files. Fixed 5 P0 data integrity issues (silent catches, migration versioning, FK constraints, timestamp normalization, column allowlists), 5 P1 code quality issues (TOOL_METADATA dedup, audit logging, LIMIT on queries, advance_phase decomposition, backlog dispatch extraction), and 5 P2 issues (race conditions, per-session state, error shape unification, gateway token extraction, dashboard refreshAll fix). See [`AUDIT.md`](./AUDIT.md). |
+| 🧹 | **TOOL_METADATA Dedup** | `api.registerTool` now auto-collects metadata — removed 260 lines of drift-prone duplicate JSON. |
+| 🔒 | **Per-Session State** | SessionTracker stores per-session data in isolated `SessionState` objects instead of shared singletons. |
+| 📝 | **Audit Logging** | All 10 dashboard mutation endpoints now write audit log entries. |
+
+### v0.9.0
 
 | # | Feature | What It Does |
 |---|---------|-------------|
@@ -22,7 +31,7 @@ The orchestrator doesn't take over your thinking. It handles the scaffolding so 
 | 📋 | **Dashboard Spawn Button** | Click ➕ New Session in the dashboard, choose a project, describe the task, and optionally pick a model. An instant session is created via the gateway's own API with the session key returned immediately. |
 | 🔧 | **Simplified Architecture** | Removed `trusted-operator`, self-API fetch, heartbeat, and cron-based spawn approaches. The OpenAI endpoint spawn is the only path — proven through end-to-end testing. |
 
-### Previous Release — v0.8.0
+### v0.8.0
 
 The jump from 28 → 40 tools brings a **complete dashboard redesign**, a new **Sessions tab**, and **12 new tools** for project lifecycle and QA:
 
@@ -36,7 +45,7 @@ The jump from 28 → 40 tools brings a **complete dashboard redesign**, a new **
 | 🧪 | **Test Infrastructure** | `setup_unit_tests` and `setup_e2e_tests` — spawn subagents with framework config + initial tests. `debug_issue` and `create_functionality` — spawn subagents for targeted work. |
 | 🐛 | **Bug Fixes** | Dashboard handler rebuild on every plugin load, stale model display in dashboard, orphan session key cleanup, auto-populate edge cases. |
 
-### Previous Release — v0.7.0
+### v0.7.0
 
 | # | Feature | What It Does |
 |---|---------|-------------|
@@ -124,7 +133,7 @@ openclaw plugins list | grep orchestrator
 
 ## 🔧 Tool Reference
 
-Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **40** of them:
+Every tool is registered with full metadata for OpenClaw agent injection — AI agents see these as first-class tools in their tool belt. Here they all are, all **47** of them:
 
 ### 📋 Registration & Lifecycle
 
@@ -917,7 +926,9 @@ The dashboard handler is registered via `api.registerHttpRoute(...)` — same pa
 
 ### Screenshots
 
-| Dashboard Home | Sessions Tab | Session Detail | Project Session Modal |
+> **Note:** Screenshots show the v0.8.0 dashboard layout. The Sessions tab was removed in v0.9.0 (moved to OpenClaw WebUI). Current dashboard has 7 tabs: Dashboard, Projects, Agents, Models, Logs, Settings, Safeguards.
+
+| Dashboard Home | Sessions Tab (removed v0.9.0) | Session Detail | Project Session Modal |
 |---|---|---|---|
 | ![Dashboard Home](docs/images/dashboard-home.png) | ![Sessions Tab](docs/images/dashboard-sessions.png) | ![Session Detail](docs/images/dashboard-session-detail.png) | ![Session Modal](docs/images/dashboard-session-modal.png) |
 
