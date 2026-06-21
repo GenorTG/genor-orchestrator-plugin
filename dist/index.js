@@ -2234,6 +2234,56 @@ function _resolveBacklogCandidates(project, tasks, filterLabels, maxCount = 10) 
 // Used by the module-level manifest export. Inlined to avoid duplication
 // between TOOL_METADATA and api.registerTool calls.
 const _collectedToolMeta = [];
+// Static tool name array for metadata reflection at import time.
+// openclaw plugins build evaluates the module before register() is called,
+// so _collectedToolMeta would be empty. This static list ensures
+// contracts.tools is properly populated in openclaw.plugin.json.
+// Must be kept in sync with the actual api.registerTool calls below.
+const _staticToolNames = [
+    "orchestrator_advance_phase",
+    "orchestrator_auto_populate",
+    "orchestrator_backlog_add",
+    "orchestrator_backlog_dispatch",
+    "orchestrator_backlog_dispatch_all",
+    "orchestrator_backlog_list",
+    "orchestrator_backlog_update",
+    "orchestrator_check_models",
+    "orchestrator_cleanup_docs",
+    "orchestrator_clear_context",
+    "orchestrator_create_functionality",
+    "orchestrator_create_project",
+    "orchestrator_debug_issue",
+    "orchestrator_doctor",
+    "orchestrator_fix_docs_drift",
+    "orchestrator_generate_handoff",
+    "orchestrator_get_config",
+    "orchestrator_get_logs",
+    "orchestrator_get_models",
+    "orchestrator_get_project_docs",
+    "orchestrator_get_registered_sessions",
+    "orchestrator_get_routing",
+    "orchestrator_get_status",
+    "orchestrator_grill_with_docs",
+    "orchestrator_join_project",
+    "orchestrator_list_active_projects",
+    "orchestrator_log_decision",
+    "orchestrator_log_session",
+    "orchestrator_qa_approve",
+    "orchestrator_qa_reject",
+    "orchestrator_qa_submit",
+    "orchestrator_regenerate_state",
+    "orchestrator_register",
+    "orchestrator_release_project",
+    "orchestrator_set_context",
+    "orchestrator_setup_e2e_tests",
+    "orchestrator_setup_unit_tests",
+    "orchestrator_spawn_subagent",
+    "orchestrator_sync_project",
+    "orchestrator_unregister",
+    "orchestrator_verify_check",
+    "orchestrator_verify_provide_guidance",
+    "orchestrator_verify_work",
+];
 let _toolCount = 0;
 const PLUGIN_ID = "genor-orchestrator";
 const _plugin = definePluginEntry({
@@ -4892,7 +4942,7 @@ Focus specifically on: ${params.topic}` : "";
         api.registerTool({
             name: "orchestrator_verify_work",
             label: "Verify Work",
-            description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Call orchestrator_verify_check to advance the pipeline.",
+            description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Default max_iterations=3; after that the pipeline stalls at 'needs_guidance'. Use orchestrator_verify_provide_guidance to give direction and retry.",
             parameters: Type.Object({
                 task: Type.String({ description: "Description of the work to be done." }),
                 criteria: Type.String({ description: "Verification criteria — what the reviewer should check for." }),
@@ -4968,6 +5018,7 @@ Focus specifically on: ${params.topic}` : "";
                         worker_output_path: workerOutputPath,
                         reviewer_result: "",
                         fixer_output_path: fixerOutputPath,
+                        guidance: "",
                         artifacts: JSON.stringify({ workDir, reviewerPath, fixerOutputPath }),
                         messages: msgs,
                         created_ts: Math.floor(Date.now() / 1000),
@@ -5018,6 +5069,16 @@ Focus specifically on: ${params.topic}` : "";
                 }
                 if (run.phase === "fail") {
                     return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: "❌ FAILED — max iterations", reviewer_result: run.reviewer_result });
+                }
+                // Needs guidance — idle, waiting for user input
+                if (run.phase === "needs_guidance") {
+                    const hasGuidance = run.guidance && run.guidance.trim().length > 0;
+                    return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration,
+                        message: hasGuidance
+                            ? "⏳ Guidance provided — call check again to resume."
+                            : `⏳ Awaiting user guidance. Use orchestrator_verify_provide_guidance to give direction.`,
+                        reviewer_result: run.reviewer_result
+                    });
                 }
                 const msgs = JSON.parse(run.messages || "[]");
                 const maxIter = run.max_iterations || 3;
@@ -5146,11 +5207,12 @@ Focus specifically on: ${params.topic}` : "";
                     }
                     // FAIL — check max iterations
                     if (run.iteration >= maxIter) {
-                        if (transitionPhase(run.pipeline_id, "reviewing", "fail")) {
-                            cleanupPipeline(run.pipeline_id);
-                            logger.info("verification", `Pipeline ${run.pipeline_id}: FAILED after ${maxIter} iterations`);
+                        // Transition to needs_guidance instead of terminal fail.
+                        // Keep temp files — user can provide guidance and retry.
+                        if (transitionPhase(run.pipeline_id, "reviewing", "needs_guidance")) {
+                            logger.info("verification", `Pipeline ${run.pipeline_id}: needs guidance after ${maxIter} iterations`);
                         }
-                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations.`, reviewer_result: verdict });
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations. Use orchestrator_verify_provide_guidance to give direction and retry.`, reviewer_result: verdict });
                     }
                     // Spawn fixer
                     const nextIter = run.iteration + 1;
@@ -5290,8 +5352,208 @@ Focus specifically on: ${params.topic}` : "";
                     }
                 }
                 // ── Phase: error or unknown ──
+                // ═══════════════════════════════════════════════════════
+                //  Phase: GUIDED FIXING — fixer running with user guidance
+                // ═══════════════════════════════════════════════════════
+                if (run.phase === "guided_fixing") {
+                    const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+                    if (elapsed > 1800) {
+                        pushMsg("error", `Guided fixer #${run.iteration} timed out`);
+                        saveMsgs();
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Guided fixer #${run.iteration} timed out.` });
+                    }
+                    const fixerPath = run.fixer_output_path;
+                    if (!fixerPath || !fs.existsSync(fixerPath)) {
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_fixing", iteration: run.iteration, message: `⏳ Guided fixer still working...` });
+                    }
+                    const fixerOutput = fs.readFileSync(fixerPath, "utf-8");
+                    pushMsg("info", `Guided fixer #${run.iteration} completed`);
+                    // Write fixer output to worker path for review
+                    try {
+                        fs.writeFileSync(run.worker_output_path, fixerOutput, "utf-8");
+                    }
+                    catch (e) {
+                        logger.warn("verification", `Failed to update worker output: ${e.message}`);
+                    }
+                    // Clear old reviewer verdict
+                    const oldReviewerPath = path.join(workDir, "reviewer-verdict.md");
+                    try {
+                        if (fs.existsSync(oldReviewerPath))
+                            fs.unlinkSync(oldReviewerPath);
+                    }
+                    catch (e) {
+                        logger.warn("verification", `Failed to clear old verdict: ${e.message}`);
+                    }
+                    // Spawn final review
+                    const finalReviewerKey = `agent:main:subagent:verify-final-review-${crypto.randomUUID().slice(0, 8)}`;
+                    const finalReviewTask = [
+                        `[Verification Pipeline — Final Review]`,
+                        `Project: ${run.project}`,
+                        ``,
+                        `Final review after user-guided fix.`,
+                        ``,
+                        `## Task`,
+                        run.task,
+                        `## Criteria`,
+                        run.criteria,
+                        `## User Guidance`,
+                        run.guidance || "N/A",
+                        `## Fixed Output`,
+                        fixerOutput,
+                        `## Previous Review (FAIL)`,
+                        run.reviewer_result || "N/A",
+                        ``,
+                        `## Instructions`,
+                        `1. Check ALL previous issues were addressed.`,
+                        `2. Verify the user's guidance was followed.`,
+                        `3. Write verdict to: ${oldReviewerPath}`,
+                        `4. First line MUST be "PASS" or "FAIL".`,
+                    ].filter(Boolean).join("\n");
+                    // Atomic: guided_fixing → guided_review
+                    if (!transitionPhase(run.pipeline_id, "guided_fixing", "guided_review", {
+                        reviewer_session: finalReviewerKey,
+                        reviewer_result: "",
+                        messages: JSON.stringify(msgs),
+                    })) {
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `Guided fix already advanced to review.` });
+                    }
+                    try {
+                        await api.runtime.subagent.run({
+                            sessionKey: finalReviewerKey,
+                            message: finalReviewTask,
+                            model: undefined,
+                            lightContext: true,
+                        });
+                        pushMsg("info", `Final reviewer spawned`);
+                        saveMsgs();
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `✅ Guided fix complete. Final review spawned. Check again for verdict.` });
+                    }
+                    catch (err) {
+                        pushMsg("error", `Final review spawn failed: ${err.message}`);
+                        saveMsgs();
+                        return txt({ ok: false, error: `Final review spawn failed: ${err.message}` });
+                    }
+                }
+                // ═══════════════════════════════════════════════════════
+                //  Phase: GUIDED REVIEW — final review after user guidance
+                // ═══════════════════════════════════════════════════════
+                if (run.phase === "guided_review") {
+                    const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+                    if (elapsed > 1800) {
+                        pushMsg("error", `Final review timed out`);
+                        saveMsgs();
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Final review timed out.` });
+                    }
+                    const verdictPath = path.join(workDir, "reviewer-verdict.md");
+                    if (!fs.existsSync(verdictPath)) {
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `⏳ Final review still in progress...` });
+                    }
+                    const verdictContent = fs.readFileSync(verdictPath, "utf-8");
+                    const firstLine = verdictContent.trim().split("\n")[0].trim().toUpperCase();
+                    const passed = firstLine.startsWith("PASS");
+                    pushMsg("info", `Final review verdict: ${passed ? "PASS" : "FAIL"}`);
+                    updateVerificationRun(run.pipeline_id, { reviewer_result: verdictContent, messages: JSON.stringify(msgs) });
+                    if (passed) {
+                        if (transitionPhase(run.pipeline_id, "guided_review", "pass")) {
+                            cleanupPipeline(run.pipeline_id);
+                            logger.info("verification", `Pipeline ${run.pipeline_id}: PASSED after user guidance`);
+                        }
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: `✅ PASSED after user guidance!`, reviewer_result: verdictContent });
+                    }
+                    else {
+                        if (transitionPhase(run.pipeline_id, "guided_review", "fail")) {
+                            cleanupPipeline(run.pipeline_id);
+                            logger.info("verification", `Pipeline ${run.pipeline_id}: FINAL FAIL after user guidance`);
+                        }
+                        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `❌ FINAL FAIL after user guidance.`, reviewer_result: verdictContent });
+                    }
+                }
                 const recent = msgs.slice(-3).map((m) => m.msg).join("; ");
                 return txt({ ok: true, pipeline_id: run.pipeline_id, phase: run.phase, message: `State: "${run.phase}". ${recent}` });
+            },
+        });
+        // ═══════════════════════════════════════════════════════════
+        //  TOOL: orchestrator_verify_provide_guidance
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "orchestrator_verify_provide_guidance",
+            label: "Provide Guidance",
+            description: "Provide user guidance for a stalled verification pipeline. After max retries, the pipeline enters 'needs_guidance' and waits for direction. Call this to give guidance and resume with a guided fixer + final review.",
+            parameters: Type.Object({
+                pipeline_id: Type.String({ description: "Pipeline ID from orchestrator_verify_work." }),
+                guidance: Type.String({ description: "Your guidance for the fixer. Describe what needs to be fixed and how." }),
+            }),
+            async execute(_id, params) {
+                const reg = requireRegistration();
+                if (reg)
+                    return txt({ ok: false, error: reg });
+                if (!params.pipeline_id || !params.guidance) {
+                    return txt({ ok: false, error: "Both pipeline_id and guidance are required." });
+                }
+                const run = getVerificationRun(params.pipeline_id);
+                if (!run) {
+                    return txt({ ok: false, error: `Pipeline "${params.pipeline_id}" not found.` });
+                }
+                if (run.phase !== "needs_guidance") {
+                    return txt({ ok: false, error: `Pipeline is in "${run.phase}" phase, not "needs_guidance". Cannot provide guidance now.` });
+                }
+                // Store guidance
+                updateVerificationRun(run.pipeline_id, { guidance: params.guidance });
+                // Spawn guided fixer
+                const nextIter = (run.iteration || 1) + 1;
+                const workDir = pipelineWorkDir(run.pipeline_id);
+                const fixerPath = path.join(workDir, "fixer-output.md");
+                const fixerSessionKey = `agent:main:subagent:verify-guided-fixer-${crypto.randomUUID().slice(0, 8)}`;
+                const workerOutputPath = run.worker_output_path;
+                const workerOutput = workerOutputPath && fs.existsSync(workerOutputPath)
+                    ? fs.readFileSync(workerOutputPath, "utf-8")
+                    : "(no previous worker output)";
+                const fixerTask = [
+                    `[Verification Pipeline — Guided Fixer #${nextIter}]`,
+                    `Project: ${run.project}`,
+                    ``,
+                    `Fix the issues with guidance from the project owner.`,
+                    ``,
+                    `## Task`,
+                    run.task,
+                    `## Previous Worker Output`,
+                    workerOutput,
+                    `## Reviewer's FAIL Verdict`,
+                    run.reviewer_result || "N/A",
+                    `## User/Owner Guidance`,
+                    params.guidance,
+                    ``,
+                    `## Instructions`,
+                    `1. Follow the user/owner's guidance carefully.`,
+                    `2. Address ALL issues from the reviewer's verdict.`,
+                    `3. Write your complete fixed output to: ${fixerPath}`,
+                ].filter(Boolean).join("\n");
+                // Atomic: needs_guidance → guided_fixing
+                if (!transitionPhase(run.pipeline_id, "needs_guidance", "guided_fixing", {
+                    iteration: nextIter,
+                    fixer_session: fixerSessionKey,
+                    fixer_output_path: fixerPath,
+                    messages: "[]",
+                })) {
+                    return txt({ ok: false, error: "Pipeline was already advanced by another call." });
+                }
+                try {
+                    if (!fs.existsSync(workDir))
+                        fs.mkdirSync(workDir, { recursive: true });
+                    await api.runtime.subagent.run({
+                        sessionKey: fixerSessionKey,
+                        message: fixerTask,
+                        model: undefined,
+                        lightContext: true,
+                    });
+                    addLog("info", "verification", `Pipeline ${run.pipeline_id}: guided fixer #${nextIter} spawned`);
+                    return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_fixing", iteration: nextIter,
+                        message: `✅ Guidance received. Guided fixer #${nextIter} spawned. Call orchestrator_verify_check to check progress.`,
+                        guidance_received: true });
+                }
+                catch (err) {
+                    return txt({ ok: false, error: `Guided fixer spawn failed: ${err.message}` });
+                }
             },
         });
         // ═══════════════════════════════════════════════════════════
@@ -5553,7 +5815,12 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
             },
         },
         get tools() {
-            return _collectedToolMeta.length > 0 ? _collectedToolMeta : [];
+            // Prefer the full metadata when register() has populated it.
+            // Fall back to name-only entries for build-time reflection
+            // (openclaw plugins build evaluates the module before register()).
+            return _collectedToolMeta.length > 0
+                ? _collectedToolMeta
+                : _staticToolNames.map((name) => ({ name }));
         },
     },
     enumerable: false,

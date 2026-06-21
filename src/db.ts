@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS verification_runs (
     worker_output_path TEXT DEFAULT '',
     reviewer_result TEXT DEFAULT '',
     fixer_output_path TEXT DEFAULT '',
+    guidance TEXT DEFAULT '',
     artifacts TEXT DEFAULT '[]',
     messages TEXT DEFAULT '[]',
     created_ts INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -361,6 +362,18 @@ const MIGRATIONS: Migration[] = [
       // ── Record this migration ──
       db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(
         2, "Add FK constraints, fix logged_at type, normalize timestamps", now
+      );
+    },
+  },
+  {
+    version: 3,
+    name: "Add guidance column to verification_runs",
+    apply: () => {
+      const db = getDb();
+      db.exec("ALTER TABLE verification_runs ADD COLUMN guidance TEXT DEFAULT ''");
+      const now = Math.floor(Date.now() / 1000);
+      db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(
+        3, "Add guidance column to verification_runs", now
       );
     },
   },
@@ -1034,6 +1047,7 @@ export interface VerificationRun {
   worker_output_path: string;
   reviewer_result: string;
   fixer_output_path: string;
+  guidance: string;
   artifacts: string;
   messages: string;
   created_ts: number;
@@ -1045,7 +1059,7 @@ export function addVerificationRun(run: VerificationRun): void {
   db.prepare(`INSERT INTO verification_runs (
     pipeline_id, project, task, criteria, phase, iteration, max_iterations,
     worker_session, reviewer_session, fixer_session,
-    worker_output_path, reviewer_result, fixer_output_path,
+    worker_output_path, reviewer_result, fixer_output_path, guidance,
     artifacts, messages, created_ts, updated_ts
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     run.pipeline_id,
@@ -1061,6 +1075,7 @@ export function addVerificationRun(run: VerificationRun): void {
     run.worker_output_path || "",
     run.reviewer_result || "",
     run.fixer_output_path || "",
+    run.guidance || "",
     run.artifacts || "[]",
     run.messages || "[]",
     run.created_ts || Math.floor(Date.now() / 1000),
@@ -1078,7 +1093,7 @@ export function updateVerificationRun(pipelineId: string, updates: Partial<Verif
   const fields: string[] = [];
   const values: any[] = [];
   const allowed = ["phase", "iteration", "worker_session", "reviewer_session", "fixer_session",
-    "worker_output_path", "reviewer_result", "fixer_output_path", "artifacts", "messages"];
+    "worker_output_path", "reviewer_result", "fixer_output_path", "artifacts", "messages", "guidance"];
   for (const key of allowed) {
     if ((updates as any)[key] !== undefined) {
       fields.push(`${key} = ?`);

@@ -79,6 +79,7 @@
       "orchestrator_sync_project",
       "orchestrator_unregister",
       "orchestrator_verify_check",
+      "orchestrator_verify_provide_guidance",
       "orchestrator_verify_work"
     ]
   }
