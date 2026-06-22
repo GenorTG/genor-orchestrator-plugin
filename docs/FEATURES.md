@@ -82,7 +82,7 @@
 |----------|-------|
 | **Introduced** | v0.8.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_qa_submit`, `orchestrator_qa_approve`, `orchestrator_qa_reject` |
+| **Tools** | `genorch_qa_submit`, `genorch_qa_approve`, `genorch_qa_reject` |
 
 **What it does:** When `workflow.include_qa` is enabled, QA gate blocks the work→log phase transition. Submitting a finding via `qa_submit` auto-spawns an independent QA review subagent. `qa_approve` unblocks the transition; `qa_reject` returns to work phase with a reason.
 
@@ -93,7 +93,7 @@
 |----------|-------|
 | **Introduced** | v0.8.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_generate_handoff`, `orchestrator_grill_with_docs` |
+| **Tools** | `genorch_handoff_create`, `genorch_knowledge_quiz` |
 
 **What it does:** `generate_handoff` creates a compact RECOVERY.md document for agent switching — captures state, decisions, open questions, and next steps. `grill_with_docs` spawns a subagent that reads all project documentation and quizzes you to sharpen understanding.
 
@@ -104,7 +104,7 @@
 |----------|-------|
 | **Introduced** | v0.8.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_fix_docs_drift`, `orchestrator_regenerate_state`, `orchestrator_cleanup_docs` |
+| **Tools** | `genorch_project_sync_docs`, `genorch_project_rebuild_state`, `genorch_project_tidy_docs` |
 
 **What they do:**
 - `fix_docs_drift` — Scans STATE.md, CONTEXT.md, ROADMAP.md, README.md for stale version numbers, tool counts, test counts
@@ -118,7 +118,7 @@
 |----------|-------|
 | **Introduced** | v0.8.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_setup_unit_tests`, `orchestrator_setup_e2e_tests`, `orchestrator_debug_issue`, `orchestrator_create_functionality` |
+| **Tools** | `genorch_test_create_unit`, `genorch_test_create_e2e`, `genorch_issue_debug`, `genorch_feature_design` |
 
 **What they do:**
 - `setup_unit_tests` — Spawns subagent to set up test framework (vitest/jest/mocha/pytest) + initial tests
@@ -166,7 +166,7 @@
 |----------|-------|
 | **Introduced** | v0.7.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_backlog_add`, `orchestrator_backlog_list`, `orchestrator_backlog_update`, `orchestrator_backlog_dispatch`, `orchestrator_backlog_dispatch_all`, `orchestrator_create_project` |
+| **Tools** | `genorch_backlog_add`, `genorch_backlog_list`, `genorch_backlog_update`, `genorch_backlog_dispatch`, `genorch_backlog_dispatch_all`, `genorch_project_create` |
 | **Data file** | `projects/{name}/BACKLOG.json` |
 
 **What it does:** Full project backlog CRUD with priority levels (p0-p3), labels, dependency resolution, and parallel dispatch. Tasks are auto-assigned IDs (TASK-001, TASK-002, etc.). Dispatch picks highest-priority available tasks respecting dependencies.
@@ -178,7 +178,7 @@
 |----------|-------|
 | **Introduced** | v0.7.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_get_routing` |
+| **Tool** | `genorch_models_recommend` |
 
 **What it does:** Returns model quality metadata (tier: S/A/B/C, speed: fast/medium/slow, context window, status). Task category auto-inferred from task description. Blocked chain detection and reporting. Preset-aware routing with enriched output.
 
@@ -214,7 +214,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_get_models`, `orchestrator_check_models`, `orchestrator_get_routing` |
+| **Tools** | `genorch_models_list`, `genorch_models_check_routing`, `genorch_models_recommend` |
 | **Hook** | `before_model_resolve` — auto-routing per project |
 
 **What it does:** Per-project model allowlists with routing chains. The `before_model_resolve` hook picks the best available model for each project+task combination. 5 routing modes via presets (expanded in v0.7.0). Models tracked in `models.json` with tier, speed, and agent-ready ratings.
@@ -226,10 +226,10 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_register`, `orchestrator_unregister`, `orchestrator_get_registered_sessions` |
+| **Tools** | `genorch_session_register`, `genorch_session_unregister`, `genorch_session_list` |
 | **Hooks** | All 8 hooks guard for registered-only access |
 
-**What it does:** Sessions opt in via `orchestrator_register`. Until then, the plugin is completely invisible — no context injection, no routing, no tracking. Registration + session-project binding enables accurate logging and isolation.
+**What it does:** Sessions opt in via `genorch_session_register`. Until then, the plugin is completely invisible — no context injection, no routing, no tracking. Registration + session-project binding enables accurate logging and isolation.
 
 **Session lifecycle:** Register → Set Context → Work → Auto-log on session_end → Unregister.
 
@@ -240,7 +240,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_set_context`, `orchestrator_clear_context`, `orchestrator_release_project` |
+| **Tool** | `genorch_session_start_work`, `genorch_session_clear_work`, `genorch_project_leave` |
 | **Hook** | `before_prompt_build` — injects STATE.md + ROADMAP.md |
 
 **What it does:** When a session calls `set_context(project, task)`, it locks to that project. Every subsequent `before_prompt_build` hook injects the project's STATE.md and ROADMAP.md into the agent's context. The session is bound to one project until `release_project` is called.
@@ -270,7 +270,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_auto_populate` |
+| **Tool** | `genorch_models_auto_discover` |
 | **Cron** | Nightly at 3 AM |
 
 **What it does:** Syncs model inventory from OpenClaw gateway config. Scrapes the gateway for all configured models, merges into `models.json`, preserves manual ratings (tier, speed, status). Uses atomic writes (`.tmp` → `renameSync`). Also runs via cron nightly and on plugin init.
@@ -294,7 +294,7 @@
 | **Status** | ✅ Active |
 | **Hooks** | All 8 lifecycle hooks |
 
-**What it does:** Unregistered sessions are completely invisible to the plugin. No live-agents bleed, no context injection, no routing noise. Only sessions that called `orchestrator_register` trigger any hook behavior. Background/dreaming/cron/subagent sessions are filtered out.
+**What it does:** Unregistered sessions are completely invisible to the plugin. No live-agents bleed, no context injection, no routing noise. Only sessions that called `genorch_session_register` trigger any hook behavior. Background/dreaming/cron/subagent sessions are filtered out.
 
 ---
 
@@ -303,7 +303,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_spawn_subagent` |
+| **Tool** | `genorch_task_delegate` |
 | **Hook** | `subagent_spawned`, `subagent_ended` |
 
 **What it does:** Spawns subagents with orchestrator-managed project context. Routes model choice, injects full project context, and logs the subagent session under the current project. Supports taskName for stable handles and timeoutSeconds for budget control.
@@ -315,7 +315,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_log_session` |
+| **Tool** | `genorch_session_log` |
 | **Hook** | `session_end` — auto-logs |
 
 **What it does:** Every session end writes a structured entry to the per-project `sessions.json` (schema v2). Includes agent, model, status, task, duration, notes, project binding. Also logged to flat `session_log.md` for quick scanning. Automatic via hooks; manual available for retroactive entries.
@@ -327,7 +327,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_log_decision` |
+| **Tool** | `genorch_adr_log` |
 | **Data** | `adrs/` directory, auto-numbered markdown files |
 
 **What it does:** Logs Architecture Decision Records (ADRs) as auto-numbered markdown files. Captures context, decision, alternatives considered, and consequences. Stored in global `adrs/` and per-project `adr/` directories. Permanent, searchable record of design decisions.
@@ -339,7 +339,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_doctor` |
+| **Tool** | `genorch_system_diagnose` |
 
 **What it does:** Diagnoses and auto-fixes 4 categories of issues:
 1. **Sessions** — missing registration, synthetic key bridging
@@ -354,7 +354,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_sync_project` |
+| **Tool** | `genorch_project_sync_files` |
 
 **What it does:** Regenerates CONTEXT.md and KEY_FILES.md from the project source code on disk. Scans for all files, generates a structured index. Also runs automatically during maintenance ticks.
 
@@ -365,7 +365,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tools** | `orchestrator_list_active_projects`, `orchestrator_join_project` |
+| **Tools** | `genorch_project_list_active`, `genorch_project_join` |
 
 **What it does:** Discover projects with active sessions, then join them in one step. `join_project` handles registration + binding + context setting in a single call. Ideal for ad-hoc sessions and subagents contributing to existing projects.
 
@@ -405,7 +405,7 @@
 |----------|-------|
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
-| **Tool** | `orchestrator_advance_phase` |
+| **Tool** | `genorch_workflow_advance_phase` |
 
 **What it does:** 6-phase coding workflow enforcement: **Analyze → Plan → Document → Work → Log → Finish**. Phases configured per-project in `dashboard-config.json`. Supports skip-phase, QA gate (v0.8.0), and auto-commit on session end.
 

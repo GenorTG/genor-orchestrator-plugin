@@ -27,7 +27,7 @@ describe("PLUGIN-002d — Safeguards & Control Actions", () => {
       await registerPlugin(dd, plugin, api);
 
       // Register a session
-      await api.tools.get("orchestrator_register")!("", {});
+      await api.tools.get("genorch_session_register")!("", {});
 
       // Write a control action file for set_context
       const cd = path.join(dd, "control");

@@ -35,11 +35,11 @@ async function setupWithSession(
   const api = createMockApi();
   await registerPlugin(dd, plugin, api);
 
-  const regResult = await api.tools.get("orchestrator_register")!("", {});
+  const regResult = await api.tools.get("genorch_session_register")!("", {});
   const rr = typeof regResult?.details === "object" ? regResult.details : regResult;
   const sessionKey = rr?.session_key || "test-key";
 
-  await api.tools.get("orchestrator_set_context")!("", {
+  await api.tools.get("genorch_session_start_work")!("", {
     project: "test-project",
     task,
   });
@@ -110,7 +110,7 @@ describe("PLUGIN-002b — before_prompt_build hook", () => {
       const { hookHandler, sessionKey, api } = await setupWithSession();
 
       // Advance through a phase
-      await api.tools.get("orchestrator_advance_phase")!("", {});
+      await api.tools.get("genorch_workflow_advance_phase")!("", {});
 
       const result = await hookHandler({}, { sessionKey });
       expect(result.prependContext).toContain("PHASE: PLAN");

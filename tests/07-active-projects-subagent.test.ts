@@ -1,8 +1,8 @@
 /**
  * PLUGIN-001g — Active Projects & Subagent Tests
  *
- * Tests: orchestrator_list_active_projects,
- * orchestrator_spawn_subagent
+ * Tests: genorch_project_list_active,
+ * genorch_task_delegate
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import * as fs from "node:fs";
@@ -27,16 +27,16 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
   });
-  // ── orchestrator_list_active_projects ────────────────────
-  describe("orchestrator_list_active_projects", () => {
+  // ── genorch_project_list_active ────────────────────
+  describe("genorch_project_list_active", () => {
     it("should return all projects with session counts", async () => {
       // Register + set context to create project binding
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "test",
       });
-      const exec = api.tools.get("orchestrator_list_active_projects")!;
+      const exec = api.tools.get("genorch_project_list_active")!;
       const result = await unwrap(exec("", {}));
       expect(result).toHaveProperty("ok", true);
       expect(result).toHaveProperty("all_projects");
@@ -44,19 +44,19 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
     });
     it("should include session_logged counts for each project", async () => {
       // Log some sessions
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "session counting",
       });
-      api.tools.get("orchestrator_log_session")!("", {
+      api.tools.get("genorch_session_log")!("", {
         project: "test-project",
         task: "session 1",
         model: "gpt-4",
         agent: "Amy",
         status: "complete",
       });
-      const exec = api.tools.get("orchestrator_list_active_projects")!;
+      const exec = api.tools.get("genorch_project_list_active")!;
       const result = await unwrap(exec("", {}));
       // Find test-project in the list
       const tp = result.all_projects.find(
@@ -66,12 +66,12 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(tp.sessions_logged).toBeGreaterThanOrEqual(1);
     });
     it("should report active sessions for bound projects", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "active check",
       });
-      const exec = api.tools.get("orchestrator_list_active_projects")!;
+      const exec = api.tools.get("genorch_project_list_active")!;
       const result = await unwrap(exec("", {}));
       expect(result.active_project_count).toBeGreaterThanOrEqual(1);
       const active = result.active_projects.find(
@@ -81,10 +81,10 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(active.active_sessions).toBeGreaterThanOrEqual(1);
     });
   });
-  // ── orchestrator_spawn_subagent ──────────────────────────
-  describe("orchestrator_spawn_subagent", () => {
+  // ── genorch_task_delegate ──────────────────────────
+  describe("genorch_task_delegate", () => {
     it("should fail if session is not registered", async () => {
-      const exec = api.tools.get("orchestrator_spawn_subagent")!;
+      const exec = api.tools.get("genorch_task_delegate")!;
       const result = await unwrap(
         exec("", { task: "do something" }),
       );
@@ -92,8 +92,8 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result).toHaveProperty("error");
     });
     it("should fail if no active project", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      const exec = api.tools.get("orchestrator_spawn_subagent")!;
+      api.tools.get("genorch_session_register")!("", {});
+      const exec = api.tools.get("genorch_task_delegate")!;
       const result = await unwrap(
         exec("", { task: "do something" }),
       );
@@ -101,12 +101,12 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(result.error).toContain("No active project");
     });
     it("should spawn a subagent via runtime API", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "spawn test",
       });
-      const exec = api.tools.get("orchestrator_spawn_subagent")!;
+      const exec = api.tools.get("genorch_task_delegate")!;
       const result = await unwrap(
         exec("", {
           task: "Implement login feature",
@@ -125,12 +125,12 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(api.runtime.subagent.run).toHaveBeenCalledOnce();
     });
     it("should pass model override to subagent.run", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "model test",
       });
-      const exec = api.tools.get("orchestrator_spawn_subagent")!;
+      const exec = api.tools.get("genorch_task_delegate")!;
       const result = await unwrap(
         exec("", { task: "do work", model: "gpt-4" }),
       );
@@ -143,12 +143,12 @@ describe("PLUGIN-001g — Active Projects & Subagent", () => {
       expect(callArgs).toHaveProperty("message");
     });
     it("should respect timeoutSeconds upper bound", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_register")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "timeout test",
       });
-      const exec = api.tools.get("orchestrator_spawn_subagent")!;
+      const exec = api.tools.get("genorch_task_delegate")!;
       const result = await unwrap(
         exec("", {
           task: "long task",

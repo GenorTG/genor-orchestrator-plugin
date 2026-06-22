@@ -261,8 +261,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       await registerPlugin(dd, plugin, api);
 
       // Register and set context (needed so the hook can restore tracker state)
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "spawn drain test",
       });
@@ -345,8 +345,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       await registerPlugin(dd, plugin, api);
 
       // Register + set context so tracker is healthy
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project", task: "malformed test"
       });
 
@@ -389,8 +389,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       await registerPlugin(dd, plugin, api);
 
       // Register + set context to establish tracker state
-      await api.tools.get("orchestrator_register")!("", {});
-      const ctxResult = await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      const ctxResult = await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "restore test",
       });
@@ -416,8 +416,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       const api = createMockApi();
       await registerPlugin(dd, plugin, api);
 
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project", task: "rejection test"
       });
 
@@ -439,8 +439,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       const api = createMockApi();
       await registerPlugin(dd, plugin, api);
 
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project", task: "multi-fail test"
       });
 
@@ -566,8 +566,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       await registerPlugin(dd, plugin, api);
 
       // Register the main session (the session that will fire before_prompt_build)
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "Orchestrating spawns",
       });
@@ -617,8 +617,8 @@ describe("PLUGIN-002i — Full Spawn Flow with Background API", () => {
       const api = createMockApi();
       await registerPlugin(dd, plugin, api);
 
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project", task: "cleanup test"
       });
 

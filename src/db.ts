@@ -370,7 +370,9 @@ const MIGRATIONS: Migration[] = [
     name: "Add guidance column to verification_runs",
     apply: () => {
       const db = getDb();
-      db.exec("ALTER TABLE verification_runs ADD COLUMN guidance TEXT DEFAULT ''");
+      try {
+        db.exec("ALTER TABLE verification_runs ADD COLUMN guidance TEXT DEFAULT ''");
+      } catch { /* column may already exist — idempotent */ }
       const now = Math.floor(Date.now() / 1000);
       db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(
         3, "Add guidance column to verification_runs", now

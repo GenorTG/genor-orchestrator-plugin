@@ -34,7 +34,7 @@ async function setupDefault(): Promise<{
   await registerPlugin(dd, plugin, api);
 
   // Register a session to get a key
-  const regResult = await api.tools.get("orchestrator_register")!("", {});
+  const regResult = await api.tools.get("genorch_session_register")!("", {});
   const rr = typeof regResult?.details === "object" ? regResult.details : regResult;
   const sessionKey = rr?.session_key || "test-key";
 
@@ -103,11 +103,11 @@ describe("PLUGIN-002c — Session Lifecycle Hooks", () => {
       await sessionStart({ sessionKey, reason: "new" });
       
       // Set context + log (simulate work)
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "lifecycle test",
       });
-      await api.tools.get("orchestrator_log_session")!("", {
+      await api.tools.get("genorch_session_log")!("", {
         project: "test-project",
         task: "lifecycle test",
         model: "gpt-4",

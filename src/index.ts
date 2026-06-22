@@ -70,18 +70,18 @@ const PLUGIN_ROOT = path.resolve(__dirname, "..");
 //  942-946   • agent_end
 //  948-952   • gateway_stop
 //  954-956   TOOLS (40 registered via api.registerTool)
-//  957-969   • orchestrator_set_context
-//  970-978   • orchestrator_clear_context
-//  979-988   • orchestrator_get_status
-//  989-998   • orchestrator_get_config
-//  999-1014  • orchestrator_get_models
-//  1016-1026 • orchestrator_check_models
-//  1028-1036 • orchestrator_auto_populate
-//  1038-1058 • orchestrator_log_session
-//  1060-1075 • orchestrator_log_decision
-//  1077-1090 • orchestrator_get_logs
-//  1092-1104 • orchestrator_sync_project
-//  1106-1116 • orchestrator_get_project_docs
+//  957-969   • genorch_session_start_work
+//  970-978   • genorch_session_clear_work
+//  979-988   • genorch_status
+//  989-998   • genorch_config_show_routing
+//  999-1014  • genorch_models_list
+//  1016-1026 • genorch_models_check_routing
+//  1028-1036 • genorch_models_auto_discover
+//  1038-1058 • genorch_session_log
+//  1060-1075 • genorch_adr_log
+//  1077-1090 • genorch_logs_query
+//  1092-1104 • genorch_project_sync_files
+//  1106-1116 • genorch_project_docs_list
 //  1118-1121 BACKGROUND MAINTENANCE start
 //  1123-1129 SLASH COMMANDS: /genor, /genor-dashboard, /genor-status, /genor-help
 //  1131-1188 api.registerCommand({ name: "genor", ... })
@@ -590,7 +590,7 @@ class SessionTracker {
   set workflow(v: WorkflowTracker) { this._s.workflow = v; }
   // Per-session project contexts — keyed by sessionKey.
   // A session only gets project context injected if it explicitly
-  // registered via orchestrator_set_context. This prevents project
+  // registered via genorch_session_start_work. This prevents project
   // context from bleeding between unrelated sessions.
   private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
   // Subagent session registry — tracks which subagent keys belong to which parent
@@ -598,7 +598,7 @@ class SessionTracker {
   // the subagent with its real session key, not the parent's.
   private subagentRegistry: Map<string, { parentKey: string | null; project: string | null; task: string | null; startedAt: string }> = new Map();
   // Explicitly registered sessions — only these get orchestrator tracking.
-  // A session must call orchestrator_register before using any orchestrator
+  // A session must call genorch_session_register before using any orchestrator
   // features. This ensures no chat/logging session accidentally gets project
   // context injected into its prompts.
   private registeredSessions: Set<string> = new Set();
@@ -690,7 +690,7 @@ class SessionTracker {
   }
 
   getQaSummary(): string {
-    if (this.qaStatus === "none" && this.workflow.includeQa) return "❓ QA required — submit findings with orchestrator_qa_submit";
+    if (this.qaStatus === "none" && this.workflow.includeQa) return "❓ QA required — submit findings with genorch_qa_submit";
     if (this.qaStatus === "pending") return "⏳ QA pending — waiting for approval";
     if (this.qaStatus === "approved") return `✅ QA approved (${this.qaApprovedAt || "unknown"})`;
     if (this.qaStatus === "rejected") return "❌ QA rejected — fix issues and resubmit";
@@ -788,7 +788,7 @@ class SessionTracker {
           `❌ Binding violation: This session is already locked to project "${boundProject}". ` +
           `Cannot set context to "${project}". To work on a different project, start a completely ` +
           `new session (not a subagent — a fresh session). If you're done with "${boundProject}", ` +
-          `call orchestrator_release_project first to unbind this session.`
+          `call genorch_project_leave first to unbind this session.`
         );
       }
     }
@@ -990,7 +990,7 @@ function queueLiveAgents(reason: string, tracker: SessionTracker): void {
   // ═══ SCOPE: Only track registered sessions ═══
   // The plugin should be invisible to unregistered sessions.
   // No live agents data, no tracking, no context injection for sessions
-  // that haven't explicitly opted in via orchestrator_register.
+  // that haven't explicitly opted in via genorch_session_register.
   if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
 
   const main = tracker.toLiveState(reason);
@@ -1082,12 +1082,11 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
 
 const sessionTracker = new SessionTracker();
 
-/** Generate a stable default session key when hooks have not provided one yet.
- *  Used as fallback for orchestrator_register when session_start has not
- *  fired (e.g. sessions that existed before a gateway restart). */
-function agentDefaultSessionKey(): string {
-  if (sessionTracker.sessionKey) return sessionTracker.sessionKey;
-  return `agent:main:auto:${sessionTracker.currentAgent}:${sessionTracker.sessionStartTimestamp}`;
+/** Session key is the real OpenClaw gateway session ID, set by hooks.
+ *  We never generate synthetic keys — orchestrator uses the exact same
+ *  session ID that OpenClaw uses, ensuring 1:1 alignment. */
+function realSessionKey(): string | null {
+  return sessionTracker.sessionKey;
 }
 
 
@@ -2058,7 +2057,7 @@ function backlogUpdate(project: string, dataDir: string, opts: {
 }): { ok: boolean; error?: string } {
   try {
     const task = getBacklogTask(opts.id);
-    if (!task) return { ok: false, error: `Task ${opts.id} not found. Use orchestrator_backlog_list to see available tasks.` };
+    if (!task) return { ok: false, error: `Task ${opts.id} not found. Use genorch_backlog_list to see available tasks.` };
     const updates: any = {};
     if (opts.status && ["todo","in_progress","done","blocked"].includes(opts.status)) updates.status = opts.status;
     if (opts.priority && ["p0","p1","p2","p3"].includes(opts.priority)) updates.priority = opts.priority;
@@ -2300,7 +2299,7 @@ function getLogs(dataDir: string, opts: any, logger: OrchestratorLogger) {
 function requireRegistration(): string | null {
   const sk = sessionTracker.sessionKey;
   if (sk && sessionTracker.isSessionRegistered(sk)) return null;
-  return "This session is not registered with the orchestrator. Call orchestrator_register first to opt in to orchestrator tracking and project context injection.";
+  return "This session is not registered with the orchestrator. Call genorch_session_register first to opt in to orchestrator tracking and project context injection.";
 }
 
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
@@ -2351,12 +2350,12 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
 function clearContextFn(dataDir: string, logger: OrchestratorLogger) {
   // ═══ ENFORCE TASK COMPLETION LOGGING ═══
   // Before clearing context, require the session to have logged
-  // its completion via orchestrator_log_session.
+  // its completion via genorch_session_log.
   if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
     return {
       ok: false,
       error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-        `but hasn't logged completion. Call orchestrator_log_session with status="done" (or "blocked"/"failed") ` +
+        `but hasn't logged completion. Call genorch_session_log with status="done" (or "blocked"/"failed") ` +
         `first to document what was done. This ensures no work falls through the cracks.`,
     };
   }
@@ -2472,58 +2471,58 @@ const _collectedToolMeta: Array<{ name: string; label: string; description: stri
 // contracts.tools is properly populated in openclaw.plugin.json.
 // Must be kept in sync with the actual api.registerTool calls below.
 const _staticToolNames: string[] = [
-  "orchestrator_advance_phase",
-  "orchestrator_auto_populate",
-  "orchestrator_backlog_add",
-  "orchestrator_backlog_dispatch",
-  "orchestrator_backlog_dispatch_all",
-  "orchestrator_backlog_list",
-  "orchestrator_backlog_update",
-  "orchestrator_check_models",
-  "orchestrator_cleanup_docs",
-  "orchestrator_clear_context",
-  "orchestrator_create_functionality",
-  "orchestrator_create_project",
-  "orchestrator_debug_issue",
-  "orchestrator_doctor",
-  "orchestrator_fix_docs_drift",
-  "orchestrator_generate_handoff",
-  "orchestrator_get_config",
-  "orchestrator_get_logs",
-  "orchestrator_get_models",
-  "orchestrator_get_project_docs",
-  "orchestrator_get_registered_sessions",
-  "orchestrator_get_routing",
-  "orchestrator_get_status",
-  "orchestrator_grill_with_docs",
-  "orchestrator_join_project",
-  "orchestrator_list_active_projects",
-  "orchestrator_log_decision",
-  "orchestrator_log_session",
-  "orchestrator_qa_approve",
-  "orchestrator_qa_reject",
-  "orchestrator_qa_submit",
-  "orchestrator_regenerate_state",
-  "orchestrator_register",
-  "orchestrator_release_project",
-  "orchestrator_set_context",
-  "orchestrator_setup_e2e_tests",
-  "orchestrator_setup_unit_tests",
-  "orchestrator_spawn_subagent",
-  "orchestrator_sync_project",
-  "orchestrator_unregister",
-  "orchestrator_verify_check",
-  "orchestrator_verify_provide_guidance",
-  "orchestrator_verify_work",
+  "genorch_workflow_advance_phase",
+  "genorch_models_auto_discover",
+  "genorch_backlog_add",
+  "genorch_backlog_dispatch",
+  "genorch_backlog_dispatch_all",
+  "genorch_backlog_list",
+  "genorch_backlog_update",
+  "genorch_models_check_routing",
+  "genorch_project_tidy_docs",
+  "genorch_session_clear_work",
+  "genorch_feature_design",
+  "genorch_project_create",
+  "genorch_issue_debug",
+  "genorch_system_diagnose",
+  "genorch_project_sync_docs",
+  "genorch_handoff_create",
+  "genorch_config_show_routing",
+  "genorch_logs_query",
+  "genorch_models_list",
+  "genorch_project_docs_list",
+  "genorch_session_list",
+  "genorch_models_recommend",
+  "genorch_status",
+  "genorch_knowledge_quiz",
+  "genorch_project_join",
+  "genorch_project_list_active",
+  "genorch_adr_log",
+  "genorch_session_log",
+  "genorch_qa_approve",
+  "genorch_qa_reject",
+  "genorch_qa_submit",
+  "genorch_project_rebuild_state",
+  "genorch_session_register",
+  "genorch_project_leave",
+  "genorch_session_start_work",
+  "genorch_test_create_e2e",
+  "genorch_test_create_unit",
+  "genorch_task_delegate",
+  "genorch_project_sync_files",
+  "genorch_session_unregister",
+  "genorch_verify_pipeline_check",
+  "genorch_verify_pipeline_guide",
+  "genorch_verify_pipeline_start",
 ];
 let _toolCount = 0;
 
-const PLUGIN_ID = "genor-orchestrator";
+const PLUGIN_ID = "genorch";
 
 const _plugin: Record<string, any> = definePluginEntry({
   id: PLUGIN_ID,
-  name: "Genor's Orchestrator",
-  description: "Model routing, session logging, project management, dashboard, hooks, and context injection. Plugin-driven: orchestrator drives the workflow, LLM focuses on thinking.",
+  name: "Genorch",
+  description: "Model routing, session tracking, project management, dashboard, hooks, and context injection. Plugin-driven: orchestrator drives the workflow, LLM focuses on thinking.",
   register(api) {
     const cfg = api.pluginConfig as Record<string, any> || {};
     const dataDir = getDataDir(cfg.orchestratorDataDir as string | undefined);
@@ -2552,7 +2551,7 @@ const _plugin: Record<string, any> = definePluginEntry({
     //   2. Auto-populate model inventory from gateway config
     //   3. Create default dashboard-config.json if missing
     //   4. Create STATE.md for any existing project dirs that lack one
-    //   5. Run orchestrator_doctor checks to surface issues early
+    //   5. Run genorch_system_diagnose checks to surface issues early
     //   6. Write .FIRST_RUN marker so this only runs once
     const firstRunMarker = path.join(dataDir, ".FIRST_RUN");
     if (!fs.existsSync(firstRunMarker)) {
@@ -2602,7 +2601,7 @@ const _plugin: Record<string, any> = definePluginEntry({
             if (!fs.existsSync(statePath)) {
               let sessCount = countSessions(e);
               const loc = getProjectLocation(e, dataDir);
-              const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run orchestrator_sync_project)";
+              const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run genorch_project_sync_files)";
               const stateContent = [
                 `# STATE: ${e} — v0.0.0`,
                 "",
@@ -2617,9 +2616,9 @@ const _plugin: Record<string, any> = definePluginEntry({
                 "",
                 "1. Install the plugin in OpenClaw plugins config",
                 "2. Ensure 'orchestratorDataDir' points here",
-                "3. Call `orchestrator_register` to opt in",
-                "4. Call `orchestrator_set_context` to start work",
-                "5. Log sessions via `orchestrator_log_session`",
+                "3. Call `genorch_session_register` to opt in",
+                "4. Call `genorch_session_start_work` to start work",
+                "5. Log sessions via `genorch_session_log`",
               ].join("\n");
               fs.writeFileSync(statePath, stateContent, "utf-8");
               logger.info("boot", `First-run: created STATE.md for project "${e}"`);
@@ -2868,61 +2867,26 @@ const _plugin: Record<string, any> = definePluginEntry({
       try {
         const ctxSessionKey = hookCtx?.sessionKey || "";
         
-        // ═══ SCOPE: Skip routing for unregistered sessions ═══
-        // But still let bridge logic run for synthetic-to-real key migration
-        const isUnregistered = !ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey);
-        const allRegistered = sessionTracker.getRegisteredSessions();
-        const hasSynthetic = allRegistered.some(k => k.startsWith("agent:main:auto:"));
-        
-        // If this session isn't registered AND there are no synthetic keys to bridge,
-        // skip all the heavy logic
-        if (isUnregistered && !hasSynthetic) {
+        // ═══ SCOPE: Skip unregistered sessions entirely ═══
+        // No more synthetic keys — we use the real OpenClaw session ID 1:1.
+        // If this session isn't registered, skip all orchestration logic.
+        if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
           return;
         }
 
-        // ═══ SESSION ISOLATION: Resolve session key from hook context NOT tracker singleton ═══
+        // ═══ SESSION ISOLATION: Use the real gateway-provided key ═══
         // The hookCtx.sessionKey is the REAL gateway-provided key for THIS session.
         // sessionTracker.sessionKey is a singleton and may have been overwritten by
-        // another session's hooks. Always use ctxSessionKey for lookups.
-        //
-        // Bridge synthetic fallback keys (from orchestrator_register) with the real
-        // key so before_prompt_build injection works. CRITICAL: Only bridge from
-        // synthetic fallback keys (agent:main:auto:...) to real keys. NEVER bridge
-        // from one real key to another — that would cross-contaminate sessions.
+        // another session's hooks. Always prefer ctxSessionKey.
         if (ctxSessionKey) {
           const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
           if (!isBackground) {
-            // ── Synthetic-to-real bridge ──
-            // If the tracker was given a synthetic fallback key (agent:main:auto:...)
-            // by a prior tool call, bridge it to the real gateway key now.
-            const regSk = sessionTracker.sessionKey;
-            const isSyntheticToReal = regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:");
-            if (isSyntheticToReal) {
-              sessionTracker.registerSession(ctxSessionKey);
-              const existingCtx = sessionTracker.getSessionContext(regSk);
-              if (existingCtx) {
-                const { project, task } = existingCtx;
-                sessionTracker.sessionKey = ctxSessionKey;
-                sessionTracker.setContext(project, task || "");
-                sessionTracker.setStatus("running");
-              }
-              logger.info("hooks", `before_model_resolve: bridged synthetic→real: ${regSk} → ${ctxSessionKey}`);
-            }
-            
             // ── Session-scoped primary key adoption ──
-            // ONLY set sessionTracker.sessionKey and start() for the session that
-            // is actually registered. If a different session's hooks fire here,
-            // don't overwrite the tracker — use ctxSessionKey locally instead.
-            const isRegisteredForThisSession = sessionTracker.isSessionRegistered(ctxSessionKey);
-            if (isRegisteredForThisSession) {
-              if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
-                sessionTracker.start(ctxSessionKey, "resumed");
-              }
-              logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
-            } else {
-              // Unregistered session — still update status but don't pollute tracker key
-              logger.debug("hooks", `before_model_resolve: skippping tracker adoption for unregistered session: ${ctxSessionKey}`);
+            // Set the tracker's active key to the real gateway key for this session.
+            if (sessionTracker.sessionKey !== ctxSessionKey) {
+              sessionTracker.start(ctxSessionKey, "resumed");
             }
+            logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
           }
         }
         
@@ -3095,23 +3059,23 @@ const _plugin: Record<string, any> = definePluginEntry({
 You are working within Genor's Orchestrator plugin. Follow these rules automatically.
 
 `;
-        ctx += `**Workflow phases** (advance in order via \`orchestrator_advance_phase\`):
+        ctx += `**Workflow phases** (advance in order via \`genorch_workflow_advance_phase\`):
    analyze → plan → document → work → log → finish
 `;
         ctx += `**Enforced gates** (code blocks these if violated):
-• Must call \`orchestrator_register\` then \`orchestrator_set_context\` before project work
-• work→log: BLOCKED until QA approves (run \`orchestrator_qa_submit\` → \`orchestrator_qa_approve\`)\n• log→finish: BLOCKED until \`orchestrator_log_session\` AND \`orchestrator_generate_handoff\` complete
+• Must call \`genorch_session_register\` then \`genorch_session_start_work\` before project work
+• work→log: BLOCKED until QA approves (run \`genorch_qa_submit\` → \`genorch_qa_approve\`)\n• log→finish: BLOCKED until \`genorch_session_log\` AND \`genorch_handoff_create\` complete
 `;
         ctx += `**Model routing**: Orchestrator auto-selects the best model per task category.
-  Use \`orchestrator_get_routing\` to see recommendations. Don't override unless necessary.
+  Use \`genorch_models_recommend\` to see recommendations. Don't override unless necessary.
 `;
         ctx += `**Phase tools**:
   • Analyze: study context, output findings
-  • Plan: create step-by-step plan, ADR (\`orchestrator_log_decision\`)
-  • Document: \`orchestrator_log_decision\` for architecture decisions
+  • Plan: create step-by-step plan, ADR (\`genorch_adr_log\`)
+  • Document: \`genorch_adr_log\` for architecture decisions
   • Work: implement, then submit QA if enabled
-  • Log: \`orchestrator_log_session\` with status=complete
-  • Finish: \`orchestrator_generate_handoff\` before advancing
+  • Log: \`genorch_session_log\` with status=complete
+  • Finish: \`genorch_handoff_create\` before advancing
 
 `;
         
@@ -3141,11 +3105,11 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           };
           
           const phaseInstructions: Record<string, string> = {
-            analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call orchestrator_advance_phase when analysis is complete.",
-            plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call orchestrator_advance_phase when plan is approved.",
-            document: "📝 PHASE: DOCUMENT — Write an ADR (orchestrator_log_decision) or design doc covering the architecture, trade-offs, and key decisions. Call orchestrator_advance_phase when design is documented.",
-            work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with orchestrator_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call orchestrator_advance_phase when implementation is complete.`,
-            log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with orchestrator_generate_handoff (REQUIRED before finish). Then call orchestrator_advance_phase. (Docs are auto-synced when advancing to finish.)",
+            analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call genorch_workflow_advance_phase when analysis is complete.",
+            plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call genorch_workflow_advance_phase when plan is approved.",
+            document: "📝 PHASE: DOCUMENT — Write an ADR (genorch_adr_log) or design doc covering the architecture, trade-offs, and key decisions. Call genorch_workflow_advance_phase when design is documented.",
+            work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with genorch_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call genorch_workflow_advance_phase when implementation is complete.`,
+            log: "📊 PHASE: LOG — Log the session via genorch_session_log with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with genorch_handoff_create (REQUIRED before finish). Then call genorch_workflow_advance_phase. (Docs are auto-synced when advancing to finish.)",
             finish: "✅ PHASE: FINISH — All phases complete. Verifying git status and ensuring everything is committed.",
           };
           
@@ -3176,7 +3140,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           if (sessionTracker.handoffGenerated) {
             ctx += `\n📄 Handoff: ✅ Generated (${sessionTracker.handoffPath || "unknown"})`;
           } else if (phase === "log" || phase === "finish") {
-            ctx += `\n📄 Handoff: ❌ Not generated — run orchestrator_generate_handoff`;
+            ctx += `\n📄 Handoff: ❌ Not generated — run genorch_handoff_create`;
           }
         }
         
@@ -3252,14 +3216,14 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       if (!sessionTracker.workflow.includeQa) return null;
       if (sessionTracker.canAdvanceFromWork()) return null;
       const qs = sessionTracker.qaStatus;
-      if (qs === "none") return "QA review required before advancing. Run orchestrator_qa_submit with your findings first.";
-      if (qs === "pending") return "QA review is pending approval. A reviewer must call orchestrator_qa_approve or orchestrator_qa_reject.";
-      if (qs === "rejected") return "QA review rejected the previous submission. Fix the reported issues and call orchestrator_qa_submit again.";
-      return "QA gate not passed. Submit findings with orchestrator_qa_submit.";
+      if (qs === "none") return "QA review required before advancing. Run genorch_qa_submit with your findings first.";
+      if (qs === "pending") return "QA review is pending approval. A reviewer must call genorch_qa_approve or genorch_qa_reject.";
+      if (qs === "rejected") return "QA review rejected the previous submission. Fix the reported issues and call genorch_qa_submit again.";
+      return "QA gate not passed. Submit findings with genorch_qa_submit.";
     };
     const _checkHandoffGate = (): string | null => {
-      if (!sessionTracker.canFinish()) return "Handoff document required before finishing. Run orchestrator_generate_handoff to create one.";
-      if (!sessionTracker.loggedTaskCompletion) return "Task must be explicitly logged before finishing. Call orchestrator_log_session with status=complete first.";
+      if (!sessionTracker.canFinish()) return "Handoff document required before finishing. Run genorch_handoff_create to create one.";
+      if (!sessionTracker.loggedTaskCompletion) return "Task must be explicitly logged before finishing. Call genorch_session_log with status=complete first.";
       return null;
     };
     const _checkGitStatus = (): void => {
@@ -3287,7 +3251,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           adrCount = fs.readdirSync(projAdrsDir2).filter((f: string) => f.endsWith(".md")).length;
         }
       }
-      if (adrCount === 0) logger.warn("workflow", "No ADR found. Consider documenting decisions with orchestrator_log_decision before implementing.");
+      if (adrCount === 0) logger.warn("workflow", "No ADR found. Consider documenting decisions with genorch_adr_log before implementing.");
     };
 
     // ── Wrap api.registerTool to auto-collect metadata ──
@@ -3305,7 +3269,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     }) as typeof api.registerTool;
 
     api.registerTool({
-      name: "orchestrator_set_context",
+      name: "genorch_session_start_work",
       label: "Orchestrator Set Context",
       description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.",
       parameters: Type.Object({
@@ -3325,7 +3289,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_clear_context",
+      name: "genorch_session_clear_work",
       label: "Orchestrator Clear Context",
       description: "Clear active project context. Disables auto-routing and auto-logging.",
       parameters: Type.Object({}),
@@ -3337,16 +3301,16 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_register",
+      name: "genorch_session_register",
       label: "Orchestrator Register",
-      description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
+      description: "Register this session for orchestrator tracking. Must be called BEFORE genorch_session_start_work. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
         // Resolve the session key: prefer the hook-populated key, fall back
         // to a synthetic stable key derived from agent identity + timestamp.
         // session_start may not fire for sessions that existed before a
         // gateway restart, so we can't depend on it for existing sessions.
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt("error: no session key available");
         
         // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
@@ -3384,19 +3348,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_unregister",
+      name: "genorch_session_unregister",
       label: "Orchestrator Unregister",
       description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking. The session will no longer receive project context injection. Call this when project work is complete or the session should no longer be tracked.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt("error: no session key available");
         // ═══ ENFORCE TASK COMPLETION LOGGING ═══
         if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
           return txt({
             ok: false,
             error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-              `but hasn't logged completion. Call orchestrator_log_session with status="done" first ` +
+              `but hasn't logged completion. Call genorch_session_log with status="done" first ` +
               `to document what was done before unregistering.`,
           });
         }
@@ -3410,7 +3374,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_status",
+      name: "genorch_status",
       label: "Status",
       description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.",
       parameters: Type.Object({}),
@@ -3420,7 +3384,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_config",
+      name: "genorch_config_show_routing",
       label: "Config",
       description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.",
       parameters: Type.Object({}),
@@ -3430,7 +3394,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_models",
+      name: "genorch_models_list",
       label: "Models",
       description: "List models from the model inventory with optional filters (status, provider, search, project routing).",
       parameters: Type.Object({
@@ -3446,7 +3410,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_check_models",
+      name: "genorch_models_check_routing",
       label: "Check Models (routing)",
       description: "Check which models are eligible for a project, applying all routing filters. Typically handled by hooks; use for explicit inspection.",
       parameters: Type.Object({
@@ -3458,7 +3422,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_auto_populate",
+      name: "genorch_models_auto_discover",
       label: "Auto-Populate",
       description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.",
       parameters: Type.Object({}),
@@ -3470,7 +3434,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_log_session",
+      name: "genorch_session_log",
       label: "Log Session",
       description: "Log a completed session. Normally handled automatically by hooks; use for manual logging or retroactive entries.",
       parameters: Type.Object({
@@ -3506,7 +3470,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_log_decision",
+      name: "genorch_adr_log",
       label: "Log Decision",
       description: "Log an architecture decision as an auto-numbered ADR file.",
       parameters: Type.Object({
@@ -3525,7 +3489,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_logs",
+      name: "genorch_logs_query",
       label: "Logs",
       description: "Query orchestration logs: routing decisions, model choices, session activity, config changes.",
       parameters: Type.Object({
@@ -3540,7 +3504,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_sync_project",
+      name: "genorch_project_sync_files",
       label: "Orchestrator Sync Project",
       description: "Sync a project's files from disk into orchestrator-data. Generates CONTEXT.md, KEY_FILES.md. Requires project location to be configured.",
       parameters: Type.Object({
@@ -3556,7 +3520,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_project_docs",
+      name: "genorch_project_docs_list",
       label: "Orchestrator Get Project Docs",
       description: "List all orchestrator-managed documents for a project (CONTEXT.md, STATE.md, ROADMAP.md, RECOVERY.md, sessions.json, BACKLOG.json, etc.)",
       parameters: Type.Object({
@@ -3568,7 +3532,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_advance_phase",
+      name: "genorch_workflow_advance_phase",
       label: "Advance Workflow Phase",
       description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish). Use this after completing each step of the coding workflow.",
       parameters: Type.Object({
@@ -3615,8 +3579,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             if (qaErr) return txt({ ok: false, error: `QA review required. ${sessionTracker.getQaSummary()}`, qa_required: true, qa_status: sessionTracker.qaStatus });
           }
           if (currentPhase === "log") {
-            if (!sessionTracker.loggedTaskCompletion) return txt({ ok: false, error: "Task must be logged before finishing. Call orchestrator_log_session with status=complete.", log_required: true });
-            if (!sessionTracker.canFinish()) return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff.", handoff_required: true });
+            if (!sessionTracker.loggedTaskCompletion) return txt({ ok: false, error: "Task must be logged before finishing. Call genorch_session_log with status=complete.", log_required: true });
+            if (!sessionTracker.canFinish()) return txt({ ok: false, error: "Handoff document required before finishing. Run genorch_handoff_create.", handoff_required: true });
             tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
@@ -3652,7 +3616,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_add",
+      name: "genorch_backlog_add",
       label: "Add Backlog Task",
       description: "Add a task to a project's backlog.",
       parameters: Type.Object({
@@ -3671,7 +3635,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_backlog_list",
+      name: "genorch_backlog_list",
       label: "List Backlog",
       description: "List backlog tasks with optional filters.",
       parameters: Type.Object({
@@ -3688,7 +3652,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_backlog_update",
+      name: "genorch_backlog_update",
       label: "Update Backlog Task",
       description: "Update a backlog task's status, priority, assignment, or labels.",
       parameters: Type.Object({
@@ -3711,7 +3675,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_get_routing",
+      name: "genorch_models_recommend",
       label: "Get Model Routing",
       description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation). Returns the ordered model list and best available model for the given project and category.",
       parameters: Type.Object({
@@ -3721,7 +3685,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       async execute(_id: string, params: any) {
         const proj = params.project || sessionTracker.currentProject;
         if (!proj) {
-          return txt({ ok: false, error: "No project specified and no project context set. Use orchestrator_set_context first or pass a project name." });
+          return txt({ ok: false, error: "No project specified and no project context set. Use genorch_session_start_work first or pass a project name." });
         }
         const pc = getProjectConfig(proj);
         if (!pc) {
@@ -3840,9 +3804,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_registered_sessions",
+      name: "genorch_session_list",
       label: "Get Registered Sessions",
-      description: "List all currently registered orchestrator sessions with their project context, status, and activity. Only sessions that explicitly called orchestrator_register are tracked.",
+      description: "List all currently registered orchestrator sessions with their project context, status, and activity. Only sessions that explicitly called genorch_session_register are tracked.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
         const keys = sessionTracker.getRegisteredSessions();
@@ -3865,7 +3829,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_doctor",
+      name: "genorch_system_diagnose",
       label: "Orchestrator Doctor",
       description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.",
       parameters: Type.Object({
@@ -3885,38 +3849,25 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (checks === "all" || checks === "sessions") {
           const hk = sessionTracker.sessionKey;
           if (!hk) {
-            addIssue("No session key set. orchestrator_register will use synthetic fallback.");
+            addIssue("No session key set. genorch_session_register will use synthetic fallback.");
             if (autoFix) {
-              const sk = agentDefaultSessionKey();
-              sessionTracker.registerSession(sk);
-              sessionTracker.sessionKey = sk;
-              addFix("Registered synthetic key: " + sk);
+              const sk = realSessionKey();
+              if (sk) {
+                sessionTracker.registerSession(sk);
+                sessionTracker.sessionKey = sk;
+                addFix("Registered session: " + sk);
+              }
             }
           } else {
             if (!sessionTracker.isSessionRegistered(hk)) {
-              addIssue("Session key " + hk + " is not registered. Call orchestrator_register.");
+              addIssue("Session key " + hk + " is not registered. Call genorch_session_register.");
               if (autoFix) { sessionTracker.registerSession(hk); addFix("Registered session: " + hk); }
             }
           }
+          // Synthetic keys no longer exist. We use real OpenClaw session IDs 1:1.
           const allRegSessions = sessionTracker.getRegisteredSessions();
-          const syntheticKeys = allRegSessions.filter(k => k.startsWith("agent:main:auto:"));
-          const realKeys = allRegSessions.filter(k => !k.startsWith("agent:main:auto:"));
-          if (syntheticKeys.length > 0 && realKeys.length === 0) {
-            addIssue("Only synthetic keys registered - project context injection may not fire because the gateway uses real session keys in hooks.");
-          }
-          if (autoFix && syntheticKeys.length > 0 && realKeys.length === 0 && hk && !hk.startsWith("agent:main:auto:")) {
-            for (const sk of syntheticKeys) {
-              const ctx = sessionTracker.getSessionContext(sk);
-              sessionTracker.registerSession(hk);
-              if (ctx) {
-                sessionTracker.sessionKey = hk;
-                sessionTracker.setContext(ctx.project, ctx.task || "");
-                sessionTracker.setStatus("running");
-                addFix("Copied context \"" + ctx.project + "\" from " + sk + " to real key " + hk);
-              } else {
-                addFix("Registered real key " + hk + " (no context to transfer)");
-              }
-            }
+          if (allRegSessions.length === 0) {
+            addIssue("No sessions registered. Use genorch_session_register.");
           }
         }
 
@@ -3928,7 +3879,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             .map(k => ({ key: k, ctx: sessionTracker.getSessionContext(k) }))
             .filter((x): x is { key: string; ctx: NonNullable<ReturnType<typeof sessionTracker.getSessionContext>> } => !!x.ctx);
           if (!ctx && allCtxRaw.length === 0) {
-            addIssue("No project context set. Use orchestrator_set_context to activate a project.");
+            addIssue("No project context set. Use genorch_session_start_work to activate a project.");
           } else if (!ctx && allCtxRaw.length > 0) {
             addIssue("Context is set for other sessions but NOT the current one. Session key may differ.");
             if (autoFix && allCtxRaw[0].ctx) {
@@ -3949,8 +3900,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         // -- 3. DATA HEALTH --
         if (checks === "all" || checks === "data") {
           const mc = countModels();
-          if (mc.total === 0) addIssue("Model inventory is empty. Run orchestrator_auto_populate.");
-          else if (mc.active === 0) addIssue("Model inventory has 0 active models. Run orchestrator_auto_populate.");
+          if (mc.total === 0) addIssue("Model inventory is empty. Run genorch_models_auto_discover.");
+          else if (mc.active === 0) addIssue("Model inventory has 0 active models. Run genorch_models_auto_discover.");
           // Check DB has global config
           const dbCfg: any = getAllGlobalConfig();
           if (!dbCfg || (!dbCfg.free_only_mode && !(dbCfg.disabled_models?.length))) {
@@ -4041,7 +3992,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                       ``,
                       `## Current State`,
                       ``,
-                      `_(Auto-generated by orchestrator_doctor. Update this file as the project evolves to keep docs in sync with reality.)_`,
+                      `_(Auto-generated by genorch_system_diagnose. Update this file as the project evolves to keep docs in sync with reality.)_`,
                     ].join("\n");
                     fs.writeFileSync(path.join(pp, "STATE.md"), stateContent, "utf-8");
                     addFix(`Auto-created STATE.md for project "${e}"`);
@@ -4072,7 +4023,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_release_project",
+      name: "genorch_project_leave",
       label: "Orchestrator Release Project",
       description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project.",
       parameters: Type.Object({
@@ -4081,19 +4032,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
-        const bound = sessionTracker.getBoundProject(sk);
+        const sk = sessionTracker.sessionKey;
+        const bound = sk ? sessionTracker.getBoundProject(sk) : null;
         if (!bound) return txt({ ok: false, error: "No project binding to release." });
         // ═══ ENFORCE TASK COMPLETION LOGGING ═══
         if (!sessionTracker.loggedTaskCompletion) {
           return txt({
             ok: false,
             error: `❌ Task not logged. Session is bound to project "${bound}" but hasn't logged completion. ` +
-              `Call orchestrator_log_session with status="done" first to document what was done ` +
+              `Call genorch_session_log with status="done" first to document what was done ` +
               `before releasing the binding. Use force=true to override this check.`,
           });
         }
-        const released = sessionTracker.releaseProjectBinding(sk);
+        const released = sessionTracker.releaseProjectBinding(sk ?? undefined);
         sessionTracker.trackAction(`released_project: ${released}`);
         queueLiveAgents("release_project", sessionTracker);
         logger.info("sessions", `Released project binding: ${released} (session=${sk})`);
@@ -4106,7 +4057,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_list_active_projects",
+      name: "genorch_project_list_active",
       label: "Orchestrator List Active Projects",
       description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.",
       parameters: Type.Object({}),
@@ -4146,15 +4097,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_join_project",
+      name: "genorch_project_join",
       label: "Orchestrator Join Project",
       description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project name to join. Use orchestrator_list_active_projects first to see active projects." }),
+        project: Type.String({ description: "Project name to join. Use genorch_project_list_active first to see active projects." }),
         task: Type.String({ description: "Task description for what you're joining to do." }),
       }),
       async execute(_id: string, params: any) {
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt({ ok: false, error: "No session key available." });
 
         // Auto-register this session
@@ -4192,7 +4143,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_spawn_subagent",
+      name: "genorch_task_delegate",
       label: "Orchestrator Spawn Subagent",
       description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.",
       parameters: Type.Object({
@@ -4203,9 +4154,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       }),
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: "Session not registered. Call orchestrator_register or orchestrator_join_project first." });
+        if (reg) return txt({ ok: false, error: "Session not registered. Call genorch_session_register or genorch_project_join first." });
         if (!sessionTracker.currentProject) {
-          return txt({ ok: false, error: "No active project. Set project context first with orchestrator_set_context or orchestrator_join_project." });
+          return txt({ ok: false, error: "No active project. Set project context first with genorch_session_start_work or genorch_project_join." });
         }
 
         const project = sessionTracker.currentProject;
@@ -4263,7 +4214,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             model: model || "auto-routed",
             timeout_seconds: timeoutSeconds,
             run_id: spawnResult.runId,
-            message: `Subagent "${taskName}" spawned successfully (runId: ${spawnResult.runId}). Use orchestrator_spawn_subagent to track completion.`,
+            message: `Subagent "${taskName}" spawned successfully (runId: ${spawnResult.runId}). Use genorch_task_delegate to track completion.`,
           });
         } catch (err: any) {
           logger.error("subagent", `Spawn failed for ${taskName}: ${err.message}`);
@@ -4277,7 +4228,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_dispatch",
+      name: "genorch_backlog_dispatch",
       label: "Backlog Dispatch",
       description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Use this to automate task assignment. Respects dependencies, labels, and priority ordering.",
       parameters: Type.Object({
@@ -4291,7 +4242,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         const project = params.project || sessionTracker.currentProject;
-        if (!project) return txt({ ok: false, error: "No project selected. Set context via orchestrator_set_context or pass project param." });
+        if (!project) return txt({ ok: false, error: "No project selected. Set context via genorch_session_start_work or pass project param." });
         const tasks = listBacklogTasks(project);
 
         // Specific-task mode — filter early before shared resolution
@@ -4341,7 +4292,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             labels,
             status: task.status,
             depends_on: deps,
-            spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use orchestrator_spawn_subagent or sessions_spawn to dispatch this task.`,
+            spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use genorch_task_delegate or sessions_spawn to dispatch this task.`,
           });
         }
 
@@ -4354,7 +4305,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_dispatch_all",
+      name: "genorch_backlog_dispatch_all",
       label: "Backlog Dispatch All",
       description: "Dispatch ALL currently available backlog tasks up to a max count, for parallel sub-agent execution. Returns spawn instructions for each task. Respects dependency resolution — only returns tasks whose dependencies are complete.",
       parameters: Type.Object({
@@ -4396,7 +4347,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_submit",
+      name: "genorch_qa_submit",
       label: "QA Submit Finding",
       description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.",
       parameters: Type.Object({
@@ -4461,7 +4412,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
         return txt({
           ok: true,
-          message: "QA finding submitted. Waiting for review (call orchestrator_qa_approve or orchestrator_qa_reject).",
+          message: "QA finding submitted. Waiting for review (call genorch_qa_approve or genorch_qa_reject).",
           qa_status: sessionTracker.qaStatus,
           findings_count: sessionTracker.qaFindings.length,
           review_spawned: spawnResult?.runId ? true : false,
@@ -4476,7 +4427,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_approve",
+      name: "genorch_qa_approve",
       label: "QA Approve",
       description: "Approve the current work. Unblocks the work→log transition when QA gate is active.",
       parameters: Type.Object({}),
@@ -4484,7 +4435,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         if (sessionTracker.qaStatus !== "pending") {
-          return txt({ ok: false, error: "No pending QA review to approve. Submit findings with orchestrator_qa_submit first." });
+          return txt({ ok: false, error: "No pending QA review to approve. Submit findings with genorch_qa_submit first." });
         }
         sessionTracker.setQaStatus("approved");
         sessionTracker.setStatus("running");
@@ -4502,7 +4453,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_reject",
+      name: "genorch_qa_reject",
       label: "QA Reject",
       description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.",
       parameters: Type.Object({
@@ -4541,7 +4492,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_generate_handoff",
+      name: "genorch_handoff_create",
       label: "Generate Handoff",
       description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.",
       parameters: Type.Object({}),
@@ -4551,7 +4502,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const project = sessionTracker.currentProject;
         const task = sessionTracker.currentTask || "Unnamed task";
         if (!project) {
-          return txt({ ok: false, error: "No active project. Set context with orchestrator_set_context first." });
+          return txt({ ok: false, error: "No active project. Set context with genorch_session_start_work first." });
         }
         
         const projDir2 = projDir(project, dataDir);
@@ -4615,7 +4566,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_create_project",
+      name: "genorch_project_create",
       label: "Orchestrator Create Project",
       description: "Create a new project in orchestrator-data. Sets up the project directory, STATE.md, and dashboard-config.json entry. Returns the project info and a session spawn link.",
       parameters: Type.Object({
@@ -4676,7 +4627,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             spawnInfo = {
               scheduled: true,
               task: spawnTask,
-              note: "Session spawn marker created. A dedicated session will be available shortly. Use orchestrator_join_project to start working.",
+              note: "Session spawn marker created. A dedicated session will be available shortly. Use genorch_project_join to start working.",
             };
           } catch (e: any) {
             logger.warn("project", `Spawn scheduling failed: ${e.message}`);
@@ -4690,7 +4641,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           description: params.description || null,
           state_md: path.join(projDir2, "STATE.md"),
           spawn: spawnInfo,
-          message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call orchestrator_set_context to start working, or orchestrator_join_project if you're in a different session.`,
+          message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call genorch_session_start_work to start working, or genorch_project_join if you're in a different session.`,
         });
       },
     });
@@ -4728,7 +4679,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
     // ── Quick Action: Grill Me With Docs ───────────────────────
     api.registerTool({
-      name: "orchestrator_grill_with_docs",
+      name: "genorch_knowledge_quiz",
       label: "Grill Me With Docs",
       description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.",
       parameters: Type.Object({
@@ -4772,7 +4723,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Clean Up & Organize Docs ────────────────
     api.registerTool({
-      name: "orchestrator_cleanup_docs",
+      name: "genorch_project_tidy_docs",
       label: "Clean Up & Organize Docs",
       description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.",
       parameters: Type.Object({
@@ -4818,7 +4769,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Set Up Unit Tests ───────────────────────
     api.registerTool({
-      name: "orchestrator_setup_unit_tests",
+      name: "genorch_test_create_unit",
       label: "Set Up Unit Tests",
       description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.",
       parameters: Type.Object({
@@ -4864,7 +4815,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Set Up E2E Tests ────────────────────────
     api.registerTool({
-      name: "orchestrator_setup_e2e_tests",
+      name: "genorch_test_create_e2e",
       label: "Set Up E2E Tests",
       description: "Spawns a subagent that sets up end-to-end test infrastructure and creates initial E2E test scenarios.",
       parameters: Type.Object({
@@ -4910,7 +4861,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Debug Issue ─────────────────────────────
     api.registerTool({
-      name: "orchestrator_debug_issue",
+      name: "genorch_issue_debug",
       label: "Debug Issue",
       description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.",
       parameters: Type.Object({
@@ -4959,7 +4910,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Create New Functionality ────────────────
     api.registerTool({
-      name: "orchestrator_create_functionality",
+      name: "genorch_feature_design",
       label: "Create New Functionality",
       description: "Spawns a subagent to design and implement new features or functionality in the project.",
       parameters: Type.Object({
@@ -5012,7 +4963,7 @@ Focus specifically on: ${params.topic}` : "";
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_fix_docs_drift",
+      name: "genorch_project_sync_docs",
       label: "Fix Docs Drift",
       description: "Scans project documentation for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current project state.",
       parameters: Type.Object({
@@ -5139,7 +5090,7 @@ Focus specifically on: ${params.topic}` : "";
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_regenerate_state",
+      name: "genorch_project_rebuild_state",
       label: "Regenerate State",
       description: "Regenerate STATE.md from the project state event log (SQLite). Computed from actual events, no LLM involved.",
       parameters: Type.Object({
@@ -5208,9 +5159,9 @@ Focus specifically on: ${params.topic}` : "";
     }
 
     api.registerTool({
-      name: "orchestrator_verify_work",
+      name: "genorch_verify_pipeline_start",
       label: "Verify Work",
-      description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Default max_iterations=3; after that the pipeline stalls at 'needs_guidance'. Use orchestrator_verify_provide_guidance to give direction and retry.",
+      description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Default max_iterations=3; after that the pipeline stalls at 'needs_guidance'. Use genorch_verify_pipeline_guide to give direction and retry.",
       parameters: Type.Object({
         task: Type.String({ description: "Description of the work to be done." }),
         criteria: Type.String({ description: "Verification criteria — what the reviewer should check for." }),
@@ -5304,7 +5255,7 @@ Focus specifically on: ${params.topic}` : "";
             iteration: 1,
             max_iterations: maxIter,
             worker_session: workerSessionKey,
-            message: `✅ Pipeline started. Worker #1 spawned. Call orchestrator_verify_check pipeline_id="${pipelineId}" to check.`,
+            message: `✅ Pipeline started. Worker #1 spawned. Call genorch_verify_pipeline_check pipeline_id="${pipelineId}" to check.`,
           });
         } catch (err: any) {
           logger.error("verification", `Pipeline ${pipelineId} spawn failed: ${err.message}`);
@@ -5315,11 +5266,11 @@ Focus specifically on: ${params.topic}` : "";
     });
 
     api.registerTool({
-      name: "orchestrator_verify_check",
+      name: "genorch_verify_pipeline_check",
       label: "Verify Check Progress",
       description: "Check and advance a multi-agent verification pipeline. Reads the current state, checks if the current subagent has completed (via output marker file), and spawns the next agent in the pipeline. Call repeatedly to advance through work→review→fix→loop.",
       parameters: Type.Object({
-        pipeline_id: Type.String({ description: "Pipeline ID from orchestrator_verify_work." }),
+        pipeline_id: Type.String({ description: "Pipeline ID from genorch_verify_pipeline_start." }),
       }),
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
@@ -5348,7 +5299,7 @@ Focus specifically on: ${params.topic}` : "";
           return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration,
             message: hasGuidance
               ? "⏳ Guidance provided — call check again to resume."
-              : `⏳ Awaiting user guidance. Use orchestrator_verify_provide_guidance to give direction.`,
+              : `⏳ Awaiting user guidance. Use genorch_verify_pipeline_guide to give direction.`,
             reviewer_result: run.reviewer_result
           });
         }
@@ -5494,7 +5445,7 @@ Focus specifically on: ${params.topic}` : "";
             if (transitionPhase(run.pipeline_id, "reviewing", "needs_guidance")) {
               logger.info("verification", `Pipeline ${run.pipeline_id}: needs guidance after ${maxIter} iterations`);
             }
-            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations. Use orchestrator_verify_provide_guidance to give direction and retry.`, reviewer_result: verdict });
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations. Use genorch_verify_pipeline_guide to give direction and retry.`, reviewer_result: verdict });
           }
 
           // Spawn fixer
@@ -5756,15 +5707,15 @@ Focus specifically on: ${params.topic}` : "";
     });
 
     // ═══════════════════════════════════════════════════════════
-    //  TOOL: orchestrator_verify_provide_guidance
+    //  TOOL: genorch_verify_pipeline_guide
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_verify_provide_guidance",
+      name: "genorch_verify_pipeline_guide",
       label: "Provide Guidance",
       description: "Provide user guidance for a stalled verification pipeline. After max retries, the pipeline enters 'needs_guidance' and waits for direction. Call this to give guidance and resume with a guided fixer + final review.",
       parameters: Type.Object({
-        pipeline_id: Type.String({ description: "Pipeline ID from orchestrator_verify_work." }),
+        pipeline_id: Type.String({ description: "Pipeline ID from genorch_verify_pipeline_start." }),
         guidance: Type.String({ description: "Your guidance for the fixer. Describe what needs to be fixed and how." }),
       }),
       async execute(_id: string, params: any) {
@@ -5838,7 +5789,7 @@ Focus specifically on: ${params.topic}` : "";
           });
           addLog("info", "verification", `Pipeline ${run.pipeline_id}: guided fixer #${nextIter} spawned`);
           return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_fixing", iteration: nextIter,
-            message: `✅ Guidance received. Guided fixer #${nextIter} spawned. Call orchestrator_verify_check to check progress.`,
+            message: `✅ Guidance received. Guided fixer #${nextIter} spawned. Call genorch_verify_pipeline_check to check progress.`,
             guidance_received: true });
         } catch (err: any) {
           return txt({ ok: false, error: `Guided fixer spawn failed: ${err.message}` });
@@ -5936,7 +5887,7 @@ Focus specifically on: ${params.topic}` : "";
         try {
           const proj = sessionTracker.currentProject;
           if (!proj) {
-            return { text: "**\u26a0 No project context.** Set context first with `/genor-set-context project=... task=...` or use `orchestrator_set_context`.", continueAgent: false };
+            return { text: "**\u26a0 No project context.** Set context first with `/genor-set-context project=... task=...` or use `genorch_session_start_work`.", continueAgent: false };
           }
           const loc = getProjectLocation(proj, dataDir);
           if (!loc || !fs.existsSync(path.join(loc, ".git"))) {
@@ -6021,10 +5972,10 @@ Focus specifically on: ${params.topic}` : "";
           const issues: string[] = [];
           // Session key check
           if (!hk) issues.push("No session key set.");
-          else if (!sessionTracker.isSessionRegistered(hk)) issues.push("Session not registered. Call orchestrator_register.");
+          else if (!sessionTracker.isSessionRegistered(hk)) issues.push("Session not registered. Call genorch_session_register.");
           // Context check
           const ctx = hk ? sessionTracker.getSessionContext(hk) : null;
-          if (!ctx) issues.push("No project context set. Use orchestrator_set_context.");
+          if (!ctx) issues.push("No project context set. Use genorch_session_start_work.");
           // Log age check
           const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
           if (fs.existsSync(logPath)) {
@@ -6046,7 +5997,7 @@ Focus specifically on: ${params.topic}` : "";
           } else {
             lines.push("", "**" + issues.length + " issue(s) found:**", "");
             for (const iss of issues) lines.push(iss);
-            lines.push("", "**Tip:** Use orchestrator_doctor (tool) with fix=true to auto-repair.");
+            lines.push("", "**Tip:** Use genorch_system_diagnose (tool) with fix=true to auto-repair.");
           }
           return { text: lines.join("\n"), continueAgent: false };
         } catch (e: any) {

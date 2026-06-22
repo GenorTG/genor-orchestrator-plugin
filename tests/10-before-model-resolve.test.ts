@@ -45,7 +45,7 @@ async function setupHookTest(
   await registerPlugin(dd, plugin, api);
 
   // Simulate registration and capture the generated session key
-  const registerResult = await api.tools.get("orchestrator_register")!("", {});
+  const registerResult = await api.tools.get("genorch_session_register")!("", {});
   const registerObj = typeof registerResult === "object" ? registerResult :
     (registerResult && typeof registerResult === "object" && "details" in registerResult
       ? registerResult.details
@@ -53,7 +53,7 @@ async function setupHookTest(
   const sessionKey = registerObj?.session_key || "test-key";
 
   // Set project context
-  await api.tools.get("orchestrator_set_context")!("", {
+  await api.tools.get("genorch_session_start_work")!("", {
     project: "test-project",
     task,
   });

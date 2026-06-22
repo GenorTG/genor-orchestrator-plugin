@@ -1,8 +1,8 @@
 /**
  * PLUGIN-001c — Session Logging & ADR Tests
  *
- * Tests: orchestrator_log_session, orchestrator_log_decision,
- * orchestrator_get_logs — schema enforcement, timestamp defaults,
+ * Tests: genorch_session_log, genorch_adr_log,
+ * genorch_logs_query — schema enforcement, timestamp defaults,
  * ADR file creation
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -27,16 +27,16 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
-    api.tools.get("orchestrator_set_context")!("", {
+    api.tools.get("genorch_session_register")!("", {});
+    api.tools.get("genorch_session_start_work")!("", {
       project: "test-project",
       task: "logging test",
     });
   });
-  // ── orchestrator_log_session ─────────────────────────────
-  describe("orchestrator_log_session", () => {
+  // ── genorch_session_log ─────────────────────────────
+  describe("genorch_session_log", () => {
     it("should log a session entry with status=complete", async () => {
-      const exec = api.tools.get("orchestrator_log_session")!;
+      const exec = api.tools.get("genorch_session_log")!;
       const result = await unwrap(
         exec("", {
           project: "test-project",
@@ -53,19 +53,19 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
     });
     it("should set loggedTaskCompletion flag", async () => {
       // After logging, clear_context should work
-      api.tools.get("orchestrator_log_session")!("", {
+      api.tools.get("genorch_session_log")!("", {
         project: "test-project",
         task: "test",
         model: "gpt-4",
         agent: "Amy",
         status: "complete",
       });
-      const clear = api.tools.get("orchestrator_clear_context")!;
+      const clear = api.tools.get("genorch_session_clear_work")!;
       const clearResult = await unwrap(clear("", {}));
       expect(clearResult).toHaveProperty("ok", true);
     });
     it("should persist session to database", async () => {
-      api.tools.get("orchestrator_log_session")!("", {
+      api.tools.get("genorch_session_log")!("", {
         project: "test-project",
         task: "persistence test",
         model: "claude-3",
@@ -76,7 +76,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       // Session is persisted in SQLite; log_session returns success
       // (no file-based storage — sessions are in the database)
       const result = await unwrap(
-        api.tools.get("orchestrator_log_session")!("", {
+        api.tools.get("genorch_session_log")!("", {
           project: "test-project",
           task: "persistence test 2",
           model: "gpt-4",
@@ -96,7 +96,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       // This test is obsolete; session logging goes to the database.
     });
     it("should handle subagent agent names gracefully", async () => {
-      const exec = api.tools.get("orchestrator_log_session")!;
+      const exec = api.tools.get("genorch_session_log")!;
       const result = await unwrap(
         exec("", {
           project: "test-project",
@@ -109,10 +109,10 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(result).toHaveProperty("success", true);
     });
   });
-  // ── orchestrator_log_decision ────────────────────────────
-  describe("orchestrator_log_decision", () => {
+  // ── genorch_adr_log ────────────────────────────
+  describe("genorch_adr_log", () => {
     it("should create an ADR file", async () => {
-      const exec = api.tools.get("orchestrator_log_decision")!;
+      const exec = api.tools.get("genorch_adr_log")!;
       const result = await unwrap(
         exec("", {
           project: "test-project",
@@ -129,7 +129,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(result.adr_file).toMatch(/\.md$/);
     });
     it("should increment ADR numbers", async () => {
-      const exec = api.tools.get("orchestrator_log_decision")!;
+      const exec = api.tools.get("genorch_adr_log")!;
       exec("", {
         project: "test-project",
         title: "First decision",
@@ -147,7 +147,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(r2.adr_number).toBe(2);
     });
     it("should persist ADR file to disk with correct content", async () => {
-      const exec = api.tools.get("orchestrator_log_decision")!;
+      const exec = api.tools.get("genorch_adr_log")!;
       await unwrap(
         exec("", {
           project: "test-project",
@@ -165,7 +165,7 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(content).toContain("Persist decision");
     });
     it("should require required fields (project, title, context, decision)", async () => {
-      const exec = api.tools.get("orchestrator_log_decision")!;
+      const exec = api.tools.get("genorch_adr_log")!;
       // With all required fields it should work
       const result = await unwrap(
         exec("", {
@@ -178,10 +178,10 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(result).toHaveProperty("success", true);
     });
   });
-  // ── orchestrator_get_logs ────────────────────────────────
-  describe("orchestrator_get_logs", () => {
+  // ── genorch_logs_query ────────────────────────────────
+  describe("genorch_logs_query", () => {
     it("should return log entries", async () => {
-      const exec = api.tools.get("orchestrator_get_logs")!;
+      const exec = api.tools.get("genorch_logs_query")!;
       const result = await unwrap(exec("", {}));
       expect(result).toHaveProperty("entries");
       expect(Array.isArray(result.entries)).toBe(true);
@@ -189,26 +189,26 @@ describe("PLUGIN-001c — Session Logging & ADR", () => {
       expect(result).toHaveProperty("levels");
     });
     it("should filter by level", async () => {
-      const exec = api.tools.get("orchestrator_get_logs")!;
+      const exec = api.tools.get("genorch_logs_query")!;
       const result = await unwrap(exec("", { level: "info" }));
       for (const e of result.entries) {
         expect(["info"].includes(e.level)).toBe(true);
       }
     });
     it("should respect limit parameter", async () => {
-      const exec = api.tools.get("orchestrator_get_logs")!;
+      const exec = api.tools.get("genorch_logs_query")!;
       const result = await unwrap(exec("", { limit: 5 }));
       expect(result.entries.length).toBeLessThanOrEqual(5);
     });
     it("should filter by source", async () => {
       // Perform a decision log first so there's a "decisions" source entry
-      api.tools.get("orchestrator_log_decision")!("", {
+      api.tools.get("genorch_adr_log")!("", {
         project: "test-project",
         title: "Source filter test",
         context: "Testing source filter",
         decision: "Verify source filtering",
       });
-      const exec = api.tools.get("orchestrator_get_logs")!;
+      const exec = api.tools.get("genorch_logs_query")!;
       const result = await unwrap(
         exec("", { source: "decisions" }),
       );

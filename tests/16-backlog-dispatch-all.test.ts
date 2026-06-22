@@ -28,8 +28,8 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
     fs.mkdirSync(path.join(dd, "projects", "test-project"), { recursive: true });
-    api.tools.get("orchestrator_register")!("", {});
-    api.tools.get("orchestrator_set_context")!("", {
+    api.tools.get("genorch_session_register")!("", {});
+    api.tools.get("genorch_session_start_work")!("", {
       project: "test-project",
       task: "dispatch all test",
     });
@@ -38,14 +38,14 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
   it("should dispatch all available tasks up to max_dispatch", async () => {
     // Add 3 tasks
     for (let i = 0; i < 3; i++) {
-      await api.tools.get("orchestrator_backlog_add")!("", {
+      await api.tools.get("genorch_backlog_add")!("", {
         project: "test-project",
         title: `Task ${i + 1}`,
         priority: "p0",
       });
     }
 
-    const exec = api.tools.get("orchestrator_backlog_dispatch_all")!;
+    const exec = api.tools.get("genorch_backlog_dispatch_all")!;
     const result = await unwrap(exec("", { project: "test-project", max_dispatch: 2 }));
 
     expect(result).toHaveProperty("ok", true);
@@ -57,14 +57,14 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
 
   it("should respect max_dispatch upper bound", async () => {
     for (let i = 0; i < 10; i++) {
-      await api.tools.get("orchestrator_backlog_add")!("", {
+      await api.tools.get("genorch_backlog_add")!("", {
         project: "test-project",
         title: `Task ${i + 1}`,
         priority: "p0",
       });
     }
 
-    const exec = api.tools.get("orchestrator_backlog_dispatch_all")!;
+    const exec = api.tools.get("genorch_backlog_dispatch_all")!;
     const result = await unwrap(exec("", { project: "test-project", max_dispatch: 999 }));
     
     expect(result).toHaveProperty("ok", true);
@@ -73,24 +73,24 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
   });
 
   it("should auto-claim tasks by default", async () => {
-    await api.tools.get("orchestrator_backlog_add")!("", {
+    await api.tools.get("genorch_backlog_add")!("", {
       project: "test-project",
       title: "Auto-claim task",
       priority: "p1",
     });
 
-    const exec = api.tools.get("orchestrator_backlog_dispatch_all")!;
+    const exec = api.tools.get("genorch_backlog_dispatch_all")!;
     await unwrap(exec("", { project: "test-project", max_dispatch: 5 }));
 
     // Verify tasks were claimed (status changed to in_progress)
     const listResult = await unwrap(
-      api.tools.get("orchestrator_backlog_list")!("", { project: "test-project" }),
+      api.tools.get("genorch_backlog_list")!("", { project: "test-project" }),
     );
     expect(listResult.tasks.every((t: any) => t.status === "in_progress")).toBe(true);
   });
 
   it("should skip tasks with unmet dependencies", async () => {
-    const addExec = api.tools.get("orchestrator_backlog_add")!;
+    const addExec = api.tools.get("genorch_backlog_add")!;
     const dep = await addExec("", {
       project: "test-project",
       title: "Prerequisite",
@@ -105,7 +105,7 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
       depends_on: [depResult.id],
     });
 
-    const exec = api.tools.get("orchestrator_backlog_dispatch_all")!;
+    const exec = api.tools.get("genorch_backlog_dispatch_all")!;
     const result = await unwrap(exec("", { project: "test-project", max_dispatch: 5 }));
 
     // Only the prerequisite should be dispatched (dependent blocked)
@@ -114,7 +114,7 @@ describe("PLUGIN-002e — Backlog Dispatch All", () => {
   });
 
   it("should return empty array for project with no backlog", async () => {
-    const exec = api.tools.get("orchestrator_backlog_dispatch_all")!;
+    const exec = api.tools.get("genorch_backlog_dispatch_all")!;
     const result = await unwrap(exec("", { project: "free-project" }));
     expect(result).toHaveProperty("ok", false);
     expect(result).toHaveProperty("error");

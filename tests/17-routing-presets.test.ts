@@ -34,16 +34,16 @@ async function setupWithConfig(
   const api = createMockApi();
   await registerPlugin(dd, plugin, api);
 
-  const regResult = await api.tools.get("orchestrator_register")!("", {});
+  const regResult = await api.tools.get("genorch_session_register")!("", {});
   const rr = typeof regResult?.details === "object" ? regResult.details : regResult;
   const sessionKey = rr?.session_key || "test-key";
 
-  await api.tools.get("orchestrator_set_context")!("", {
+  await api.tools.get("genorch_session_start_work")!("", {
     project: "test-project",
     task,
   });
 
-  const routingExec = api.tools.get("orchestrator_get_routing")!;
+  const routingExec = api.tools.get("genorch_models_recommend")!;
   return { api, routingExec, sessionKey };
 }
 

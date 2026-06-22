@@ -1,7 +1,7 @@
 /**
  * PLUGIN-001h — Workflow Phase Tests
  *
- * Tests: orchestrator_advance_phase, WorkflowTracker class,
+ * Tests: genorch_workflow_advance_phase, WorkflowTracker class,
  * phase gating, QA integration, handoff enforcement
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -26,8 +26,8 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
-    api.tools.get("orchestrator_set_context")!("", {
+    api.tools.get("genorch_session_register")!("", {});
+    api.tools.get("genorch_session_start_work")!("", {
       project: "test-project",
       task: "workflow testing",
     });
@@ -36,11 +36,11 @@ describe("PLUGIN-001h — Workflow Phase", () => {
   // ── WorkflowTracker class (internal) ─────────────────────
   describe("WorkflowTracker (internal)", () => {
     it("should start in analyze phase when enabled", async () => {
-      const exec = api.tools.get("orchestrator_get_status")!;
+      const exec = api.tools.get("genorch_status")!;
       await unwrap(exec("", {}));
     });
     it("should advance through phases in order", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       let r = await unwrap(exec("", {}));
       expect(r).toHaveProperty("ok", true);
       expect(r.phase).toBe("plan");
@@ -53,8 +53,8 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       expect(r.phase).toBe("log");
 
       // Handoff + log required before finish
-      await unwrap(api.tools.get("orchestrator_generate_handoff")!("", {}));
-      await unwrap(api.tools.get("orchestrator_log_session")!("", {
+      await unwrap(api.tools.get("genorch_handoff_create")!("", {}));
+      await unwrap(api.tools.get("genorch_session_log")!("", {
         project: "test-project", task: "workflow testing",
         model: "test-model", agent: "Amy", status: "complete",
       }));
@@ -66,7 +66,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       expect(r.warning).toContain("Already at last phase");
     });
     it("should support skip parameter on advance", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       let r = await unwrap(exec("", { phase: "plan", skip: true }));
       expect(r).toHaveProperty("ok", true);
       expect(r.phase).toBe("plan");
@@ -74,13 +74,13 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       expect(r.phase_history[0]).toHaveProperty("skipped", true);
     });
     it("should allow explicit target phase", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       const r = await unwrap(exec("", { phase: "work" }));
       expect(r).toHaveProperty("ok", true);
       expect(r.phase).toBe("work");
     });
     it("should reject backward transitions", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(exec("", {}));
       await unwrap(exec("", {}));
       const r = await unwrap(exec("", { phase: "analyze" }));
@@ -89,7 +89,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       expect(r.error).toContain("Cannot transition");
     });
     it("should track phase elapsed and progress", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       const r = await unwrap(exec("", {}));
       expect(r).toHaveProperty("elapsed");
       expect(typeof r.elapsed).toBe("string");
@@ -119,12 +119,12 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       process.env.ORCHESTRATOR_DATA_DIR = dd2;
       api2 = createMockApi();
       await registerPlugin(dd2, plugin, api2);
-      api2.tools.get("orchestrator_register")!("", {});
-      api2.tools.get("orchestrator_set_context")!("", { project: "qa-project", task: "qa test" });
+      api2.tools.get("genorch_session_register")!("", {});
+      api2.tools.get("genorch_session_start_work")!("", { project: "qa-project", task: "qa test" });
     });
 
     it("should block work→log without QA approval", async () => {
-      const adv = api2.tools.get("orchestrator_advance_phase")!;
+      const adv = api2.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
@@ -134,14 +134,14 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     });
 
     it("should allow advance after QA submit + approve", async () => {
-      const adv = api2.tools.get("orchestrator_advance_phase")!;
+      const adv = api2.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
 
-      const qaSubmit = api2.tools.get("orchestrator_qa_submit")!;
+      const qaSubmit = api2.tools.get("genorch_qa_submit")!;
       await unwrap(qaSubmit("", { finding: "Needs tests" }));
-      const qaApprove = api2.tools.get("orchestrator_qa_approve")!;
+      const qaApprove = api2.tools.get("genorch_qa_approve")!;
       await unwrap(qaApprove("", {}));
 
       const r = await unwrap(adv("", {}));
@@ -150,14 +150,14 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     });
 
     it("should reject and block until resubmitted", async () => {
-      const adv = api2.tools.get("orchestrator_advance_phase")!;
+      const adv = api2.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
 
-      const qaSubmit = api2.tools.get("orchestrator_qa_submit")!;
+      const qaSubmit = api2.tools.get("genorch_qa_submit")!;
       await unwrap(qaSubmit("", { finding: "Bugs found" }));
-      const qaReject = api2.tools.get("orchestrator_qa_reject")!;
+      const qaReject = api2.tools.get("genorch_qa_reject")!;
       await unwrap(qaReject("", { reason: "Critical bugs" }));
 
       const r = await unwrap(adv("", {}));
@@ -166,7 +166,7 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     });
 
     it("qa_approve should fail without pending review", async () => {
-      const qaApprove = api2.tools.get("orchestrator_qa_approve")!;
+      const qaApprove = api2.tools.get("genorch_qa_approve")!;
       const r = await unwrap(qaApprove("", {}));
       expect(r).toHaveProperty("ok", false);
     });
@@ -193,18 +193,18 @@ describe("PLUGIN-001h — Workflow Phase", () => {
       process.env.ORCHESTRATOR_DATA_DIR = dd3;
       api3 = createMockApi();
       await registerPlugin(dd3, plugin, api3);
-      api3.tools.get("orchestrator_register")!("", {});
-      api3.tools.get("orchestrator_set_context")!("", { project: "handoff-project", task: "handoff test" });
+      api3.tools.get("genorch_session_register")!("", {});
+      api3.tools.get("genorch_session_start_work")!("", { project: "handoff-project", task: "handoff test" });
     });
 
     it("should block log→finish without handoff", async () => {
-      const adv = api3.tools.get("orchestrator_advance_phase")!;
+      const adv = api3.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       // First log the session (required before handoff gate)
-      await unwrap(api3.tools.get("orchestrator_log_session")!("", {
+      await unwrap(api3.tools.get("genorch_session_log")!("", {
         project: "handoff-project", task: "handoff test",
         model: "test-model", agent: "Amy", status: "complete",
       }));
@@ -214,17 +214,17 @@ describe("PLUGIN-001h — Workflow Phase", () => {
     });
 
     it("should allow finish after handoff + log", async () => {
-      const adv = api3.tools.get("orchestrator_advance_phase")!;
+      const adv = api3.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
       await unwrap(adv("", {}));
 
-      await unwrap(api3.tools.get("orchestrator_log_session")!("", {
+      await unwrap(api3.tools.get("genorch_session_log")!("", {
         project: "handoff-project", task: "handoff test",
         model: "test-model", agent: "Amy", status: "complete",
       }));
-      const hr = await unwrap(api3.tools.get("orchestrator_generate_handoff")!("", {}));
+      const hr = await unwrap(api3.tools.get("genorch_handoff_create")!("", {}));
       expect(hr).toHaveProperty("ok", true);
       expect(hr).toHaveProperty("handoff_generated", true);
 
@@ -237,21 +237,21 @@ describe("PLUGIN-001h — Workflow Phase", () => {
   // ── Workflow edge cases ──────────────────────────────────
   describe("Workflow edge cases", () => {
     it("should fail if workflow is not enabled", async () => {
-      api.tools.get("orchestrator_log_session")!("", {
+      api.tools.get("genorch_session_log")!("", {
         project: "test-project", task: "cleanup",
         model: "gpt-4", agent: "Amy", status: "complete",
       });
-      api.tools.get("orchestrator_clear_context")!("", {});
-      api.tools.get("orchestrator_set_context")!("", {
+      api.tools.get("genorch_session_clear_work")!("", {});
+      api.tools.get("genorch_session_start_work")!("", {
         project: "free-project", task: "no-workflow",
       });
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       const result = await unwrap(exec("", {}));
       expect(result).toHaveProperty("ok", false);
       expect(result.error).toContain("not enabled");
     });
     it("should return phase_history on advance", async () => {
-      const exec = api.tools.get("orchestrator_advance_phase")!;
+      const exec = api.tools.get("genorch_workflow_advance_phase")!;
       const r1 = await unwrap(exec("", {}));
       expect(r1).toHaveProperty("phase_history");
       expect(Array.isArray(r1.phase_history)).toBe(true);

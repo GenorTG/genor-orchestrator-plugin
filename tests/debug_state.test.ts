@@ -13,7 +13,7 @@ beforeEach(async () => {
 });
 
 it("debug state events", async () => {
-  const exec = api.tools.get("orchestrator_create_project")!;
+  const exec = api.tools.get("genorch_project_create")!;
   const result = await unwrap(exec("", {
     name: "docs-project",
     description: "Documentation project",

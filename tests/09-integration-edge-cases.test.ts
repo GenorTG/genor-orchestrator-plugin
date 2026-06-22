@@ -32,25 +32,25 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
   describe("Full lifecycle", () => {
     it("should complete register → set_context → work → log → clear", async () => {
       // 1. Register
-      const r1 = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const r1 = await unwrap(api.tools.get("genorch_session_register")!("", {}));
       expect(r1).toHaveProperty("ok", true);
       // 2. Set context
       const r2 = await unwrap(
-        api.tools.get("orchestrator_set_context")!("", {
+        api.tools.get("genorch_session_start_work")!("", {
           project: "test-project",
           task: "full lifecycle test",
         }),
       );
       expect(r2).toHaveProperty("ok", true);
       // 3. Work phase advance (happy path through workflow)
-      const adv = api.tools.get("orchestrator_advance_phase")!;
+      const adv = api.tools.get("genorch_workflow_advance_phase")!;
       await unwrap(adv("", {})); // analyze → plan
       await unwrap(adv("", {})); // plan → document
       await unwrap(adv("", {})); // document → work
       await unwrap(adv("", {})); // work → log
       // 4. Log session completion
       const r3 = await unwrap(
-        api.tools.get("orchestrator_log_session")!("", {
+        api.tools.get("genorch_session_log")!("", {
           project: "test-project",
           task: "full lifecycle test",
           model: "gpt-4",
@@ -62,30 +62,30 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       );
       expect(r3).toHaveProperty("success", true);
       // 5. Clear context
-      const r4 = await unwrap(api.tools.get("orchestrator_clear_context")!("", {}));
+      const r4 = await unwrap(api.tools.get("genorch_session_clear_work")!("", {}));
       expect(r4).toHaveProperty("ok", true);
       expect(r4.previous_project).toBe("test-project");
       // 6. Unregister (returns string "unregistered")
-      const r5 = await unwrap(api.tools.get("orchestrator_unregister")!("", {}));
+      const r5 = await unwrap(api.tools.get("genorch_session_unregister")!("", {}));
       const ok = typeof r5 === "string" || r5.ok === true;
       expect(ok).toBe(true);
     });
     it("should persist session data across tool calls", async () => {
       // Create a session
-      await api.tools.get("orchestrator_register")!("", {});
-      await api.tools.get("orchestrator_set_context")!("", {
+      await api.tools.get("genorch_session_register")!("", {});
+      await api.tools.get("genorch_session_start_work")!("", {
         project: "test-project",
         task: "persistence test",
       });
       // Log the decision
-      await api.tools.get("orchestrator_log_decision")!("", {
+      await api.tools.get("genorch_adr_log")!("", {
         project: "test-project",
         title: "Persistence Decision",
         context: "Need to persist data",
         decision: "Use sessions.json",
       });
       // Log session
-      await api.tools.get("orchestrator_log_session")!("", {
+      await api.tools.get("genorch_session_log")!("", {
         project: "test-project",
         task: "persistence test",
         model: "claude-3",
@@ -105,19 +105,19 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
     it("should return error for unregistered tool calls that require registration", async () => {
       // These tools should fail without registration
       const protectedTools = [
-        "orchestrator_set_context",
-        "orchestrator_get_status",
-        "orchestrator_get_config",
-        "orchestrator_clear_context",
-        "orchestrator_sync_project",
-        "orchestrator_release_project",
-        "orchestrator_spawn_subagent",
-        "orchestrator_backlog_add",
-        "orchestrator_backlog_list",
-        "orchestrator_backlog_update",
-        "orchestrator_backlog_dispatch",
-        "orchestrator_create_project",
-        "orchestrator_advance_phase",
+        "genorch_session_start_work",
+        "genorch_status",
+        "genorch_config_show_routing",
+        "genorch_session_clear_work",
+        "genorch_project_sync_files",
+        "genorch_project_leave",
+        "genorch_task_delegate",
+        "genorch_backlog_add",
+        "genorch_backlog_list",
+        "genorch_backlog_update",
+        "genorch_backlog_dispatch",
+        "genorch_project_create",
+        "genorch_workflow_advance_phase",
       ];
       for (const toolName of protectedTools) {
         const exec = api.tools.get(toolName);
@@ -135,8 +135,8 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       }
     });
     it("should handle non-existent project gracefully", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      const exec = api.tools.get("orchestrator_get_project_docs")!;
+      api.tools.get("genorch_session_register")!("", {});
+      const exec = api.tools.get("genorch_project_docs_list")!;
       const result = await unwrap(
         exec("", { project: "nonexistent-project" }),
       );
@@ -150,9 +150,9 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       const emptyApi = createMockApi();
       process.env.ORCHESTRATOR_DATA_DIR = emptyDd;
       plugin.register(emptyApi);
-      emptyApi.tools.get("orchestrator_register")!("", {});
+      emptyApi.tools.get("genorch_session_register")!("", {});
       // get_config without models.json/config should report error
-      const configExec = emptyApi.tools.get("orchestrator_get_config")!;
+      const configExec = emptyApi.tools.get("genorch_config_show_routing")!;
       const configResult = await unwrap(configExec("", {}));
       // May have error or fallback
       expect(configResult).toBeDefined();
@@ -190,8 +190,8 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
         path.join(projDir, "sessions.json"),
         JSON.stringify(sessions, null, 2),
       );
-      api.tools.get("orchestrator_register")!("", {});
-      const exec = api.tools.get("orchestrator_doctor")!;
+      api.tools.get("genorch_session_register")!("", {});
+      const exec = api.tools.get("genorch_system_diagnose")!;
       const result = await unwrap(exec("", { check: "data" }));
       // Should flag issues
       expect(result).toHaveProperty("checks", "data");
@@ -208,15 +208,15 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
       const emptyApi = createMockApi();
       process.env.ORCHESTRATOR_DATA_DIR = emptyDd;
       plugin.register(emptyApi);
-      emptyApi.tools.get("orchestrator_register")!("", {});
-      const exec = emptyApi.tools.get("orchestrator_get_models")!;
+      emptyApi.tools.get("genorch_session_register")!("", {});
+      const exec = emptyApi.tools.get("genorch_models_list")!;
       const result = await unwrap(exec("", {}));
       expect(result.total).toBe(0);
       expect(result.models).toEqual([]);
     });
     it("should handle provider filter with no matches", async () => {
-      api.tools.get("orchestrator_register")!("", {});
-      const exec = api.tools.get("orchestrator_get_models")!;
+      api.tools.get("genorch_session_register")!("", {});
+      const exec = api.tools.get("genorch_models_list")!;
       const result = await unwrap(
         exec("", { provider: "nonexistent-provider" }),
       );
@@ -274,10 +274,10 @@ describe("PLUGIN-001i — Integration & Edge Cases", () => {
   describe("Multiple registrations", () => {
     it("should handle re-registration gracefully (idempotent register)", async () => {
       // First register succeeds with object
-      const rFirst = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const rFirst = await unwrap(api.tools.get("genorch_session_register")!("", {}));
       expect(rFirst).toHaveProperty("ok", true);
       // Second call returns string "already registered"
-      const rSecond = await unwrap(api.tools.get("orchestrator_register")!("", {}));
+      const rSecond = await unwrap(api.tools.get("genorch_session_register")!("", {}));
       expect(typeof rSecond === "string" || rSecond.ok === true).toBe(true);
     });
   });

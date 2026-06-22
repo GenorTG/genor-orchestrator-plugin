@@ -14,8 +14,8 @@ beforeEach(async () => {
 
 it("debug state events 3", async () => {
   // Register and set context
-  await api.tools.get("orchestrator_register")!("", {});
-  await api.tools.get("orchestrator_set_context")!("", {
+  await api.tools.get("genorch_session_register")!("", {});
+  await api.tools.get("genorch_session_start_work")!("", {
     project: "test-project",
     task: "debug",
   });
@@ -36,7 +36,7 @@ it("debug state events 3", async () => {
   console.log("Event data:", events[0]?.data);
   
   // Now create project through the tool
-  const exec = api.tools.get("orchestrator_create_project")!;
+  const exec = api.tools.get("genorch_project_create")!;
   const result = await unwrap(exec("", {
     name: "debug-project",
     description: "Test description 2",

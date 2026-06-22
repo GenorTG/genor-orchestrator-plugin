@@ -1,8 +1,8 @@
 /**
  * PLUGIN-001e — Project Management Tests
  *
- * Tests: orchestrator_create_project, orchestrator_sync_project,
- * orchestrator_get_project_docs
+ * Tests: genorch_project_create, genorch_project_sync_files,
+ * genorch_project_docs_list
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import * as fs from "node:fs";
@@ -26,16 +26,16 @@ describe("PLUGIN-001e — Project Management", () => {
     dd = prepareTestDataDir();
     api = createMockApi();
     await registerPlugin(dd, plugin, api);
-    api.tools.get("orchestrator_register")!("", {});
-    api.tools.get("orchestrator_set_context")!("", {
+    api.tools.get("genorch_session_register")!("", {});
+    api.tools.get("genorch_session_start_work")!("", {
       project: "test-project",
       task: "project mgmt test",
     });
   });
-  // ── orchestrator_create_project ──────────────────────────
-  describe("orchestrator_create_project", () => {
+  // ── genorch_project_create ──────────────────────────
+  describe("genorch_project_create", () => {
     it("should create a new project directory", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       const result = await unwrap(
         exec("", {
           name: "new-project",
@@ -48,7 +48,7 @@ describe("PLUGIN-001e — Project Management", () => {
       expect(fs.existsSync(result.state_md)).toBe(true);
     });
     it("should create STATE.md with description", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       const result = await unwrap(
         exec("", {
           name: "docs-project",
@@ -60,7 +60,7 @@ describe("PLUGIN-001e — Project Management", () => {
       expect(stateContent).toContain("v0.0.1");
     });
     it("should add project to dashboard-config.json", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       await unwrap(
         exec("", {
           name: "config-check",
@@ -75,7 +75,7 @@ describe("PLUGIN-001e — Project Management", () => {
       );
     });
     it("should reject duplicate project names", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       const result = await unwrap(
         exec("", { name: "test-project" }),
       );
@@ -84,12 +84,12 @@ describe("PLUGIN-001e — Project Management", () => {
       expect(result.error).toContain("already exists");
     });
     it("should reject invalid project names", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       const result = await unwrap(exec("", { name: "a" }));
       expect(result).toHaveProperty("ok", false);
     });
     it("should sanitize project name", async () => {
-      const exec = api.tools.get("orchestrator_create_project")!;
+      const exec = api.tools.get("genorch_project_create")!;
       const result = await unwrap(
         exec("", { name: "Bad Name!@#" }),
       );
@@ -97,10 +97,10 @@ describe("PLUGIN-001e — Project Management", () => {
       expect(result.project).toMatch(/^bad-name/);
     });
   });
-  // ── orchestrator_sync_project ────────────────────────────
-  describe("orchestrator_sync_project", () => {
+  // ── genorch_project_sync_files ────────────────────────────
+  describe("genorch_project_sync_files", () => {
     it("should error if project has no location configured", async () => {
-      const exec = api.tools.get("orchestrator_sync_project")!;
+      const exec = api.tools.get("genorch_project_sync_files")!;
       const result = await unwrap(
         exec("", { project: "free-project" }),
       );
@@ -133,7 +133,7 @@ describe("PLUGIN-001e — Project Management", () => {
         if (cmd.startsWith("hostname")) return "test-host\n";
         return "";
       });
-      const exec = api.tools.get("orchestrator_sync_project")!;
+      const exec = api.tools.get("genorch_project_sync_files")!;
       const result = await unwrap(
         exec("", { project: "test-project" }),
       );
@@ -149,8 +149,8 @@ describe("PLUGIN-001e — Project Management", () => {
       expect(context).toContain("Test Project");
     });
   });
-  // ── orchestrator_get_project_docs ────────────────────────
-  describe("orchestrator_get_project_docs", () => {
+  // ── genorch_project_docs_list ────────────────────────
+  describe("genorch_project_docs_list", () => {
     it("should list project documentation files", async () => {
       // Create a state file for test-project
       const projDir = path.join(dd, "projects", "test-project");
@@ -158,7 +158,7 @@ describe("PLUGIN-001e — Project Management", () => {
         fs.mkdirSync(projDir, { recursive: true });
       fs.writeFileSync(path.join(projDir, "STATE.md"), "# TEST");
       fs.writeFileSync(path.join(projDir, "sessions.json"), "{}");
-      const exec = api.tools.get("orchestrator_get_project_docs")!;
+      const exec = api.tools.get("genorch_project_docs_list")!;
       const result = await unwrap(
         exec("", { project: "test-project" }),
       );
@@ -174,7 +174,7 @@ describe("PLUGIN-001e — Project Management", () => {
       fs.writeFileSync(path.join(projDir, "STATE.md"), "# Test");
       fs.writeFileSync(path.join(projDir, "CONTEXT.md"), "# Context");
       fs.writeFileSync(path.join(projDir, "BACKLOG.json"), "{}");
-      const exec = api.tools.get("orchestrator_get_project_docs")!;
+      const exec = api.tools.get("genorch_project_docs_list")!;
       const result = await unwrap(
         exec("", { project: "test-project" }),
       );
