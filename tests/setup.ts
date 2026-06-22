@@ -293,7 +293,7 @@ export function writeSessionLog(dd: string, lines?: string[]): void {
   fs.writeFileSync(path.join(dd, "session_log.md"), header + body);
 }
 
-/** Register the plugin, capture tools, set env. Returns the api. */
+/** Register the plugin, capture tools, set env. */
 export async function registerPlugin(
   dataDir: string,
   plugin: any,
@@ -301,6 +301,39 @@ export async function registerPlugin(
 ): Promise<void> {
   process.env.ORCHESTRATOR_DATA_DIR = dataDir;
   plugin.register(api);
+}
+
+// ── Session setup helper ───────────────────────────────────────
+// Sets a synthetic session key so genorch_session_register works in tests.
+export function setupTestSession(pluginModule: any): void {
+  if (typeof pluginModule.__setTestSessionKey === "function") {
+    pluginModule.__setTestSessionKey("test-session-key");
+  }
+}
+
+// ── Full test init: temp dir + register + session + project context ──
+export async function initTest(
+  plugin: any,
+  api?: MockApiType,
+  project = "test-project",
+  task = "test-task",
+): Promise<{ api: MockApiType; dd: string }> {
+  if (!api) api = createMockApi();
+  const dd = prepareTestDataDir();
+  await registerPlugin(dd, plugin, api);
+  
+  // Set synthetic session key
+  const mod = await import("../src/index.js");
+  setupTestSession(mod);
+  
+  // Register session + bind project
+  const reg = api.tools.get("genorch_session_register")!;
+  await unwrap(reg("", {}));
+  
+  const bind = api.tools.get("genorch_session_start_work")!;
+  await unwrap(bind("", { project, task }));
+  
+  return { api, dd };
 }
 
 // ── Tool result unwrapper ─────────────────────────────────────

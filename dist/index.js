@@ -5775,4 +5775,10 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
     },
     enumerable: false,
 });
+// ── Test helper ────────────────────────────────────────────────
+// Sets a synthetic session key so `genorch_session_register` works
+// in test environments where hooks don't fire.
+export function __setTestSessionKey(key) {
+    sessionTracker.start(key, "test");
+}
 export default pluginExport;
