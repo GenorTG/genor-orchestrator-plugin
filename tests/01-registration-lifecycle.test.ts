@@ -57,7 +57,7 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
       const exec = api.tools.get("genorch_session_register")!;
       await unwrap(exec("", {}));
       const r2 = await unwrap(exec("", {}));
-      expect(r2).toBe("already registered");
+      expect(r2).toHaveProperty("message", "already_registered");
     });
 
     it("should return session_key string", async () => {

@@ -2866,40 +2866,63 @@ const _plugin: Record<string, any> = definePluginEntry({
     api.on("before_model_resolve", async (event: any, hookCtx: any) => {
       try {
         const ctxSessionKey = hookCtx?.sessionKey || "";
-        
-        // ═══ SCOPE: Skip unregistered sessions entirely ═══
-        // No more synthetic keys — we use the real OpenClaw session ID 1:1.
-        // If this session isn't registered, skip all orchestration logic.
-        if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
-          return;
-        }
+        if (!ctxSessionKey) return;
 
-        // ═══ SESSION ISOLATION: Use the real gateway-provided key ═══
-        // The hookCtx.sessionKey is the REAL gateway-provided key for THIS session.
-        // sessionTracker.sessionKey is a singleton and may have been overwritten by
-        // another session's hooks. Always prefer ctxSessionKey.
-        if (ctxSessionKey) {
-          const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
-          if (!isBackground) {
-            // ── Session-scoped primary key adoption ──
-            // Set the tracker's active key to the real gateway key for this session.
-            if (sessionTracker.sessionKey !== ctxSessionKey) {
-              sessionTracker.start(ctxSessionKey, "resumed");
-            }
-            logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 1: KEY ADOPTION (resolves chicken-and-egg)
+        //  MUST run before the registration check so that
+        //  genorch_session_register sees a non-null session key.
+        // ═══════════════════════════════════════════════════════════
+        const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":acp:");
+        
+        if (!isBackground) {
+          // ── Adopt the real gateway key ──
+          if (sessionTracker.sessionKey !== ctxSessionKey) {
+            sessionTracker.start(ctxSessionKey, "resumed");
+          }
+          logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
+          
+          // ── Auto-register sessions as they're discovered ──
+          // This fixes the chicken-and-egg: you can't register without
+          // a key, but you only get a key if already registered.
+          // Auto-registration is safe because project context injection
+          // is separately gated by genorch_session_start_work.
+          if (!sessionTracker.isSessionRegistered(ctxSessionKey)) {
+            sessionTracker.registerSession(ctxSessionKey);
+            logger.info("hooks", `Auto-registered session: ${ctxSessionKey}`);
           }
         }
-        
-        // Always update status but scope to the actual hook session
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 2: SUBAGENT SESSION SETUP
+        //  If this is a subagent spawned by a registered parent, adopt
+        //  its key, register it, and inherit the parent's project context.
+        // ═══════════════════════════════════════════════════════════
+        if (ctxSessionKey.includes(":subagent:")) {
+          const subInfo = sessionTracker.getSubagent(ctxSessionKey);
+          if (subInfo && subInfo.parentKey && sessionTracker.isSessionRegistered(subInfo.parentKey)) {
+            if (!sessionTracker.isSessionRegistered(ctxSessionKey)) {
+              sessionTracker.start(ctxSessionKey, "subagent");
+              sessionTracker.registerSession(ctxSessionKey);
+              if (subInfo.project) {
+                sessionTracker.setContext(subInfo.project, subInfo.task || "");
+              }
+              logger.info("hooks", `Subagent auto-registered: ${ctxSessionKey} (parent: ${subInfo.parentKey})`);
+            }
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 3: STATUS UPDATE
+        // ═══════════════════════════════════════════════════════════
         sessionTracker.setStatus("running");
         sessionTracker.trackAction("resolving_model");
         queueLiveAgents("before_model_resolve", sessionTracker);
-        
-        // ═══ SESSION-GATED: Only resolve models for the registered session ═══
-        // Don't enter model resolution if this session isn't registered.
-        if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
-          return;
-        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 4: MODEL ROUTING (only for registered sessions)
+        // ═══════════════════════════════════════════════════════════
+        if (!sessionTracker.isSessionRegistered(ctxSessionKey)) return;
         if (!sessionTracker.currentProject) return;
 
         const allModels: any[] = listModels(false);
@@ -3343,7 +3366,13 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
           });
         }
-        return txt("already registered");
+        // Already registered (auto-registration in before_model_resolve handles this now)
+        return txt({
+          ok: true,
+          message: "already_registered",
+          session_key: sk,
+          note: "Session is auto-registered. Call genorch_session_start_work to bind to a project.",
+        });
       },
     });
 
