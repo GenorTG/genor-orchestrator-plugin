@@ -130,21 +130,28 @@ code,.code{font-family:var(--font)}
 .btn-group{display:flex;gap:6px;flex-wrap:wrap}
 
 /* ═══════════════════════════════════════════════════════════
-   TABLES WITH RESIZABLE COLUMNS
+   TABLES — RESIZABLE COLUMNS, SORTING
    ═══════════════════════════════════════════════════════════ */
 .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
-table{width:100%;border-collapse:collapse;table-layout:auto}
-th{position:relative;padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--bg-alt);color:var(--text-dim);font-weight:600;font-size:12px;white-space:nowrap;user-select:none}
+.table-wrap table{width:100%;border-collapse:collapse}
+th{position:relative;padding:7px 28px 7px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--bg-alt);color:var(--text-dim);font-weight:600;font-size:12px;white-space:nowrap;user-select:none;overflow:hidden;text-overflow:ellipsis}
 td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);font-size:13px;overflow:hidden;text-overflow:ellipsis}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--accent-bg)}
 tr.selected td{background:var(--accent-bg)}
 
-/* Resize handle on table headers */
-.th-resize{position:absolute;top:0;right:0;width:5px;height:100%;cursor:col-resize;background:transparent}
-.th-resize:hover,.th-resize:active{background:var(--accent)}
-.th-resize::after{content:'';position:absolute;top:25%;right:2px;width:1px;height:50%;background:var(--border);opacity:0;transition:opacity .15s}
-.th-resize:hover::after{opacity:1}
+/* Resize handle on th — wider, visible on hover */
+.th-resize{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:2}
+.th-resize::after{content:'';position:absolute;top:0;right:3px;width:2px;height:100%;background:var(--border);opacity:0;transition:opacity .12s}
+th:hover .th-resize::after,.th-resize:active::after{opacity:1}
+.th-resize:hover::after{background:var(--accent)}
+
+/* Sortable header cursor + arrow */
+th.sortable{cursor:pointer}
+th.sortable:hover{color:var(--text-bright)}
+.th-sort-arrow{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--text-dim);pointer-events:none;opacity:.5}
+th.sort-asc .th-sort-arrow{color:var(--accent);opacity:1}
+th.sort-desc .th-sort-arrow{color:var(--accent);opacity:1}
 
 /* Tooltip on [title] */
 [title]{position:relative}
@@ -185,7 +192,7 @@ tr.selected td{background:var(--accent-bg)}
 
 /* Filters */
 .filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
-.filter-bar input,.filter-bar select{padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-alt);color:var(--text);font-size:12px;font-family:var(--font-ui)}
+.filter-bar input,.filter-bar select{padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-alt);color:var(--text);font-size:12px;font-family:var(--font-ui);min-width:120px}
 .filter-bar input:focus,.filter-bar select:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .filter-bar input{flex:1;min-width:140px}
 
@@ -231,9 +238,6 @@ tr.selected td{background:var(--accent-bg)}
 /* Progress bar */
 .progress-bar{height:4px;background:var(--bg-alt);border-radius:2px;overflow:hidden;margin:6px 0}
 .progress-bar .fill{height:100%;border-radius:2px;transition:width .3s ease}
-
-/* Tooltip helper */
-.tt{position:relative;cursor:help}
 
 /* ═══════════════════════════════════════════════════════════
    RESPONSIVE
@@ -300,12 +304,12 @@ tr.selected td{background:var(--accent-bg)}
    ═══════════════════════════════════════════════════════════ */
 const $=(s,c=document)=>c.querySelector(s);
 const $$=(s,c=document)=>[...c.querySelectorAll(s)];
-const API=(p,o)=>fetch('/orchestrator'+p,{headers:{Accept:'application/json'},...o}).then(r=>{if(!r.ok)throw new Error(r.statusText);return r.json()}).catch(e=>{toast(e.message,'error');throw e});
+const API=(p,o)=>fetch('/orchestrator'+p,{headers:{Accept:'application/json'},...o}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status+': '+r.statusText);return r.json()}).catch(e=>{toast(e.message,'error');throw e});
 const debounce=(f,m=300)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),m)}};
-const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+const esc=s=>{if(s===null||s===undefined)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 const fmtTime=i=>{if(!i)return'—';try{return new Date(i).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{return'—'}};
 const fmtDate=i=>{if(!i)return'—';try{return new Date(i).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}catch{return'—'}};
-const relTime=i=>{if(!i)return'—';const d=Date.now()-new Date(i).getTime();const m=Math.floor(d/60000);if(m<1)return'just now';if(m<60)return m+'m ago';const h=Math.floor(m/60);if(h<24)return h+'h';return Math.floor(h/24)+'d ago'};
+const relTime=i=>{if(!i)return'—';const d=Date.now()-new Date(i).getTime();const m=Math.floor(d/60000);if(m<1)return'just now';if(m<60)return m+'m ago';const h=Math.floor(m/60);if(h<24)return h+'h ago';return Math.floor(h/24)+'d ago'};
 const fmtSize=b=>b<1024?b+'B':b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB';
 
 function toast(m,t='info',d=3500){
@@ -319,29 +323,116 @@ function toast(m,t='info',d=3500){
 }
 
 /* ═══════════════════════════════════════════════════════════
-   RESIZABLE TABLE COLUMNS
-   ═══════════════════════════════════════════════════════════ */
-function enableResizableCols(table){
-  if(!table) return;
+   RESIZABLE + SORTABLE TABLE COLUMNS
+   ═══════════════════════════════════════════════════════════
+   Two-step init: measure natural widths with auto layout,
+   then freeze them with fixed layout + explicit widths.
+   ============================================================ */
+
+// Store per-column widths keyed by table+column index
+const _colWidths=new WeakMap();
+
+function _freezeColWidths(table){
+  // Switch to fixed layout so explicit widths actually stick
+  table.style.tableLayout='fixed';
   const ths=table.querySelectorAll('th');
-  ths.forEach(th=>{
-    if(th.querySelector('.th-resize')) return;
-    const grip=document.createElement('div');
-    grip.className='th-resize';
-    grip.title='Drag to resize column';
-    let startX=0,startW=0;
-    grip.addEventListener('mousedown',e=>{
-      e.preventDefault();e.stopPropagation();
-      startX=e.clientX;startW=th.offsetWidth;
-      const onMove=ev=>{const w=Math.max(40,startW+(ev.clientX-startX));th.style.width=w+'px';};
-      const onUp=()=>{document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);};
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
-    });
-    th.appendChild(grip);
-    // Set initial width from table-layout
-    if(!th.style.width) th.style.width=th.offsetWidth+'px';
+  const tableW=table.getBoundingClientRect().width;
+  let totalTh=0;
+  ths.forEach(th=>{totalTh+=th.getBoundingClientRect().width;});
+  const ratio=totalTh>0?Math.min(tableW/totalTh,1.5):1;
+  ths.forEach((th,i)=>{
+    let w=th.getBoundingClientRect().width*ratio;
+    if(w<50)w=100;
+    th.style.width=Math.round(w)+'px';
   });
+}
+
+function enableCols(table){
+  if(!table||table.dataset.colsEnabled)return;
+  table.dataset.colsEnabled='true';
+
+  // Step 1: let auto-layout measure natural widths, then freeze
+  _freezeColWidths(table);
+
+  // Step 2: add resize handles + sort to each th
+  table.querySelectorAll('th').forEach((th,i)=>{
+    // -- Resize handle --
+    if(!th.querySelector('.th-resize')){
+      const grip=document.createElement('div');
+      grip.className='th-resize';
+      grip.title='Drag to resize column';
+      let sx=0,sw=0;
+      grip.addEventListener('mousedown',e=>{
+        e.preventDefault();e.stopPropagation();
+        sx=e.clientX;sw=th.getBoundingClientRect().width;
+        table.style.cursor='col-resize';
+        const onMove=ev=>{const w=Math.max(50,sw+(ev.clientX-sx));th.style.width=w+'px';};
+        const onUp=()=>{
+          document.removeEventListener('mousemove',onMove);
+          document.removeEventListener('mouseup',onUp);
+          table.style.cursor='';
+        };
+        document.addEventListener('mousemove',onMove);
+        document.addEventListener('mouseup',onUp);
+      });
+      th.appendChild(grip);
+    }
+
+    // -- Sort arrow + click-to-sort --
+    if(!th.querySelector('.th-sort-arrow')){
+      const arr=document.createElement('span');
+      arr.className='th-sort-arrow';
+      arr.textContent='⇅';
+      th.appendChild(arr);
+    }
+    th.classList.add('sortable');
+    th.style.cursor='pointer';
+    th.title=(th.title||'')+' | Click to sort';
+
+    // Remove old listener before adding new one to avoid duplicates
+    const newTh=th.cloneNode(true);
+    th.parentNode.replaceChild(newTh,th);
+    newTh.addEventListener('click',()=>sortByCol(newTh));
+  });
+}
+
+function sortByCol(th){
+  const table=th.closest('table');
+  const ths=[...table.querySelectorAll('th')];
+  const idx=ths.indexOf(th);
+  if(idx<0)return;
+
+  const dir=th.classList.contains('sort-asc')?'desc':th.classList.contains('sort-desc')?'asc':'asc';
+  // Reset all
+  table.querySelectorAll('th').forEach(t=>{t.classList.remove('sort-asc','sort-desc');});
+  th.classList.add(dir==='asc'?'sort-asc':'sort-desc');
+  th.querySelector('.th-sort-arrow').textContent=dir==='asc'?'▲':'▼';
+
+  const tbody=table.querySelector('tbody');
+  if(!tbody)return;
+  const rows=[...tbody.querySelectorAll('tr')];
+  if(!rows.length||rows[0].children.length<=idx)return;
+
+  const numeric=rows.every(r=>{
+    const cell=r.children[idx];
+    return cell&&!isNaN(parseFloat(cell.textContent.trim().replace(/,/g,'')));
+  });
+
+  const getVal=r=>{
+    const c=r.children[idx];if(!c)return'';
+    if(numeric)return parseFloat(c.textContent.trim().replace(/,/g,''))||0;
+    // Check data-sort attribute first
+    if(c.dataset.sort!==undefined)return c.dataset.sort;
+    return c.textContent.trim().toLowerCase();
+  };
+
+  rows.sort((a,b)=>{
+    const va=getVal(a),vb=getVal(b);
+    if(typeof va==='number'&&typeof vb==='number')return dir==='asc'?va-vb:vb-va;
+    const sa=String(va),sb=String(vb);
+    return dir==='asc'?sa.localeCompare(sb):sb.localeCompare(sa);
+  });
+  rows.forEach(r=>tbody.appendChild(r));
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -434,7 +525,7 @@ function renderDashboard(data){
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:16px">⚠️</span>
         <span style="font-size:13px"><strong>${errors.length} error(s)</strong> and <strong>${warns.length} warning(s)</strong> in recent logs</span>
-        <button class="btn btn-sm" style="margin-left:auto" onclick="refreshTab('logs')" title="Open logs to investigate">View Logs →</button>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="activateTab('logs')" title="Open logs to investigate">View Logs →</button>
       </div>
     </div>`:''}
 
@@ -502,8 +593,8 @@ function renderProjects(data){
           <td title="${p.session_count||0} sessions">${p.session_count||0}</td>
           <td title="Created ${fmtDate(p.created)}">${fmtDate(p.created)}</td>
           <td>${p.free_only?'<span class="badge badge-yellow" title="Only free models">Free only</span>':'<span class="badge badge-green" title="Allows paid models">Flexible</span>'}</td>
-          <td><span class="badge badge-blue" title="Routing strategy">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
-          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, backlog, settings">Details</button></td>
+          <td><span class="badge badge-blue" title="Routing strategy: ${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
+          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, backlog, settings, routing">Details</button></td>
         </tr>`;
       }).join('')}${!projects.length?'<tr><td colspan="6" class="empty">No projects</td></tr>':''}
       </tbody></table>
@@ -515,29 +606,31 @@ function renderAgents(data){
   const agents=data['/api/live-agents']||{};
   const list=agents.agents||[];
   return `<div role="tabpanel" id="panel-agents">
-    <div class="section-title">🤖 Live Agents <span class="badge">${list.length}</span> <span class="badge badge-green">${agents.active_count||0} active</span></div>
+    <div class="section-title">🤖 Live Agents <span class="badge">${list.length}</span> <span class="badge badge-green">${agents.active_count||agents.agent_count||0} tracked</span></div>
     <div id="agent-list">${list.map(a=>{
       const status=a.agent_status||'unknown';
-      const dotCls=status==='running'?'on':'off';
-      return `<div class="agent-card" title="Agent: ${esc(a.agent)} — ${status}">
+      const action=a.action||'—';
+      const activityTime=relTime(a.last_activity_at||a.timestamp);
+      return `<div class="agent-card" title="Agent: ${esc(a.agent)} — ${status} (${activityTime})">
         <div class="ac-header">
-          <span class="status-dot ${dotCls}" style="flex-shrink:0"></span>
+          <span class="status-dot ${status==='running'?'on':'off'}" style="flex-shrink:0"></span>
           <span class="ac-name">${esc(a.agent)}</span>
-          <span style="margin-left:auto;display:flex;gap:4px">
-            ${a.last_error?`<span class="badge badge-red" title="Last error: ${esc(a.last_error)}">⚠ Error</span>`:''}
-            <span class="badge ${status==='running'?'badge-green':status==='qa'?'badge-yellow':status==='failed'?'badge-red':'badge-gray'}" title="Status">${status==='qa'?'🔍 QA':status}</span>
+          <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+            ${a.last_error?`<span class="badge badge-red" title="Error: ${esc(a.last_error)}">⚠</span>`:''}
+            <span class="badge ${status==='running'?'badge-green':status==='qa'?'badge-yellow':status==='failed'?'badge-red':'badge-gray'}" title="Status: ${status}">${status}</span>
           </span>
         </div>
-        <div class="ac-task" title="Current task">${esc(a.task||'No task')}</div>
+        <div class="ac-task" title="Current action: ${action}">
+          ${action==='building_prompt'?'🧠 Building prompt…':action==='executing_tool'?'🔧 Running tool…':action==='idle'?'💤 Idle':action==='thinking'?'🤔 Thinking…':action==='done'||action==='complete'?'✅ Complete':action==='failed'?'❌ Failed':esc(action||'—')}
+        </div>
         <div class="ac-meta">
           <span title="Agent ID">🆔 ${esc(a.agent||'')}</span>
-          <span title="Current action">🎯 ${esc(a.action||'—')}</span>
-          <span title="Time elapsed">⏱ ${esc(a.elapsed||'—')}</span>
           <span title="Project">📁 ${esc(a.project||'—')}</span>
-          ${a.last_error?`<span style="color:var(--red)" title="Error">⚠ ${esc(a.last_error)}</span>`:''}
+          <span title="Model">🧠 ${esc(a.model||'—')}</span>
+          <span title="Last activity">⏱ ${activityTime}</span>
+          ${a.error_count>0?`<span title="Error count (${a.error_count})" style="color:var(--red)">❌ ${a.error_count} error(s)</span>`:''}
+          ${a.last_error?`<span title="Last error" style="color:var(--red);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">⚠ ${esc(a.last_error)}</span>`:''}
         </div>
-        ${a.workflow&&a.workflow.enabled?`<div class="progress-bar"><div class="fill" style="width:${a.workflow.progress_percent||0}%;background:var(--blue)"></div></div>
-        <div style="font-size:11px;color:var(--text-dim)" title="Workflow phase">🔄 ${a.workflow.current_phase||'—'} (${a.workflow.progress||'0/5'} phases)</div>`:''}
       </div>`;
     }).join('')}${!list.length?'<div class="empty">No active agents</div>':''}</div>
   </div>`;
@@ -573,13 +666,13 @@ function renderModels(data){
       </tr></thead>
       <tbody id="models-tbody">${models.map(m=>`
         <tr class="model-row" style="cursor:pointer" onclick="showModelEdit(this)" title="${esc(m.id)} — ${m.status||'unknown'} — Tier ${m.tier!==undefined?m.tier:'?'}" data-json='${esc(JSON.stringify(m))}' data-name="${esc(m.id).toLowerCase()}" data-status="${m.status||''}" data-provider="${esc(m.provider||'')}">
-          <td title="${esc(m.id)}"><code style="font-size:12px">${esc(m.id)}</code></td>
+          <td title="${esc(m.id)}" class="code" style="font-size:12px">${esc(m.id)}</td>
           <td><span class="tag" title="Provider: ${esc(m.provider||'')}">${esc(m.provider||'—')}</span></td>
-          <td title="Quality tier">${m.tier!==undefined?m.tier:'?'}</td>
+          <td data-sort="${m.tier!==undefined?m.tier:999}" title="Quality tier: ${m.tier!==undefined?m.tier:'unset'}">${m.tier!==undefined?m.tier:'?'}</td>
           <td><span class="badge ${m.status==='active'?'badge-green':m.status==='discovered'?'badge-yellow':m.status==='offline'?'badge-gray':'badge-gray'}" title="Status: ${m.status||'unknown'}">${m.status||'unknown'}</span></td>
-          <td title="Speed rating: ${m.speed_rating!==undefined?m.speed_rating+'/10':'not rated'}">${m.speed_rating!==undefined?m.speed_rating+'/10':'—'}</td>
+          <td data-sort="${m.speed_rating!==undefined?m.speed_rating:-1}" title="Speed: ${m.speed_rating!==undefined?m.speed_rating+'/10':'not rated'}">${m.speed_rating!==undefined?m.speed_rating+'/10':'—'}</td>
           <td>${m.agent_ready?'<span class="badge badge-green" title="Ready for agent use">Ready</span>':'<span class="badge badge-gray" title="Not available for agents">No</span>'}</td>
-          <td style="font-size:12px;color:var(--text-dim)" title="Verification: ${m.verified_status||'not verified'}">${m.verified_status||'—'}</td>
+          <td data-sort="${m.verified_status||'z'}" style="font-size:12px;color:var(--text-dim)" title="Verification: ${m.verified_status||'not verified'}">${m.verified_status||'—'}</td>
         </tr>`).join('')}${!models.length?'<tr><td colspan="7" class="empty">No models</td></tr>':''}
       </tbody></table>
     </div>
@@ -637,7 +730,7 @@ function renderSettings(data){
 
     <div class="card" style="margin-bottom:10px">
       <div class="section-title" style="font-size:13px">🛡️ Safeguards</div>
-      <div class="setting-row"><div><div class="s-label">Enabled</div><div class="s-desc">Idle/Stuck detection</div></div>
+      <div class="setting-row"><div><div class="s-label">Enabled</div><div class="s-desc">Idle/stuck detection</div></div>
         <button class="toggle ${saf.enabled?'on':''}" onclick="toggleConfig('safeguards_enabled')" title="Toggle safeguard monitoring" aria-label="Toggle safeguards"></button></div>
       <div class="setting-row"><div><div class="s-label">Auto-recover</div><div class="s-desc">${saf.auto_recover?'Auto-recovery active':'Manual recovery'}</div></div>
         <button class="toggle ${saf.auto_recover?'on':''}" onclick="toggleConfig('auto_recover')" title="Auto-recover from failures" aria-label="Toggle auto-recover"></button></div>
@@ -703,26 +796,21 @@ window.showSessionDetail=function(s){
     (tu?'<div style="grid-column:1/-1"><span style="color:var(--text-dim);display:block;font-size:11px">Tokens</span><span>💰 '+formatTok(tu)+'</span></div>':'')+
     (s.error_count?'<div><span style="color:var(--text-dim);display:block;font-size:11px">Errors</span><span class="badge badge-red">'+s.error_count+'</span></div>':'')+
     '<div style="grid-column:1/-1"><span style="color:var(--text-dim);display:block;font-size:11px">Task</span><span>'+esc(s.task||'—')+'</span></div>'+
-    // Workflow
     (wf&&wf.phase_history&&wf.phase_history.length?'<div style="grid-column:1/-1;margin-top:4px;border-top:1px solid var(--border);padding-top:6px"><span style="color:var(--text-dim);display:block;font-weight:600;font-size:11px;margin-bottom:4px">🔄 Workflow Phases</span>'+
       wf.phase_history.map(p=>'<span class="badge '+(p.status==='completed'?'badge-green':p.status==='current'?'badge-yellow':'badge-gray')+'" style="margin:1px;font-size:11px">'+esc(p.phase)+(p.status==='completed'?' ✅':'')+'</span>').join('')+'</div>':'')+
-    // Action history
     (ah.length?'<div style="grid-column:1/-1;margin-top:4px;border-top:1px solid var(--border);padding-top:6px"><span style="color:var(--text-dim);display:block;font-weight:600;font-size:11px;margin-bottom:4px">⚡ Actions ('+ah.length+')</span>'+
       '<div style="max-height:120px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">'+
       ah.slice(-20).map(a=>{
         let t='';try{t=new Date(a.ts).toLocaleTimeString();}catch{t=a.ts||'';}
         return '<div style="display:flex;gap:6px;padding:2px 6px;font-size:12px;border-bottom:1px solid var(--border)"><span style="color:var(--text-dim);white-space:nowrap">'+t+'</span><span>'+esc(a.action)+(a.file?' <span style="color:var(--text-dim)">→ '+esc(a.file)+'</span>':'')+'</span></div>';
       }).join('')+'</div></div>':'')+
-    // Files
     (tf.length?'<div style="grid-column:1/-1;margin-top:4px;border-top:1px solid var(--border);padding-top:6px"><span style="color:var(--text-dim);display:block;font-weight:600;font-size:11px;margin-bottom:4px">📄 Files ('+tf.length+')</span>'+
       '<div style="max-height:80px;overflow-y:auto;font-size:12px;color:var(--text-dim)">'+tf.map(f=>'<div style="padding:1px 4px">📄 '+esc(f)+'</div>').join('')+'</div></div>':'')+
-    // QA
     (qh.length?'<div style="grid-column:1/-1;margin-top:4px;border-top:1px solid var(--border);padding-top:6px"><span style="color:var(--text-dim);display:block;font-weight:600;font-size:11px;margin-bottom:4px">🔍 QA History</span>'+
       qh.map(e=>'<div style="display:flex;gap:6px;padding:4px 6px;border-left:2px solid '+(e.event==='approve'?'var(--green)':e.event==='reject'?'var(--red)':'var(--yellow)')+';margin-bottom:4px;background:var(--bg-alt);border-radius:0 4px 4px 0;font-size:12px">'+
         '<span>'+(e.event==='approve'?'✅':e.event==='reject'?'❌':'📝')+'</span>'+
         '<div><span style="font-weight:600">'+(e.event==='approve'?'Approved':e.event==='reject'?'Rejected':'Submitted')+'</span>'+
         (e.detail?'<div style="color:var(--text-dim)">'+esc(e.detail)+'</div>':'')+'</div></div>').join('')+'</div>':'')+
-    // Error
     (err?'<div style="grid-column:1/-1;margin-top:4px;border-top:1px solid var(--border);padding-top:6px"><span style="color:var(--text-dim);display:block;font-weight:600;color:var(--red);font-size:11px;margin-bottom:4px">❌ Last Error</span>'+
       '<pre style="background:var(--bg-alt);padding:6px 8px;border-radius:4px;font-size:12px;color:var(--red);max-height:80px;overflow:auto;margin:0">'+esc(err)+'</pre></div>':'')+
     (s.notes&&!hasRich?'<div style="grid-column:1/-1;margin-top:4px"><span style="color:var(--text-dim);display:block;font-weight:600;font-size:11px">📝 Notes</span><pre style="background:var(--bg-alt);padding:6px 8px;border-radius:4px;font-size:12px;max-height:100px;overflow:auto;margin:0">'+esc(s.notes)+'</pre></div>':'')+
@@ -749,10 +837,12 @@ function renderActiveTab(tabId,data){
   const main=$('#main-content');
   const renders={dashboard:renderDashboard,projects:renderProjects,agents:renderAgents,models:renderModels,logs:renderLogs,settings:renderSettings};
   main.innerHTML=(renders[tabId]||renderDashboard)(data);
-  
-  // Enable resize handles on tables
-  setTimeout(()=>{main.querySelectorAll('table').forEach(enableResizableCols);},50);
-  
+
+  // Enable resize + sort on all tables in this panel
+  setTimeout(()=>{
+    main.querySelectorAll('.table-wrap table').forEach(enableCols);
+  },50);
+
   if(tabId==='dashboard'){
     API('/api/all').then(a=>{const e=$('#metric-sessions');if(e)e.textContent=a.sessions?.length||0;}).catch(()=>{});
   }
@@ -808,16 +898,16 @@ async function showProject(name){
     ]);
     const st=state.status==='fulfilled'?state.value:{};
     const bl=backlog.status==='fulfilled'?backlog.value:{tasks:[]};
-    const sessions=st.sessions||[];const docs=st.config||{};const tasks=bl.tasks||[];
+    const sessions=st.sessions||[];const config=st.config||{};const tasks=bl.tasks||[];
     const rev=[...sessions].reverse();
-    window._projState={name,sessions,rev,st,docs,tasks,tab:'sessions'};
-    
+    window._projState={name,sessions,rev,st,config,tasks,tab:'sessions'};
+
     function renderTabBar(active){
       return '<div class="subtabs">'+
         [{id:'sessions',l:'Sessions'},{id:'backlog',l:'Backlog'},{id:'settings',l:'Settings'},{id:'routing',l:'Routing'},{id:'docs',l:'Docs'}]
         .map(t=>`<button class="subtab ${active===t.id?'active':''}" onclick="showProjTab('${t.id}')">${t.l}</button>`).join('')+'</div>';
     }
-    
+
     const revSessions=rev;
     window._projSessions=revSessions;
     let sessRows=revSessions.map((s,i)=>{
@@ -833,14 +923,15 @@ async function showProject(name){
       </tr>`;
     }).join('');
     if(!revSessions.length) sessRows='<tr><td colspan="7" class="empty">No sessions</td></tr>';
-    
+
     main.innerHTML=`<button class="btn btn-sm" onclick="activateTab('projects')" style="margin-bottom:8px" title="Back to project list">← Back</button>
       <div class="section-title">📁 ${esc(name)} <span class="badge">${sessions.length}</span></div>
       <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${sessions.length}</div><div class="mc-label">Sessions</div></div>
-        <div class="metric-card"><div class="mc-value" style="font-size:15px">${st.config?.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
+        <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${tasks.length}</div><div class="mc-label">Backlog</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${(bl&&bl.errors?bl.errors.length:st.errors?.length||0)}</div><div class="mc-label">Errors</div></div>
+        <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.routing_preset||'default'}</div><div class="mc-label">Routing</div></div>
       </div>
       ${renderTabBar('sessions')}
       <div id="proj-tab-content">
@@ -853,7 +944,7 @@ async function showProject(name){
           <th title="Session ID">ID</th><th title="Agent name">Agent</th><th title="Model used">Model</th><th title="Session status">Status</th><th title="Task description">Task</th><th title="Start time">Started</th><th title="Duration">Duration</th>
         </tr></thead><tbody>${sessRows}</tbody></table></div>
       </div>`;
-    setTimeout(()=>{main.querySelectorAll('table').forEach(enableResizableCols);},50);
+    setTimeout(()=>{main.querySelectorAll('.table-wrap table').forEach(enableCols);},50);
   }catch(e){
     main.innerHTML='<div class="card" style="padding:20px;color:var(--red)">Failed to load project: '+esc(e.message)+'</div>';
     toast('Failed to load project detail: '+e.message,'error');
@@ -872,19 +963,20 @@ window.filterProjSessions=function(){
 window.showProjTab=async function(tab){
   const ps=window._projState;if(!ps)return;
   const content=$('#proj-tab-content');if(!content)return;
-  
+
   // Re-fetch for data-dependent tabs
   if(tab!=='sessions'&&tab!=='docs'){
     try{const [state,backlog]=await Promise.allSettled([
       API('/api/project-state?name='+encodeURIComponent(ps.name)),
       API('/api/project-backlog?project='+encodeURIComponent(ps.name)),
     ]);
-    if(state.status==='fulfilled'&&state.value.config){const st=state.value;ps.docs=st.config||{};ps.sessions=st.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
+    if(state.status==='fulfilled'&&state.value.config){const st=state.value;ps.config=st.config||{};ps.sessions=st.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
     if(backlog.status==='fulfilled')ps.tasks=backlog.value.tasks||ps.tasks;}catch(e){}
   }
-  
+
   // Update active tab in sub-bar
-  $('#proj-tab-content').closest('#main-content')?.querySelectorAll('.subtab').forEach(b=>b.classList.toggle('active',b.textContent.trim().toLowerCase()===tab));
+  const subBtns=content.closest('#main-content')?.querySelectorAll('.subtab');
+  if(subBtns) subBtns.forEach(b=>b.classList.toggle('active',b.textContent.trim().toLowerCase()===tab));
 
   if(tab==='sessions'){
     const rev=ps.rev||[];
@@ -921,7 +1013,7 @@ window.showProjTab=async function(tab){
     }
     content.innerHTML=h+'</tbody></table></div>';
   } else if(tab==='settings'){
-    const docs=ps.docs||{};const wf=docs.workflow||{};
+    const docs=ps.config||{};const wf=docs.workflow||{};
     content.innerHTML=`<div class="section-title">⚙️ Settings</div>
       <div class="card">${[
         ['Free-only mode','Only use free models','free_only',docs.free_only,()=>toggleProjSetting(ps.name,'free_only',!docs.free_only)],
@@ -932,17 +1024,45 @@ window.showProjTab=async function(tab){
         <button class="toggle ${r[3]?'on':''}" onclick="(${r[4].toString()})()" title="Toggle ${r[2]}"></button></div>`).join('')}
       </div>`;
   } else if(tab==='routing'){
-    content.innerHTML='<div class="section-title">🧠 Model Routing <span class="badge">coming soon</span></div><div class="card" style="padding:16px;text-align:center;color:var(--text-dim)">Routing configuration available via project detail modal.</div>';
+    const cfg=ps.config||{};
+    const routing=cfg.model_routing||{};
+    const categories=Object.keys(routing);
+    const hasRouting=categories.length>0;
+    content.innerHTML=`<div class="section-title">🧠 Model Routing <span class="badge">${cfg.routing_preset||'custom'}</span></div>
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+          <div><span style="color:var(--text-dim);font-size:11px">Routing Preset</span><br><span class="badge badge-blue">${cfg.routing_preset||'default'}</span></div>
+          <div><span style="color:var(--text-dim);font-size:11px">Free Only</span><br>${cfg.free_only?'<span class="badge badge-yellow">Yes</span>':'<span class="badge badge-green">No</span>'}</div>
+          <div><span style="color:var(--text-dim);font-size:11px">Single Provider</span><br><span>${cfg.routing_single_provider||'—'}</span></div>
+          <div><span style="color:var(--text-dim);font-size:11px">Allowlist</span><br><span>${cfg.model_allowlist?.length||0} models</span></div>
+        </div>
+      </div>
+      ${hasRouting?`
+      <div class="section-title" style="font-size:13px">Per-Category Routing</div>
+      <div class="table-wrap"><table id="routing-table"><thead><tr>
+        <th title="Task category">Category</th><th title="Models assigned to this category">Models</th>
+      </tr></thead><tbody>${categories.map(cat=>`
+        <tr><td><span class="badge badge-purple">${esc(cat)}</span></td>
+        <td>${routing[cat].map(m=>`<span class="tag" title="Model: ${esc(m)}">${esc(m)}</span>`).join(' ')||'<span class="badge badge-gray">none</span>'}</td></tr>
+      `).join('')}</tbody></table></div>
+      `:'<div class="empty">No routing configured</div>'}
+      ${cfg.model_allowlist?.length?`<div class="card" style="margin-top:8px">
+        <div class="section-title" style="font-size:13px">🔒 Model Allowlist</div>
+        <div>${cfg.model_allowlist.map(m=>`<span class="tag" title="Whitelisted model">${esc(m)}</span>`).join('')}</div>
+      </div>`:''}
+    `;
+    setTimeout(()=>content.querySelectorAll('.table-wrap table').forEach(enableCols),50);
   } else if(tab==='docs'){
     content.innerHTML='<div class="section-title">📄 Docs</div>'+
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
       ['STATE','ROADMAP','CONTEXT','NOTES'].map(d=>`<button class="btn btn-sm" onclick="showDocTab('${esc(ps.name)}','${d}')" title="View ${d}.md">${d}</button>`).join('')+'</div>'+
       '<div id="doc-content" style="background:var(--bg-alt);padding:12px;border-radius:var(--radius);font-size:12px;font-family:var(--font);white-space:pre-wrap;max-height:500px;overflow:auto;border:1px solid var(--border)"><span style="color:var(--text-dim)">Select a doc above</span></div>';
   }
-  // Re-enable resize
-  setTimeout(()=>{content.querySelectorAll('table').forEach(enableResizableCols);},50);
   // Update subtitle active
-  main.querySelectorAll('.subtab').forEach(b=>b.classList.toggle('active',b.textContent.trim().toLowerCase()===tab));
+  const btns=document.getElementById('main-content')?.querySelectorAll('.subtab');
+  if(btns) btns.forEach(b=>b.classList.toggle('active',b.textContent.trim().toLowerCase()===tab));
+  // Enable cols
+  setTimeout(()=>{content.querySelectorAll('.table-wrap table').forEach(enableCols);},50);
 };
 
 window.showDocTab=async function(project,docName){
