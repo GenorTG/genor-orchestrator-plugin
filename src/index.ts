@@ -20,76 +20,35 @@ const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 
 // ═══════════════════════════════════════════════════════════════
-//  TABLE OF CONTENTS — for quick LLM & developer navigation
+//  TABLE OF CONTENTS (approximate line ranges — will drift)
 // ═══════════════════════════════════════════════════════════════
 //
-//  Lines  Section
-//  ────── ──────────────────────────────────────────────────────
-//  1-7    Imports
-//  10-14  TABLE OF CONTENTS (this block)
-//  16-18  TYPES — LogEntry, DashboardConfig, ModelEntry, ProjectBacklogTask
-//  19-53  Interfaces
-//  57-63  txt() — Tool result helper
-//  65-67  DATA DIRECTORY RESOLUTION
-//  68-89  getDataDir() / getDashboardDir()
-//  91-93  JSON FILE HELPERS
-//  95-109 readJSON() / writeJSON() / readFileContent()
-//  111-113 LOGGER — OrchestratorLogger class
-//  116-199 OrchestratorLogger methods
-//  200-202 SESSION TRACKER — SessionTracker class
-//  202-275 SessionTracker methods
-//  277-279 LIVE AGENTS FILE
-//  283-338 queueLiveAgents() / flushLiveAgents() — writes live-agents.json + state.json
-//  340-342 PROJECT HELPERS
-//  344-443 getProjectLocation / buildProjectToc / syncProjectToOrchestrator
-
-//  409-433 generateRecoveryDoc
-//  435-443 readRecentSessions
-//  445-447 BACKGROUND MAINTENANCE — MaintenanceService class
-//  449-504 MaintenanceService.start() / tick() / stop()
-//  506-508 MODEL / DASHBOARD HELPERS
-//  510-539 isPaid / projDir
-//  541-543 TOOL LOGIC (pure functions behind each tool)
-//  545-793 getStatus / getConfig / filterModelsForProject / getModels
-//  633-658 checkModels / autoPopulate / logSession / logDecision
-//  683-715 logSession() — Write session file + log
-//  718-736 logDecision() — Write ADR file
-//  738-746 getLogs — query orchestrator logs
-//  748-793 setContext / clearContextFn / syncProject / getProjectDocsFn
-//  795-797 PLUGIN ENTRY
-//  801-808 Constants: PLUGIN_ID
-//  810-822 definePluginEntry({...}) + register() — init
-//  824-838 Cron scheduling (nightly auto-populate 3 AM)
-//  840-842   LOGGER init
-//  844-846   HOOKS (7 hooks)
-//  848-875   • session_end (auto-log + recovery doc)
-//  877-883   • subagent_spawned
-//  885-890   • subagent_ended
-//  892-925   • before_model_resolve (auto-routing)
-//  927-940   • before_prompt_build (context injection)
-//  942-946   • agent_end
-//  948-952   • gateway_stop
-//  954-956   TOOLS (40 registered via api.registerTool)
-//  957-969   • genorch_session_start_work
-//  970-978   • genorch_session_clear_work
-//  979-988   • genorch_status
-//  989-998   • genorch_config_show_routing
-//  999-1014  • genorch_models_list
-//  1016-1026 • genorch_models_check_routing
-//  1028-1036 • genorch_models_auto_discover
-//  1038-1058 • genorch_session_log
-//  1060-1075 • genorch_adr_log
-//  1077-1090 • genorch_logs_query
-//  1092-1104 • genorch_project_sync_files
-//  1106-1116 • genorch_project_docs_list
-//  1118-1121 BACKGROUND MAINTENANCE start
-//  1123-1129 SLASH COMMANDS: /genor, /genor-dashboard, /genor-status, /genor-help
-//  1131-1188 api.registerCommand({ name: "genor", ... })
-//  1190      logger.info — "Orchestrator ready"
-//  1192-1194 close register()
-//  1196-1198 EXPORT — defineToolPlugin + openclaw metadata
-//  1200-1230 toolPluginMetadataSymbol + configSchema
-//  1232     export default
+//  Lines   Section
+//  ─────── ─────────────────────────────────────────────────────
+//  1-15    Imports, definePluginEntry
+//  17-20    Package-level constants
+//  22-95    TABLE OF CONTENTS (this block)
+//  96-340   TYPES, INTERFACES, HELPERS (LogEntry, DashboardConfig,
+//           ModelEntry, ProjectBacklogTask, txt(), getDataDir(),
+//           readJSON/writeJSON, OrchestratorLogger, etc.)
+//  342-512  WorkflowTracker class
+//  514-2663 SessionTracker class
+//  2665-2780 Plugin entry: definePluginEntry(), init, cron, logger
+//  2782-3460 HOOKS (8 registered):
+//              • session_start    (line 2782)
+//              • session_end      (line 2800)
+//              • subagent_spawned (line 2979)
+//              • subagent_ended   (line 3000)
+//              • before_model_resolve  (line 3033)
+//              • before_prompt_build   (line 3212)
+//              • agent_end        (line 3358)
+//              • gateway_stop     (line 3411)
+//  3464-3477 Tool registration wrapper + metadata collector
+//  3479-6330 TOOLS (44 registered via api.registerTool)
+//              • genorch_session_register, genorch_session_start_work,
+//                genorch_project_bind, backlog tools, QA tools,
+//                verif pipeline tools, task delegate, etc.
+//  6331-6335 Export: __setTestSessionKey, default pluginExport
 //
 // ═══════════════════════════════════════════════════════════════
 
