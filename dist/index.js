@@ -1237,6 +1237,116 @@ function generateStateFromEvents(project, dataDir, logger) {
  * Snapshot current project state into the event log.
  * Reads actual source, writes diff events, regenerates STATE.md.
  */
+/** Read a project document from the project directory (or empty string if missing). */
+function readProjectDoc(dataDir, projectName, fileName) {
+    if (!projectName)
+        return "";
+    const safeName = projectName.replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!safeName)
+        return "";
+    const fp = path.join(dataDir, "projects", safeName, fileName);
+    if (!fs.existsSync(fp))
+        return "";
+    try {
+        return fs.readFileSync(fp, "utf-8");
+    }
+    catch {
+        return "";
+    }
+}
+/** Extract the first N lines of a markdown doc (skipping blank lines and headers-only). */
+function truncateDoc(content, maxLines, maxChars) {
+    if (!content)
+        return "";
+    const lines = content.split("\n");
+    const out = [];
+    let total = 0;
+    for (const line of lines) {
+        if (out.length >= maxLines)
+            break;
+        if (line.length + total > maxChars)
+            break;
+        out.push(line);
+        total += line.length;
+    }
+    return out.join("\n");
+}
+/** Build a project context block from project docs (plan, style, features, architecture). */
+function buildProjectDocContext(dataDir, projectName) {
+    if (!projectName)
+        return "";
+    const plan = readProjectDoc(dataDir, projectName, "PROJECT_PLAN.md");
+    const style = readProjectDoc(dataDir, projectName, "STYLE_GUIDE.md");
+    const features = readProjectDoc(dataDir, projectName, "FEATURES.md");
+    const architecture = readProjectDoc(dataDir, projectName, "ARCHITECTURE.md");
+    const bugs = readProjectDoc(dataDir, projectName, "BUGS.md");
+    if (!plan && !style && !features && !architecture)
+        return "";
+    const sections = [];
+    sections.push("━━━ PROJECT RULES & CONTEXT (auto-injected) ━━━");
+    sections.push("Follow these rules automatically. They are project-specific and take priority over general behavior.");
+    sections.push("");
+    if (plan) {
+        sections.push("📋 PROJECT PLAN:");
+        sections.push(truncateDoc(plan, 25, 1500));
+        sections.push("");
+    }
+    if (style) {
+        sections.push("🎨 CODE & STYLE RULES (must follow):");
+        sections.push(truncateDoc(style, 20, 1500));
+        sections.push("");
+    }
+    if (architecture) {
+        sections.push("🏛️ ARCHITECTURE & DESIGN DECISIONS:");
+        sections.push(truncateDoc(architecture, 25, 1500));
+        sections.push("");
+    }
+    if (features) {
+        // Find in-progress section
+        const lines = features.split("\n");
+        let inProgressStart = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (/in[\s_-]?progress/i.test(lines[i]) || /🚧/.test(lines[i])) {
+                inProgressStart = i;
+                break;
+            }
+        }
+        if (inProgressStart >= 0) {
+            const inProgress = lines.slice(inProgressStart, inProgressStart + 15).join("\n").trim();
+            if (inProgress) {
+                sections.push("🚧 ACTIVE FEATURES (in progress):");
+                sections.push(inProgress);
+                sections.push("");
+            }
+        }
+        else {
+            sections.push("📋 FEATURE INVENTORY:");
+            sections.push(truncateDoc(features, 15, 1000));
+            sections.push("");
+        }
+    }
+    if (bugs) {
+        // Find open bugs
+        const lines = bugs.split("\n");
+        let openStart = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (/open\s*bugs|🪼/i.test(lines[i])) {
+                openStart = i;
+                break;
+            }
+        }
+        if (openStart >= 0) {
+            const openBugs = lines.slice(openStart, openStart + 15).join("\n").trim();
+            if (openBugs && !openBugs.startsWith("## 🪼")) {
+                sections.push("🐛 OPEN BUGS (verify these aren't reintroduced):");
+                sections.push(openBugs);
+                sections.push("");
+            }
+        }
+    }
+    sections.push("━━━ END PROJECT CONTEXT ━━━");
+    return sections.join("\n");
+}
 // ── Project Document Templates ─────────────────────────────────
 const PROJECT_TEMPLATES_DIR = path.join(PLUGIN_ROOT, "scripts", "project-templates");
 const PROJECT_DOCS = [
@@ -2897,6 +3007,14 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 pcl += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
                 pcl += ` | Data: orchestrator-data/projects/${pc.project}/`;
                 ctx += pcl;
+                // ═══ PROJECT DOCS INJECTION (style rules, code rules, feature map, structure) ═══
+                // Auto-inject project-specific rules and context to minimize LLM mental drift.
+                // Reads STYLE_GUIDE.md, ARCHITECTURE.md, FEATURES.md, PROJECT_PLAN.md, BUGS.md
+                // from the project directory and prepends them to the prompt.
+                const projectDocCtx = buildProjectDocContext(dataDir, pc.project);
+                if (projectDocCtx) {
+                    ctx += "\n\n" + projectDocCtx;
+                }
                 // ═══ PHASE ENFORCEMENT ═══
                 // Inject current workflow phase instructions so the AI knows what phase
                 // it's in and what to do.
