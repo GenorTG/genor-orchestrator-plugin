@@ -594,7 +594,7 @@ function renderProjects(data){
           <td title="Created ${fmtDate(p.created)}">${fmtDate(p.created)}</td>
           <td>${p.free_only?'<span class="badge badge-yellow" title="Only free models">Free only</span>':'<span class="badge badge-green" title="Allows paid models">Flexible</span>'}</td>
           <td><span class="badge badge-blue" title="Routing strategy: ${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
-          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, backlog, settings, routing">Details</button></td>
+          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, docs, settings, routing">Details</button></td>
         </tr>`;
       }).join('')}${!projects.length?'<tr><td colspan="6" class="empty">No projects</td></tr>':''}
       </tbody></table>
@@ -887,20 +887,18 @@ window.filterProjects=function(){
 async function showProject(name){
   const main=$('#main-content');main.innerHTML=`<div class="loading"></div>`;
   try{
-    const [state,backlog,errors]=await Promise.allSettled([
+    const [state,errors]=await Promise.allSettled([
       API('/api/project-state?name='+encodeURIComponent(name)),
-      API('/api/project-backlog?project='+encodeURIComponent(name)),
       API('/api/project-errors?project='+encodeURIComponent(name)),
     ]);
     const st=state.status==='fulfilled'?state.value:{};
-    const bl=backlog.status==='fulfilled'?backlog.value:{tasks:[]};
-    const sessions=st.sessions||[];const config=st.config||{};const tasks=bl.tasks||[];
+    const sessions=st.sessions||[];const config=st.config||{};
     const rev=[...sessions].reverse();
-    window._projState={name,sessions,rev,st,config,tasks,tab:'sessions'};
+    window._projState={name,sessions,rev,st,config,tab:'sessions'};
 
     function renderTabBar(active){
       return '<div class="subtabs">'+
-        [{id:'sessions',l:'Sessions'},{id:'backlog',l:'Backlog'},{id:'settings',l:'Settings'},{id:'routing',l:'Routing'},{id:'docs',l:'Docs'}]
+        [{id:'sessions',l:'Sessions'},{id:'settings',l:'Settings'},{id:'routing',l:'Routing'},{id:'docs',l:'Docs'}]
         .map(t=>`<button class="subtab ${active===t.id?'active':''}" onclick="showProjTab('${t.id}')">${t.l}</button>`).join('')+'</div>';
     }
 
@@ -925,7 +923,7 @@ async function showProject(name){
       <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${sessions.length}</div><div class="mc-label">Sessions</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
-        <div class="metric-card"><div class="mc-value" style="font-size:15px">${tasks.length}</div><div class="mc-label">Backlog</div></div>
+
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${(bl&&bl.errors?bl.errors.length:st.errors?.length||0)}</div><div class="mc-label">Errors</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.routing_preset||'default'}</div><div class="mc-label">Routing</div></div>
       </div>
@@ -962,12 +960,9 @@ window.showProjTab=async function(tab){
 
   // Re-fetch for data-dependent tabs
   if(tab!=='sessions'&&tab!=='docs'){
-    try{const [state,backlog]=await Promise.allSettled([
-      API('/api/project-state?name='+encodeURIComponent(ps.name)),
-      API('/api/project-backlog?project='+encodeURIComponent(ps.name)),
-    ]);
-    if(state.status==='fulfilled'&&state.value.config){const st=state.value;ps.config=st.config||{};ps.sessions=st.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
-    if(backlog.status==='fulfilled')ps.tasks=backlog.value.tasks||ps.tasks;}catch(e){}
+    try{const state=await API('/api/project-state?name='+encodeURIComponent(ps.name));
+    if(state&&state.config){ps.config=state.config||{};ps.sessions=state.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
+    }catch(e){}
   }
 
   // Update active tab in sub-bar
@@ -991,23 +986,6 @@ window.showProjTab=async function(tab){
       <div class="filter-bar"><input type="text" id="proj-session-search" placeholder="🔍 Search sessions…" oninput="filterProjSessions()">
       <select id="proj-session-status" onchange="filterProjSessions()"><option value="">All</option><option value="done">done</option><option value="running">running</option><option value="failed">failed</option></select></div>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Started</th><th>Duration</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="empty">No sessions</td></tr>'}</tbody></table></div>`;
-  } else if(tab==='backlog'){
-    const tasks=ps.tasks||[];
-    if(!tasks.length){content.innerHTML='<div class="empty">No backlog tasks</div>';return;}
-    const todo=tasks.filter(t=>t.status==='todo');const done=tasks.filter(t=>t.status==='done'||t.status==='complete');
-    let h=`<div class="section-title">Backlog <span class="badge">${tasks.length}</span>
-      <button class="btn btn-sm" style="margin-left:8px" onclick="cleanupDoneTasks('${esc(ps.name)}')" title="Remove completed tasks">🗑 Cleanup Done</button></div>
-      <div class="card" style="padding:8px 10px;font-size:12px;color:var(--text-dim)">${done.length}/${tasks.length} completed · ${todo.length} pending</div>
-      <div class="table-wrap list-scroll" style="max-height:500px"><table><thead><tr><th>ID</th><th>Task</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead><tbody>`;
-    const sorted=[...tasks].sort((a,b)=>{const p={p0:0,p1:1,p2:2,p3:3};return(p[a.priority]??99)-(p[b.priority]??99);});
-    for(const t of sorted){
-      const sc=t.status==='done'?'badge-green':t.status==='in_progress'?'badge-yellow':t.status==='blocked'?'badge-red':'badge-yellow';
-      h+=`<tr><td style="font-size:11px">${esc(t.id)}</td><td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</td>
-        <td><span class="tag">${esc(t.priority||'—')}</span></td><td><span class="badge ${sc}">${esc(t.status)}</span></td>
-        <td>${t.status!=='done'?`<button class="btn btn-sm" onclick="completeBacklogTask('${esc(ps.name)}','${esc(t.id)}')" title="Mark done">✅</button> `:''}
-        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteBacklogTask('${esc(ps.name)}','${esc(t.id)}')" title="Delete">✕</button></td></tr>`;
-    }
-    content.innerHTML=h+'</tbody></table></div>';
   } else if(tab==='settings'){
     const docs=ps.config||{};const wf=docs.workflow||{};
     content.innerHTML=`<div class="section-title">⚙️ Settings</div>
@@ -1097,17 +1075,6 @@ window.showDocTab=async function(project,docName){
   }catch(e){content.innerHTML='<span style="color:var(--red)">Error: '+esc(e.message)+'</span>';}
 };
 
-window.completeBacklogTask=async function(project,id){
-  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'done'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Task done','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
-};
-window.deleteBacklogTask=async function(project,id){
-  if(!confirm('Delete task '+id+'?'))return;
-  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'deleted'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Deleted','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
-};
-window.cleanupDoneTasks=async function(project){
-  if(!confirm('Delete all completed tasks?'))return;
-  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,status:'cleanup_done'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Cleaned up','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
-};
 window.toggleProjSetting=async function(project,key,value){
   try{
     const body={project};
