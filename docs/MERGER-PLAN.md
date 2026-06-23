@@ -47,9 +47,33 @@
 
 ---
 
-## 2. 🗃️ Data Model
+## 2. 🗃️ Data Model (QA: Extend existing, avoid parallel tables)
 
-### New Tables (extending existing SQLite)
+**Instead of 4 new tables, extend 2 existing + 2 new:**
+- Extend `backlog_tasks`: add `phase`, `agent_id`, `task_type` columns (replaces proposed `backlog_tasks (extended)`)
+- Extend `sessions`: add `progress`, `context_used`, `output_summary` (replaces proposed `agent_sessions`)
+- New: `rooms`, `agents`, `vault_docs`, `pm_chat`
+
+### V4 Migration (in existing `db.ts` pattern)
+
+```typescript
+case 4:
+  // Extend existing tables
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN phase TEXT DEFAULT 'backlog'`);
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT`);
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN task_type TEXT DEFAULT 'dev'`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN progress INTEGER DEFAULT 0`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN context_used TEXT`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN output_summary TEXT`);
+  // New tables
+  db.exec(`CREATE TABLE IF NOT EXISTS agents (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS rooms (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS vault_docs (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS pm_chat (...)`);
+  break;
+```
+
+### New Tables
 
 ```sql
 -- ── Agent registry (employee records) ──
@@ -87,37 +111,8 @@ CREATE TABLE rooms (
   FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
--- ── Kanban tasks (pipeline) ──
-CREATE TABLE kanban_tasks (
-  id          TEXT PRIMARY KEY,
-  project_id  TEXT NOT NULL,
-  title       TEXT NOT NULL,
-  description TEXT DEFAULT '',
-  agent_id    TEXT,                    -- assigned agent (FK)
-  phase       TEXT DEFAULT 'backlog',  -- backlog|in-progress|review|done
-  priority    TEXT DEFAULT 'P2',       -- P0|P1|P2|P3
-  task_type   TEXT DEFAULT 'dev',      -- dev|design|qa|review|devops|docs
-  created_at  TEXT DEFAULT (datetime('now')),
-  updated_at  TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (project_id) REFERENCES projects(id),
-  FOREIGN KEY (agent_id) REFERENCES agents(id)
-);
-
--- ── Agent sessions (running instances) ──
-CREATE TABLE agent_sessions (
-  id          TEXT PRIMARY KEY,
-  agent_id    TEXT NOT NULL,
-  task_id     TEXT,
-  session_key TEXT NOT NULL,
-  status      TEXT DEFAULT 'pending',  -- pending|running|completed|failed|error
-  context_used TEXT,
-  progress    INTEGER DEFAULT 0,
-  output_summary TEXT,
-  started_at  TEXT,
-  completed_at TEXT,
-  FOREIGN KEY (agent_id) REFERENCES agents(id),
-  FOREIGN KEY (task_id) REFERENCES kanban_tasks(id)
-);
+-- (backlog_tasks (extended) DROPPED — extend existing backlog_tasks instead)
+-- (agent_sessions DROPPED — extend existing sessions instead)
 
 -- ── Project vault document index ──
 CREATE TABLE vault_docs (
@@ -137,7 +132,7 @@ CREATE TABLE vault_docs (
 
 -- ── PM chat messages ──
 CREATE TABLE pm_chat (
-  id          TEXT PRIMARY KEY,
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id  TEXT NOT NULL,
   role        TEXT NOT NULL,           -- user|pm|system
   message     TEXT NOT NULL,
@@ -152,8 +147,8 @@ CREATE TABLE pm_chat (
 Project (existing)
   ├── Rooms (new)          — office floorplan, task routing
   ├── Agents (new)         — employee records
-  │     └── AgentSessions (new) — running/finished sessions
-  ├── KanbanTasks (new)    — pipeline cards
+  │     └── sessions (extended) — running/finished sessions (+ progress, ctx)
+  ├── backlog_tasks (extended) — pipeline cards (+ phase, agent_id, task_type)
   ├── VaultDocs (new)      — project document index
   ├── PMChat (new)         — conversation history
   └── session_log (existing) — raw logging
@@ -162,6 +157,56 @@ Project (existing)
 ---
 
 ## 3. 🛠️ Backend Changes
+
+### 3.0 Auth Model
+
+All mutating endpoints (hire, fire, save vault, move task) MUST fail with 401 if no valid gateway token. Read-only endpoints may work unauthenticated for local dev.
+
+**Alpha simplification:** Gateway binds to localhost:18789 by default. Skip token check until UI is exposed beyond localhost.
+
+### 3.0b Bootstrap API Contract (must match mock JSON shape)
+
+The UI accesses `data.projects[projectId]` and `project.vault["STATE.md"]`. The bootstrap endpoint must return the EXACT same nested structure:
+
+```
+GET /api/software-house/bootstrap?project=X
+→ {
+    defaultProjectId: string,
+    projects: {
+      [id: string]: {
+        id, name,
+        rooms: Room[],
+        agents: Agent[],
+        tasks: Task[],
+        vault: { [path: string]: VaultDoc }  ← keyed by path, full content
+      }
+    }
+  }
+```
+
+**Model name mapping:** Translate `opencode-go/deepseek-v4-flash` → `deepseek-v4-flash` in responses (strip prefix for UI display).
+
+**Fat endpoint is intentional:** Alpha simplicity over restful purity. Mock JSON becomes the test fixture.
+
+### 3.0c V4 Migration Strategy
+
+Extend existing `db.ts` V1→V2→V3 pattern with:
+
+```typescript
+case 4:
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN phase TEXT DEFAULT 'backlog'`);
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT`);
+  db.exec(`ALTER TABLE backlog_tasks ADD COLUMN task_type TEXT DEFAULT 'dev'`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN progress INTEGER DEFAULT 0`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN context_used TEXT`);
+  db.exec(`ALTER TABLE sessions ADD COLUMN output_summary TEXT`);
+  db.exec(`CREATE TABLE IF NOT EXISTS agents (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS rooms (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS vault_docs (...)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS pm_chat (...)`);
+  db.exec(`PRAGMA user_version = 4`);
+  break;
+```
 
 ### 3.1 New API Endpoints (in `dashboard-handler.ts`)
 
@@ -179,7 +224,7 @@ Project (existing)
 | `DELETE` | `/orchestrator/api/software-house/agents/:id` | Fire agent | — |
 | `POST` | `/orchestrator/api/software-house/kanban/move` | Move task between phases | drag & drop |
 | `POST` | `/orchestrator/api/software-house/vault/inject` | Inject vault doc into active session | "inject" button |
-| `GET` | `/orchestrator/api/software-house/realtime/updates` | SSE endpoint for live status (existing SSE extended) | real-time UI |
+| `GET` | `/orchestrator/api/sse/live-sessions` (existing) | SSE endpoint for live status (existing SSE extended) | real-time UI |
 
 ### 3.2 Modified Existing Endpoints
 
@@ -212,7 +257,9 @@ Project (existing)
 
 ### 4.1 Current Structure
 
-`dashboard/software-house.html` is a single-file SPA (~1700 lines) with:
+`dashboard/software-house.html` is a single-file SPA (~1695 lines).
+
+**Cleanup before Phase 1:** Remove  root copies (keep  as canonical). Remove prototype HTML files: , , .
 - Inline CSS (~500 lines)
 - Inline HTML (shell layout)
 - Inline JS (~1200 lines) including:
@@ -319,7 +366,7 @@ es.onmessage = (e) => {
 1. PM or user creates task in kanban (backlog)
 2. Orchestrator matches task.type to room.taskTypes → finds room
 3. Room has agents → pick least-loaded agent
-4. Task assigned: UPDATE kanban_tasks SET agent_id=X, phase='in-progress'
+4. Task assigned: UPDATE backlog_tasks (extended) SET agent_id=X, phase='in-progress'
 5. Agent's next before_prompt_build includes task context
 6. Agent works in isolated session
 7. Completion → phase='review'
@@ -328,6 +375,8 @@ es.onmessage = (e) => {
 ---
 
 ## 6. 🧠 PM Orchestrator
+
+**⚠️ Deferred to Phase 5 (QA-informed):** Building a full LLM orchestrator inside a plugin HTTP handler is heavy. No precedent in codebase. For Phases 1-3, PM chat stays client-side simulated or routes through existing . Plugin does NOT make its own  calls from inside an HTTP route handler.
 
 ### 6.1 What It Is
 
@@ -484,7 +533,7 @@ User clicks "Inject STATE.md + ARCHITECTURE.md" in vault panel
 - [x] All 40 tools operational
 
 ### Phase 1 — DB & API (backend core)
-- [ ] Create all new SQLite tables (agents, rooms, kanban_tasks, vault_docs, pm_chat, agent_sessions)
+- [ ] Create all new SQLite tables (agents, rooms, backlog_tasks (extended), vault_docs, pm_chat, agent_sessions)
 - [ ] Implement `GET /api/software-house/bootstrap` — returns full state in mock JSON shape
 - [ ] Implement `GET /api/software-house/vault/tree` + `GET vault/doc` — vault read access
 - [ ] Move pixel-agent sprites under dashboard asset routing (done)
@@ -494,7 +543,7 @@ User clicks "Inject STATE.md + ARCHITECTURE.md" in vault panel
 - [ ] Implement `POST /api/software-house/agents/hire` — create agent record + spawn isolated session
 - [ ] Implement `PATCH /api/software-house/agents/:id` — update config
 - [ ] Implement `DELETE /api/software-house/agents/:id` — fire agent
-- [ ] Implement `kanban_tasks` assignment: task → room → agent
+- [ ] Implement `backlog_tasks (extended)` assignment: task → room → agent
 - [ ] UI: hire modal now triggers real spawn
 - [ ] UI: agent status reflects real session state
 
