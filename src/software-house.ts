@@ -508,8 +508,9 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const pathname = url.pathname;
 
-  // Only handle /api/software-house/* routes
-  if (!pathname.startsWith("/api/software-house/")) {
+  // Only handle /api/software-house/* routes (with or without /orchestrator prefix)
+  const normalizedPathname = pathname.replace(/^\/orchestrator/, "");
+  if (!normalizedPathname.startsWith("/api/software-house/")) {
     return false;
   }
 
@@ -517,85 +518,85 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
 
   try {
     // Bootstrap
-    if (pathname === "/api/software-house/bootstrap" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/bootstrap" && method === "GET") {
       await handleBootstrap(req, res);
       return true;
     }
 
     // Workers
-    if (pathname === "/api/software-house/workers" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/workers" && method === "GET") {
       await handleWorkersGet(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/workers/hire" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/workers/hire" && method === "POST") {
       await handleWorkerHire(req, res);
       return true;
     }
-    if (pathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "PATCH") {
+    if (normalizedPathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "PATCH") {
       await handleWorkerEdit(req, res);
       return true;
     }
-    if (pathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "DELETE") {
+    if (normalizedPathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "DELETE") {
       await handleWorkerFire(req, res);
       return true;
     }
 
     // Rooms
-    if (pathname === "/api/software-house/rooms" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/rooms" && method === "GET") {
       await handleRoomsGet(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/rooms" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/rooms" && method === "POST") {
       await handleRoomAdd(req, res);
       return true;
     }
-    if (pathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "PATCH") {
+    if (normalizedPathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "PATCH") {
       await handleRoomEdit(req, res);
       return true;
     }
-    if (pathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "DELETE") {
+    if (normalizedPathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "DELETE") {
       await handleRoomDelete(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/layout/save" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/layout/save" && method === "POST") {
       await handleLayoutSave(req, res);
       return true;
     }
 
     // Backlog
-    if (pathname === "/api/software-house/backlog" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/backlog" && method === "GET") {
       await handleBacklogGet(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/backlog/move" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/backlog/move" && method === "POST") {
       await handleBacklogMove(req, res);
       return true;
     }
 
     // PM Chat
-    if (pathname === "/api/software-house/pm/chat" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/pm/chat" && method === "GET") {
       await handlePmChatGet(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/pm/chat" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/pm/chat" && method === "POST") {
       await handlePmChatPost(req, res);
       return true;
     }
 
     // Vault
-    if (pathname === "/api/software-house/vault/tree" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/vault/tree" && method === "GET") {
       await handleVaultTree(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/vault/doc" && method === "GET") {
+    if (normalizedPathname === "/api/software-house/vault/doc" && method === "GET") {
       await handleVaultDocGet(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/vault/doc" && method === "PUT") {
+    if (normalizedPathname === "/api/software-house/vault/doc" && method === "PUT") {
       await handleVaultDocPut(req, res);
       return true;
     }
-    if (pathname === "/api/software-house/vault/inject" && method === "POST") {
+    if (normalizedPathname === "/api/software-house/vault/inject" && method === "POST") {
       await handleVaultInject(req, res);
       return true;
     }
