@@ -330,8 +330,10 @@ export async function initTest(
   const reg = api.tools.get("genorch_session_register")!;
   await unwrap(reg("", {}));
   
-  const bind = api.tools.get("genorch_session_start_work")!;
-  await unwrap(bind("", { project, task }));
+  const bindProj = api.tools.get("genorch_project_bind")!;
+  await unwrap(bindProj("", { project }));
+  const start = api.tools.get("genorch_session_start_work")!;
+  await unwrap(start("", { task }));
   
   return { api, dd };
 }

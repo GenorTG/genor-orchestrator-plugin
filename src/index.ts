@@ -3478,21 +3478,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     api.registerTool({
       name: "genorch_session_start_work",
       label: "Orchestrator Start Work",
-      description: "Start working on a specific task in the bound project. Requires project bound via genorch_project_bind first. Sets task context with type, description, and optional original prompt. Enables auto-routing, auto-logging, and context injection.",
+      description: "Start working on a specific task in the bound project. Requires prior genorch_project_bind. Sets task context enabling auto-routing, auto-logging, and project context injection.",
       parameters: Type.Object({
         task: Type.String({ description: "Describe the task concisely. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files/systems are involved)" }),
         task_type: Type.Optional(Type.Enum({ coding: "coding", fixing: "fixing", research: "research", qa: "qa", documentation: "documentation", test: "test" }, { description: "Task category for model routing. If omitted, inferred from task text." })),
-        project: Type.Optional(Type.String({ description: "DEPRECATED: If provided, binds to project and starts work in one step (legacy behavior). Prefer genorch_project_bind first, then call without project." })),
         original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request, verbatim. Truncated to 500 chars." })),
       }),
       async execute(_id: string, _params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
-        const params = _params as { task: string; task_type?: string; project?: string; original_prompt?: string };
-        let project = params.project || sessionTracker.currentProject;
-        if (!project) {
-          return txt({ ok: false, error: "No project specified and no project bound. Call genorch_project_bind first or pass project parameter." });
-        }
+        const bind = requireBinding();
+        if (bind) return txt({ ok: false, error: bind });
+        const params = _params as { task: string; task_type?: string; original_prompt?: string };
+        const project = sessionTracker.currentProject!;
         try {
           return txt(setContext(dataDir, project, params.task, logger, params.original_prompt));
         } catch (err: any) {
@@ -4061,15 +4059,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (checks === "all" || checks === "sessions") {
           const hk = sessionTracker.sessionKey;
           if (!hk) {
-            addIssue("No session key set. genorch_session_register will use synthetic fallback.");
-            if (autoFix) {
-              const sk = realSessionKey();
-              if (sk) {
-                sessionTracker.registerSession(sk);
-                sessionTracker.sessionKey = sk;
-                addFix("Registered session: " + sk);
-              }
-            }
+            addIssue("No session key set. before_prompt_build or session_start hooks have not populated one yet.");
           } else {
             if (!sessionTracker.isSessionRegistered(hk)) {
               addIssue("Session key " + hk + " is not registered. Call genorch_session_register.");
@@ -4311,30 +4301,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     api.registerTool({
       name: "genorch_project_join",
       label: "Orchestrator Join Project",
-      description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.",
+      description: "Register session + bind to project + set task in one step. Convenience for new/ad-hoc sessions. Internally calls genorch_session_register + genorch_project_bind + genorch_session_start_work.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project name to join. Use genorch_project_list_active first to see active projects." }),
+        project: Type.String({ description: "Project name. Use genorch_project_list_active first." }),
         task: Type.String({ description: "Task description for what you're joining to do." }),
       }),
       async execute(_id: string, params: any) {
         const sk = sessionTracker.sessionKey;
         if (!sk) return txt({ ok: false, error: "No session key available." });
 
-        // Auto-register this session
         sessionTracker.registerSession(sk);
         if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
 
-        // Verify the project exists in data
-        const pd = path.join(dataDir, "projects");
-        const projExists = fs.existsSync(pd) && fs.existsSync(path.join(pd, params.project));
-        if (!projExists) {
-          return txt({
-            ok: false,
-            error: `Project "${params.project}" not found in orchestrator data. Active projects: ${sessionTracker.getActiveProjects().map(a => a.project).join(", ")}`,
-          });
-        }
-
-        try {
+        if (!sessionTracker.currentProject) {
           const result = setContext(dataDir, params.project, params.task, logger);
           logger.info("sessions", `Session joined project: ${params.project}/${params.task} (session=${sk})`);
           return txt({
@@ -4345,12 +4324,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             message: `Joined project "${params.project}" — context set, task: "${params.task}"`,
             details: result,
           });
-        } catch (err: any) {
-          return txt({
-            ok: false,
-            error: `Failed to join project "${params.project}": ${err.message}`,
-          });
         }
+
+        // Already bound: just set task
+        return txt(setContext(dataDir, sessionTracker.currentProject, params.task, logger));
       },
     });
 

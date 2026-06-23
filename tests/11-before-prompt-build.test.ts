@@ -23,7 +23,8 @@ describe("PLUGIN-002b — before_prompt_build hook", () => {
     const mod = await import("../src/index.js");
     mod.__setTestSessionKey("test-key");
     await unwrap(api.tools.get("genorch_session_register")!("", {}));
-    await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "test" }));
+    await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      await unwrap(api.tools.get("genorch_session_start_work")!("", { task: "test" }));
   }
 
   describe("hook registration", () => {

@@ -75,39 +75,39 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
   describe("genorch_session_start_work", () => {
     it("should fail if session not registered", async () => {
       const exec = api.tools.get("genorch_session_start_work")!;
-      const result = await unwrap(exec("", { project: "test-project", task: "test" }));
+      const result = await unwrap(exec("", { task: "test" }));
       expect(result).not.toHaveProperty("ok", true);
     });
 
-    it("should set project context after registration", async () => {
+    it("should fail if no project bound", async () => {
       const mod = await import("../src/index.js");
       mod.__setTestSessionKey("test-key");
       await unwrap(api.tools.get("genorch_session_register")!("", {}));
       const exec = api.tools.get("genorch_session_start_work")!;
-      const result = await unwrap(exec("", { project: "test-project", task: "testing" }));
+      const result = await unwrap(exec("", { task: "testing" }));
+      expect(result).toHaveProperty("ok", false);
+    });
+
+    it("should start work after binding project", async () => {
+      const mod = await import("../src/index.js");
+      mod.__setTestSessionKey("test-key");
+      await unwrap(api.tools.get("genorch_session_register")!("", {}));
+      await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      const exec = api.tools.get("genorch_session_start_work")!;
+      const result = await unwrap(exec("", { task: "testing" }));
       expect(result).toHaveProperty("ok", true);
       expect(result).toHaveProperty("project", "test-project");
       expect(result).toHaveProperty("task", "testing");
-    });
-
-    it("should reject binding to second project", async () => {
-      const mod = await import("../src/index.js");
-      mod.__setTestSessionKey("test-key");
-      await unwrap(api.tools.get("genorch_session_register")!("", {}));
-      await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "first" }));
-      const exec = api.tools.get("genorch_session_start_work")!;
-      const result = await unwrap(exec("", { project: "free-project", task: "second" }));
-      expect(result).toHaveProperty("ok", false);
-      expect(result.error).toMatch(/session|context|registered/i);
     });
 
     it("should accept same-project re-context", async () => {
       const mod = await import("../src/index.js");
       mod.__setTestSessionKey("test-key");
       await unwrap(api.tools.get("genorch_session_register")!("", {}));
-      await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "first" }));
+      await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      await unwrap(api.tools.get("genorch_session_start_work")!("", { task: "first" }));
       const exec = api.tools.get("genorch_session_start_work")!;
-      const result = await unwrap(exec("", { project: "test-project", task: "second" }));
+      const result = await unwrap(exec("", { task: "second" }));
       expect(result).toHaveProperty("ok", true);
       expect(result).toHaveProperty("task", "second");
     });
@@ -119,7 +119,8 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
       const mod = await import("../src/index.js");
       mod.__setTestSessionKey("test-key");
       await unwrap(api.tools.get("genorch_session_register")!("", {}));
-      await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "test" }));
+      await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      await unwrap(api.tools.get("genorch_session_start_work")!("", { task: "test" }));
       const exec = api.tools.get("genorch_session_clear_work")!;
       const result = await unwrap(exec("", {}));
       expect(result).toHaveProperty("ok", false);
@@ -130,7 +131,8 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
       const mod = await import("../src/index.js");
       mod.__setTestSessionKey("test-key");
       await unwrap(api.tools.get("genorch_session_register")!("", {}));
-      await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "test" }));
+      await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      await unwrap(api.tools.get("genorch_session_start_work")!("", { task: "test" }));
       await unwrap(api.tools.get("genorch_session_log")!("", { project: "test-project", task: "test", model: "gpt-4", agent: "Amy", status: "done" }));
       const exec = api.tools.get("genorch_session_clear_work")!;
       const result = await unwrap(exec("", {}));
@@ -165,7 +167,8 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
       const mod = await import("../src/index.js");
       mod.__setTestSessionKey("test-key");
       await unwrap(api.tools.get("genorch_session_register")!("", {}));
-      await unwrap(api.tools.get("genorch_session_start_work")!("", { project: "test-project", task: "test" }));
+      await unwrap(api.tools.get("genorch_project_bind")!("", { project: "test-project" }));
+      await unwrap(api.tools.get("genorch_session_start_work")!("", { task: "test" }));
       const exec = api.tools.get("genorch_project_leave")!;
       const result = await unwrap(exec("", {}));
       expect(result).toHaveProperty("ok", false);
