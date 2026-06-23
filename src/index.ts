@@ -1406,6 +1406,43 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
  * Snapshot current project state into the event log.
  * Reads actual source, writes diff events, regenerates STATE.md.
  */
+// ── Project Document Templates ─────────────────────────────────
+const PROJECT_TEMPLATES_DIR = path.join(PLUGIN_ROOT, "scripts", "project-templates");
+const PROJECT_DOCS = [
+  "PROJECT_PLAN.md",
+  "FEATURES.md",
+  "BUGS.md",
+  "CHANGELOG.md",
+  "STYLE_GUIDE.md",
+  "ARCHITECTURE.md",
+];
+
+/** Initialize a new project directory with template documents. */
+function initProjectDocs(projectDir: string, projectName: string, description?: string, location?: string): void {
+  const date = new Date().toISOString().split("T")[0];
+  const replacements: Record<string, string> = {
+    "{{project_name}}": projectName,
+    "{{date}}": date,
+    "{{description}}": description || "",
+    "{{location}}": location || "",
+    "{{language}}": "TypeScript",
+  };
+
+  for (const fn of PROJECT_DOCS) {
+    const templatePath = path.join(PROJECT_TEMPLATES_DIR, fn);
+    if (!fs.existsSync(templatePath)) {
+      continue; // template file missing — skip
+    }
+    let content = fs.readFileSync(templatePath, "utf-8");
+    // Apply template substitutions
+    for (const [key, val] of Object.entries(replacements)) {
+      content = content.replaceAll(key, val);
+    }
+    const outPath = path.join(projectDir, fn);
+    fs.writeFileSync(outPath, content, "utf-8");
+  }
+}
+
 function snapshotState(project: string, dataDir: string, logger: OrchestratorLogger): void {
   if (!project) return;
   try {
@@ -4617,6 +4654,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
 
         fs.mkdirSync(projDir2, { recursive: true });
+
+        // Initialize project docs from templates
+        initProjectDocs(projDir2, projectName, params.description, params.directory);
 
         // Create project config entry in DB FIRST (so FK constraints on state_events don't fail)
         setProjectConfig(projectName, {

@@ -1049,10 +1049,35 @@ window.showProjTab=async function(tab){
     `;
     setTimeout(()=>content.querySelectorAll('.table-wrap table').forEach(enableCols),50);
   } else if(tab==='docs'){
-    content.innerHTML='<div class="section-title">📄 Docs</div>'+
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
-      ['STATE','ROADMAP','CONTEXT','NOTES'].map(d=>`<button class="btn btn-sm" onclick="showDocTab('${esc(ps.name)}','${d}')" title="View ${d}.md">${d}</button>`).join('')+'</div>'+
-      '<div id="doc-content" style="background:var(--bg-alt);padding:12px;border-radius:var(--radius);font-size:12px;font-family:var(--font);white-space:pre-wrap;max-height:500px;overflow:auto;border:1px solid var(--border)"><span style="color:var(--text-dim)">Select a doc above</span></div>';
+    // Read state from API to check which docs exist
+    content.innerHTML='<div class="section-title">📄 Project Docs</div>'+\
+      '<div style="margin-bottom:8px;color:var(--text-dim);font-size:11px">Project documents — click to view</div>'+\
+      '<div style="display:flex;flex-direction:column;gap:8px">'+\
+        '<div><b style="font-size:11px;color:var(--text)">📋 Planning</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+\
+          [\
+            {id:'PROJECT_PLAN',l:'Project Plan',desc:'Vision, goals, milestones'},\
+            {id:'FEATURES',l:'Features',desc:'Planned/in-progress/completed'},\
+            {id:'CHANGELOG',l:'Changelog',desc:'What changed over time'},\
+          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+\
+        '<div><b style="font-size:11px;color:var(--text)">🐛 Issues</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+\
+          [\
+            {id:'BUGS',l:'Bugs & Issues',desc:'Known bugs, fixed issues, limitations'},\
+          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+\
+        '<div><b style="font-size:11px;color:var(--text)">🏛️ Architecture</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+\
+          [\
+            {id:'ARCHITECTURE',l:'Architecture',desc:'System design, data flow, patterns'},\
+            {id:'STYLE_GUIDE',l:'Style Guide',desc:'Code conventions, design language'},\
+          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+\
+        '<div><b style="font-size:11px;color:var(--text)">⚙️ Orchestrator</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+\
+          [\
+            {id:'STATE',l:'State',desc:'Computed project state'},\
+            {id:'ROADMAP',l:'Roadmap',desc:'Project roadmap'},\
+            {id:'CONTEXT',l:'Context',desc:'Project context'},\
+            {id:'NOTES',l:'Notes',desc:'General notes'},\
+            {id:'RECOVERY',l:'Recovery',desc:'Recovery/handoff'},\
+          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+\
+      '</div>'+\
+      '<div id="doc-content" style="margin-top:10px;background:var(--bg-alt);padding:12px;border-radius:var(--radius);font-size:12px;font-family:var(--font);white-space:pre-wrap;max-height:500px;overflow:auto;border:1px solid var(--border)"><span style="color:var(--text-dim)">Select a doc above</span></div>';
   }
   // Update subtitle active
   const btns=document.getElementById('main-content')?.querySelectorAll('.subtab');
