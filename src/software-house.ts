@@ -241,19 +241,21 @@ export async function handleRoomsGet(req: IncomingMessage, res: ServerResponse):
 export async function handleRoomAdd(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const db = getDb();
   const body = await parseBody(req);
-  const { id, name, purpose, taskTypes, project } = body;
+  const { id: providedId, name, purpose, taskTypes, project } = body;
 
-  if (!id || !name) {
-    json(res, { error: "id and name required" }, 400);
+  if (!name) {
+    json(res, { error: "name required" }, 400);
     return;
   }
+
+  const id = providedId || `room_${Date.now().toString(36)}`;
 
   db.prepare(`
     INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
     VALUES (?, ?, ?, ?, ?)
   `).run(id, name, purpose || "", JSON.stringify(taskTypes || []), project || "genor-orchestrator-plugin");
 
-  json(res, { ok: true, id });
+  json(res, { ok: true, room: { id, name } });
 }
 
 /**
@@ -388,7 +390,7 @@ export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse)
   const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
   const messages = db.prepare("SELECT * FROM pm_chat WHERE project = ? ORDER BY created_at DESC LIMIT 100").all(project);
-  json(res, messages.reverse());
+  json(res, { ok: true, messages: messages.reverse() });
 }
 
 /**
@@ -423,7 +425,20 @@ export async function handleVaultTree(req: IncomingMessage, res: ServerResponse)
   const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
   const docs = db.prepare("SELECT * FROM vault_docs WHERE project = ?").all(project);
-  json(res, docs);
+  const vault: Record<string, any> = {};
+  for (const doc of docs as any[]) {
+    vault[doc.path] = {
+      folder: doc.folder,
+      icon: doc.icon,
+      title: doc.title,
+      updated: doc.updated_at,
+      tags: JSON.parse(doc.tags || "[]"),
+      status: doc.status,
+      links: JSON.parse(doc.links || "[]"),
+      html: doc.content,
+    };
+  }
+  json(res, { ok: true, vault });
 }
 
 /**
