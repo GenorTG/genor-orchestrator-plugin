@@ -3238,6 +3238,18 @@ const _plugin: Record<string, any> = definePluginEntry({
         // NEVER use sessionTracker.sessionKey as fallback — it's singletons-tainted.
         // If hk (hook context key) is empty or not registered, NO injection.
         if (!hk) return;
+
+        // Safe key adoption: if the tracker has no session key yet (null),
+        // adopt the hook context key. Once set, never overwrite — prevents
+        // cross-session pollution where Session B's key would replace
+        // Session A's established key.
+        if (!sessionTracker.sessionKey) {
+          sessionTracker.start(hk, "resumed");
+          if (!sessionTracker.isSessionRegistered(hk)) {
+            sessionTracker.registerSession(hk);
+            logger.info("hooks", `before_prompt_build adopted orphan session key: ${hk}`);
+          }
+        }
         const sk = hk;
         if (!sessionTracker.isSessionRegistered(sk)) return;
         const pc = sessionTracker.getSessionContext(sk);
@@ -3507,17 +3519,11 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       description: "Register this session for orchestrator tracking. Must be called BEFORE genorch_session_start_work. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        // session_start hook now auto-populates sessionTracker.sessionKey.
-        // If still null (e.g. plugin loaded after session start), use a
-        // synthetic fallback key so registration works regardless.
-        let sk = sessionTracker.sessionKey;
-        let synthetic = false;
-        if (!sk) {
-          sk = `agent:main:plugin:orphan-${Date.now().toString(36)}`;
-          sessionTracker.start(sk, "orphan-fallback");
-          synthetic = true;
-          logger.warn("registration", `No session key — using synthetic fallback: ${sk}`);
-        }
+        // The session key MUST be the real OpenClaw gateway session key.
+        // It is populated by the session_start and before_prompt_build
+        // hooks from the real event/hook context. NO synthetic keys.
+        const sk = sessionTracker.sessionKey;
+        if (!sk) return txt("error: no session key available");
         
         // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
         // If this session key doesn't match tracker's current key and there's
@@ -3546,7 +3552,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             message: "registered",
             session_key: sk,
             total_registered: existingSessions.length + 1,
-            synthetic: synthetic || undefined,
             warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
           });
         }
@@ -3555,7 +3560,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           ok: true,
           message: "already_registered",
           session_key: sk,
-          synthetic: synthetic || undefined,
           note: "Session is auto-registered. Call genorch_session_start_work to bind to a project.",
         });
       },
