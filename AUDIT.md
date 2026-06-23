@@ -4,6 +4,8 @@
 **Auditor:** Amy  
 **Scope:** 15,556 lines across 70+ source files (4 core modules, 18 test files, 18 scripts, 10 doc files)
 
+> **Note (2026-06-23):** This audit was performed on v0.9.1. Subsequent releases (v0.9.2, v0.9.3, v0.9.4) addressed many findings. See [CHANGELOG.md](./CHANGELOG.md) for what changed.
+
 ---
 
 ## Executive Summary

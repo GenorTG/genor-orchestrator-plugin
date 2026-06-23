@@ -454,7 +454,6 @@ interface SessionState {
   currentTask: string | null;
   currentModel: string | null;
   currentModelProvider: string | null;
-  currentModelTier: number;
   currentAgent: string;
   sessionStartTimestamp: number;
   sessionKey: string | null;
@@ -486,7 +485,6 @@ function newSessionState(): SessionState {
     currentTask: null,
     currentModel: null,
     currentModelProvider: null,
-    currentModelTier: 0,
     currentAgent: "Amy",
     sessionStartTimestamp: Date.now(),
     sessionKey: null,
@@ -538,8 +536,6 @@ class SessionTracker {
   set currentModel(v: string | null) { this._s.currentModel = v; }
   get currentModelProvider(): string | null { return this._s.currentModelProvider; }
   set currentModelProvider(v: string | null) { this._s.currentModelProvider = v; }
-  get currentModelTier(): number { return this._s.currentModelTier; }
-  set currentModelTier(v: number) { this._s.currentModelTier = v; }
   get currentAgent(): string { return this._s.currentAgent; }
   set currentAgent(v: string) { this._s.currentAgent = v; }
   get sessionStartTimestamp(): number { return this._s.sessionStartTimestamp; }
@@ -590,7 +586,7 @@ class SessionTracker {
   // A session only gets project context injected if it explicitly
   // registered via genorch_session_start_work. This prevents project
   // context from bleeding between unrelated sessions.
-  private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
+  private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; timestamp: number; workflowConfig?: any }> = new Map();
   // Subagent session registry — tracks which subagent keys belong to which parent
   // and what project/task they were spawned under. Used at session_end to log
   // the subagent with its real session key, not the parent's.
@@ -608,10 +604,9 @@ class SessionTracker {
   // A project must have at least one session to be considered "active".
   private projectActiveSessions: Map<string, Set<string>> = new Map();
 
-  trackModel(model: string, provider?: string, tier?: number): void {
+  trackModel(model: string, provider?: string): void {
     this.currentModel = model;
     if (provider) this.currentModelProvider = provider;
-    if (tier !== undefined) this.currentModelTier = tier;
   }
 
   trackAction(action: string, file?: string): void {
@@ -751,7 +746,6 @@ class SessionTracker {
       task: this.currentTask,
       model: this.currentModel,
       model_provider: this.currentModelProvider,
-      model_tier: this.currentModelTier,
       subagent_depth: this.subagentDepth,
       action: this.currentAction,
       current_file: this.currentFile,
@@ -804,7 +798,7 @@ class SessionTracker {
     if (this.sessionKey) {
       this.sessionContexts.set(this.sessionKey, {
         project, task, model: this.currentModel, modelProvider: this.currentModelProvider,
-        modelTier: this.currentModelTier, timestamp: Date.now(), workflowConfig
+        timestamp: Date.now(), workflowConfig
       });
       // Bind session to project (if not already bound — first set_context creates the binding)
       if (!this.sessionProjectBinding.has(this.sessionKey)) {
@@ -825,7 +819,6 @@ class SessionTracker {
     this.currentTask = null;
     this.currentModel = null;
     this.currentModelProvider = null;
-    this.currentModelTier = 0;
     this.currentAction = null;
     this.currentFile = null;
     this.workflow.reset({ enabled: false });
@@ -1001,7 +994,6 @@ function queueLiveAgents(reason: string, tracker: SessionTracker): void {
       task: tracker.currentTask,
       model: tracker.currentModel,
       model_provider: tracker.currentModelProvider,
-      model_tier: tracker.currentModelTier,
       subagent_depth: 0,
       action: "running",
       current_file: null,
@@ -3064,7 +3056,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         // Preset: "no-steering" — skip entirely, let OpenClaw's default resolution run
         if (routingPreset === "no-steering") {
           logger.debug("routing", `no-steering preset for ${sessionTracker.currentProject} — skipping model override`);
-          sessionTracker.trackModel(event?.resolvedModel || "default", "default", 0);
+          sessionTracker.trackModel(event?.resolvedModel || "default", "default");
           return;
         }
         

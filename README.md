@@ -1394,7 +1394,7 @@ npm test
 ```
 genor-orchestrator-plugin/
 ├── src/
-│   ├── index.ts                    # Main plugin — 40 tools, 8 hooks, all logic
+│   ├── index.ts                    # Main plugin — 43 tools, 8 hooks, all logic
 │   ├── dashboard-handler.ts        # Dashboard HTTP handler (registered at /orchestrator)
 │   ├── shared.ts                   # Shared types and helpers
 │   └── index.test.ts              # Tests (3)

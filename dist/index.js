@@ -276,7 +276,6 @@ function newSessionState() {
         currentTask: null,
         currentModel: null,
         currentModelProvider: null,
-        currentModelTier: 0,
         currentAgent: "Amy",
         sessionStartTimestamp: Date.now(),
         sessionKey: null,
@@ -325,8 +324,6 @@ class SessionTracker {
     set currentModel(v) { this._s.currentModel = v; }
     get currentModelProvider() { return this._s.currentModelProvider; }
     set currentModelProvider(v) { this._s.currentModelProvider = v; }
-    get currentModelTier() { return this._s.currentModelTier; }
-    set currentModelTier(v) { this._s.currentModelTier = v; }
     get currentAgent() { return this._s.currentAgent; }
     set currentAgent(v) { this._s.currentAgent = v; }
     get sessionStartTimestamp() { return this._s.sessionStartTimestamp; }
@@ -394,12 +391,10 @@ class SessionTracker {
     // Track which projects have at least one active session.
     // A project must have at least one session to be considered "active".
     projectActiveSessions = new Map();
-    trackModel(model, provider, tier) {
+    trackModel(model, provider) {
         this.currentModel = model;
         if (provider)
             this.currentModelProvider = provider;
-        if (tier !== undefined)
-            this.currentModelTier = tier;
     }
     trackAction(action, file) {
         this.currentAction = action;
@@ -536,7 +531,6 @@ class SessionTracker {
             task: this.currentTask,
             model: this.currentModel,
             model_provider: this.currentModelProvider,
-            model_tier: this.currentModelTier,
             subagent_depth: this.subagentDepth,
             action: this.currentAction,
             current_file: this.currentFile,
@@ -584,7 +578,7 @@ class SessionTracker {
         if (this.sessionKey) {
             this.sessionContexts.set(this.sessionKey, {
                 project, task, model: this.currentModel, modelProvider: this.currentModelProvider,
-                modelTier: this.currentModelTier, timestamp: Date.now(), workflowConfig
+                timestamp: Date.now(), workflowConfig
             });
             // Bind session to project (if not already bound — first set_context creates the binding)
             if (!this.sessionProjectBinding.has(this.sessionKey)) {
@@ -604,7 +598,6 @@ class SessionTracker {
         this.currentTask = null;
         this.currentModel = null;
         this.currentModelProvider = null;
-        this.currentModelTier = 0;
         this.currentAction = null;
         this.currentFile = null;
         this.workflow.reset({ enabled: false });
@@ -784,7 +777,6 @@ function queueLiveAgents(reason, tracker) {
             task: tracker.currentTask,
             model: tracker.currentModel,
             model_provider: tracker.currentModelProvider,
-            model_tier: tracker.currentModelTier,
             subagent_depth: 0,
             action: "running",
             current_file: null,
@@ -2820,7 +2812,7 @@ const _plugin = definePluginEntry({
                 // Preset: "no-steering" — skip entirely, let OpenClaw's default resolution run
                 if (routingPreset === "no-steering") {
                     logger.debug("routing", `no-steering preset for ${sessionTracker.currentProject} — skipping model override`);
-                    sessionTracker.trackModel(event?.resolvedModel || "default", "default", 0);
+                    sessionTracker.trackModel(event?.resolvedModel || "default", "default");
                     return;
                 }
                 let eligible = [...allModels];
