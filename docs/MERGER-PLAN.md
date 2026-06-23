@@ -1,54 +1,190 @@
-# Implementation Plan: Software House × Orchestrator Merger
+# Software House Merger: Final Plan
 
 > **Last Updated:** 2026-06-23
-> **Architecture:** See `docs/ARCHITECTURE.md` for complete system overview
-> **Source:** `/home/genorbox1/projects/genor-orchestrator-plugin`
+> **Purpose:** Refactor the entire orchestrator plugin to work with the Software House UI as the single frontend. Delete classic dashboard. Every backend function must make sense in the new system.
 
-## Overview
+---
 
-The Software House UI (pixel-art office visualization) needs to connect to the Orchestrator backend. Currently it loads from mock JSON. This plan wires every UI function to real API endpoints.
+## The Problem
 
-## Key Numbers
+Two separate systems exist today:
 
-- **44 backend tools** → **13 have NO UI** (session/project/backlog/workflow/QA/tests/pipeline/delegation/knowledge/ADR/logs/diagnostics/config)
-- **14 UI features** → **have NO backend** (agent personas/rooms/visual states/context/chat/vault/layout)
-- **5 backend features** → **partially in UI** (sessions/backlog/models/logs/config shown in classic dashboard only)
+**Backend (what works):**
+- 44 AI tools for session/project/backlog/model/workflow/QA management
+- 8 hooks for lifecycle events
+- 25 API routes for the classic dashboard
+- 8 DB tables for persistence
+- Session lifecycle, project management, backlog, models, workflow, QA, tests, pipeline, delegation, knowledge, ADR, logs, config
 
-## Architecture Decisions
+**Frontend (what's pretty):**
+- Software House UI — pixel-art office visualization
+- Loads from mock JSON — nothing persists
+- Every write action modifies local JS arrays only
+- 3 buttons literally say `toast('...mockup')` — they do nothing real
 
-| Decision | Solution |
-|----------|----------|
-| Agent abstraction | New `agents` table — persistent personas reference ephemeral sessions |
-| Room persistence | New `rooms` table — group agents by task type |
-| Visual state mapping | Backend status → UI states: idle→sleep, running→working, done→success, failed→error |
-| PM chat persistence | New `pm_chat` table — store messages with timestamps |
-| Quick actions | Wire to existing `handleQuickAction()` infrastructure |
-| Vault system | New `vault_docs` table + `before_prompt_build` injection |
-| Layout persistence | Store in `project_configs` table |
-| Bootstrap API | Match mock JSON shape exactly — zero frontend changes needed |
+**The gap:**
+- Backend has 13 features with NO UI
+- UI has 14 features with NO backend
+- 5 features partially overlap (shown in classic dashboard only)
+- Classic dashboard has features Software House doesn't (models, logs, settings)
 
-## Implementation Phases
+**The goal:**
+Delete classic dashboard. Make Software House the single frontend. Refactor backend so every function works in the new system. The concept: workers (agents) with task types doing things in projects.
 
-### Phase 1: Database Schema
-**Goal:** Add all missing tables and columns.
+---
 
-| Table | Columns | Purpose |
-|-------|---------|---------|
-| `agents` | id, name, role, sprite, model, prompt, room, status, project, created_at | Persistent agent personas |
-| `rooms` | id, name, purpose, taskTypes, project, x, y, w, h, created_at | Workspace groupings |
-| `vault_docs` | id, path, content, project, created_at, updated_at | Document storage |
-| `pm_chat` | id, message, sender, project, created_at | Chat persistence |
+## The Solution
 
-Extend existing:
-- `sessions` → add `agent_id`, `context_used`
-- `backlog_tasks` → add `agent_id`
+### Core Concept: Workers in Projects
 
-### Phase 2: Bootstrap API
-**Goal:** Backend serves full project state matching mock JSON shape.
+The UI shows a concept of **workers** (agents with roles, models, sprites) doing **tasks** (backlog items with phases) in **projects** (with rooms, vault, chat).
 
-Endpoint: `GET /api/software-house/bootstrap`
+The backend needs to support this concept:
 
-Response shape (must match mock JSON EXACTLY):
+| UI Concept | Backend Table | Purpose |
+|------------|---------------|---------|
+| Agent persona | `agents` | Persistent identity (name, role, sprite, model, prompt, room) |
+| Room | `rooms` | Workspace grouping (purpose, task types) |
+| Task | `backlog_tasks` | Work item (phase, agent assignment, priority) |
+| Vault | `vault_docs` | Document storage (path, content) |
+| PM Chat | `pm_chat` | Communication (messages, timestamps) |
+| Session | `sessions` | Ephemeral execution (agent + task + status + context) |
+
+### Key Insight: Agents Are Personas, Sessions Are Ephemeral
+
+An agent (like "Alex - Backend Dev") is a persistent persona. It can have multiple sessions over time, each working on different tasks. The agent persona is persistent, but sessions are ephemeral.
+
+This maps cleanly to the orchestrator's existing model:
+- **Agent persona** = persistent configuration (name, role, model, prompt, room)
+- **Session** = ephemeral execution (agent + task + status + context)
+- **Task** = work item (backlog task with phase, agent assignment)
+
+---
+
+## What Changes vs What Stays
+
+### What STAYS (all 44 tools work as-is)
+
+All existing tools remain unchanged. They operate on the existing data model:
+
+| Category | Tools | Why They Stay |
+|----------|-------|---------------|
+| Session lifecycle | register, unregister, start_work, clear_work, log, status | Core functionality |
+| Project management | bind, join, create, list_active, sync_files, sync_docs, docs_list, docs_get, docs_update, rebuild_state, tidy_docs | Core functionality |
+| Backlog management | add, list, update, dispatch, dispatch_all | Core functionality |
+| Model management | list, check_routing, auto_discover, recommend | Core functionality |
+| Workflow | advance_phase, handoff_create | Core functionality |
+| QA gate | submit, approve, reject | Core functionality |
+| Tests | create_unit, create_e2e | Core functionality |
+| Pipeline | verify_start, check, guide | Core functionality |
+| Delegation | task_delegate, issue_debug, feature_design | Core functionality |
+| Knowledge | quiz | Core functionality |
+| Logs & diagnostics | logs_query, system_diagnose, config_show_routing | Core functionality |
+| ADR | adr_log | Core functionality |
+
+### What CHANGES (new tables, new API, UI wiring)
+
+| Change | What | Why |
+|--------|------|-----|
+| New table: `agents` | Persistent agent personas | UI needs to show agents with roles, sprites, models |
+| New table: `rooms` | Workspace groupings | UI needs to show rooms with purposes, task types |
+| New table: `vault_docs` | Document storage | UI needs to browse, edit, inject documents |
+| New table: `pm_chat` | Chat persistence | UI needs persistent PM chat |
+| Extend `sessions` | Add agent_id, context_used | Link sessions to agents, track context |
+| Extend `backlog_tasks` | Add agent_id | Assign tasks to agents |
+| New API endpoints | 18 endpoints for UI | Connect UI to backend |
+| Delete classic dashboard | Remove index.html | Software House is the single frontend |
+| Wire Software House | Replace mock data with real API | UI connects to backend |
+
+---
+
+## Architecture
+
+### Data Model
+
+```sql
+-- New tables
+CREATE TABLE agents (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  role TEXT,
+  sprite TEXT,
+  model TEXT,
+  prompt TEXT,
+  room TEXT,
+  status TEXT DEFAULT 'sleep',
+  project TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE rooms (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  purpose TEXT,
+  taskTypes TEXT,  -- JSON array
+  project TEXT,
+  x INTEGER DEFAULT 0,
+  y INTEGER DEFAULT 0,
+  w INTEGER DEFAULT 0,
+  h INTEGER DEFAULT 0,
+  isCommand INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE vault_docs (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  content TEXT,
+  project TEXT,
+  folder TEXT,
+  icon TEXT,
+  title TEXT,
+  tags TEXT,  -- JSON array
+  status TEXT,
+  links TEXT,  -- JSON array
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE pm_chat (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message TEXT NOT NULL,
+  sender TEXT,
+  project TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Extended tables
+ALTER TABLE sessions ADD COLUMN agent_id TEXT;
+ALTER TABLE sessions ADD COLUMN context_used TEXT;
+ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
+```
+
+### API Endpoints (18 new)
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/software-house/bootstrap` | GET | Full project state (replaces mock JSON) |
+| `/api/software-house/agents` | GET | List agents |
+| `/api/software-house/agents/hire` | POST | Create agent |
+| `/api/software-house/agents/:id` | PATCH | Edit agent |
+| `/api/software-house/agents/:id` | DELETE | Fire agent |
+| `/api/software-house/rooms` | GET | List rooms |
+| `/api/software-house/rooms` | POST | Add room |
+| `/api/software-house/rooms/:id` | PATCH | Edit room |
+| `/api/software-house/rooms/:id` | DELETE | Delete room |
+| `/api/software-house/layout/save` | POST | Save room positions |
+| `/api/software-house/backlog` | GET | List tasks |
+| `/api/software-house/backlog/move` | POST | Move task phase |
+| `/api/software-house/pm/chat` | GET | Load chat history |
+| `/api/software-house/pm/chat` | POST | Send message |
+| `/api/software-house/vault/tree` | GET | List documents |
+| `/api/software-house/vault/doc` | GET | Get document |
+| `/api/software-house/vault/doc` | PUT | Update document |
+| `/api/software-house/vault/inject` | POST | Inject into AI context |
+
+### Bootstrap Response Shape (matches mock JSON exactly)
+
 ```json
 {
   "defaultProjectId": "genor-orchestrator-plugin",
@@ -56,91 +192,256 @@ Response shape (must match mock JSON EXACTLY):
     "genor-orchestrator-plugin": {
       "id": "genor-orchestrator-plugin",
       "name": "GenorBoard v2",
-      "rooms": [...],
-      "agents": [...],
-      "tasks": [...],
+      "rooms": [
+        {
+          "id": "command",
+          "name": "Command Center",
+          "tag": "pm",
+          "color": "#a78bfa",
+          "isCommand": true,
+          "purpose": "Project Manager plans sprints, assigns tasks, coordinates team.",
+          "taskTypes": ["docs"],
+          "layout": "auto",
+          "x": 0, "y": 0, "w": 0, "h": 0
+        }
+      ],
+      "agents": [
+        {
+          "id": "pm",
+          "name": "Project Manager",
+          "role": "Project Manager",
+          "sprite": "blue",
+          "model": "orchestrator-brain",
+          "status": "thinking",
+          "task": "Plan sprint",
+          "progress": 0,
+          "room": "command",
+          "isOrchestrator": true,
+          "prompt": "Project manager.",
+          "ctx": "—"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "t1",
+          "title": "API Gateway",
+          "desc": "API Gateway with rate limiting.",
+          "agent": "alex",
+          "phase": "in-progress",
+          "pri": "P0",
+          "type": "dev"
+        }
+      ],
       "vault": {
-        "STATE.md": { "folder": "...", "icon": "...", "title": "...", ... }
+        "STATE.md": {
+          "folder": "📁 root",
+          "icon": "📊",
+          "title": "STATE.md",
+          "updated": "2026-06-22 22:00",
+          "tags": ["status"],
+          "status": "ok",
+          "links": [],
+          "html": "..."
+        }
       }
     }
   }
 }
 ```
 
+---
+
+## How Every Backend Function Works in the New System
+
+### 1. Registration Flow
+```
+Agent persona (agents table)
+  → genorch_session_register (creates session)
+  → genorch_project_bind (loads project docs)
+  → genorch_session_start_work (begins work)
+```
+
+**UI shows:** Agent desk with status "working", task assigned, progress bar.
+
+### 2. Project Management
+```
+genorch_project_create (creates project)
+  → Add rooms (rooms table)
+  → Add agents (agents table)
+  → Manage vault (vault_docs table)
+```
+
+**UI shows:** Project switcher, rooms with agents, vault tree.
+
+### 3. Task Management
+```
+genorch_backlog_add (creates task)
+  → Assign to agent (backlog_tasks.agent_id)
+  → Move through phases (backlog_tasks.phase)
+  → Dispatch to session (genorch_backlog_dispatch)
+```
+
+**UI shows:** Kanban board with tasks, drag to move phases, assign agents.
+
+### 4. Context Injection
+```
+Vault documents (vault_docs table)
+  → before_prompt_build hook
+  → Inject per task, per project
+  → Agent receives proper context
+```
+
+**UI shows:** Vault tree, inject button, documents linked to tasks.
+
+### 5. Session Management
+```
+Sessions (sessions table)
+  → Track agent_id, progress, context_used
+  → Map status to visual states:
+    - idle → sleep
+    - running → working
+    - done → success
+    - failed → error
+```
+
+**UI shows:** Agent desks with visual states, progress bars, context usage.
+
+### 6. Logging Work
+```
+genorch_session_log (logs completed session)
+  → genorch_adr_log (generates ADR)
+  → Store in vault_docs
+```
+
+**UI shows:** Completed tasks in kanban, ADRs in vault.
+
+### 7. Q&A Gate
+```
+genorch_qa_submit (submits for review)
+  → genorch_qa_approve / genorch_qa_reject
+  → Iterate if rejected
+  → Advance to next phase if approved
+```
+
+**UI shows:** QA badge on task cards, approve/reject buttons.
+
+### 8. Model Selection
+```
+genorch_models_recommend (recommends model)
+  → Route based on task type
+  → Assign to agent (agents.model)
+```
+
+**UI shows:** Agent model display, routing config in settings.
+
+### 9. Subagent Spawning
+```
+genorch_task_delegate (delegates task)
+  → Spawns subagent session
+  → Tracks in live_agents
+```
+
+**UI shows:** Agent status changes, subagent appears in agents list.
+
+### 10. Workflow Enforcement
+```
+genorch_workflow_advance_phase (advances phase)
+  → enforce_workflow_phases hook
+  → Blocks work→log until QA approves
+  → Blocks log→finish until handoff created
+```
+
+**UI shows:** Workflow phase indicator, QA status on tasks.
+
+---
+
+## Implementation Phases
+
+### Phase 1: Database Schema
+**Goal:** Add all missing tables and columns.
+
+| Task | File | Change |
+|------|------|--------|
+| Create `agents` table | `src/db.ts` | V4 migration |
+| Create `rooms` table | `src/db.ts` | V4 migration |
+| Create `vault_docs` table | `src/db.ts` | V4 migration |
+| Create `pm_chat` table | `src/db.ts` | V4 migration |
+| Extend `sessions` | `src/db.ts` | Add agent_id, context_used |
+| Extend `backlog_tasks` | `src/db.ts` | Add agent_id |
+
+### Phase 2: Bootstrap API
+**Goal:** Backend serves full project state.
+
+| Task | File | Change |
+|------|------|--------|
+| Create bootstrap endpoint | `src/dashboard-handler.ts` | `GET /api/software-house/bootstrap` |
+| Query agents, rooms, tasks, vault | `src/dashboard-handler.ts` | Join across tables |
+| Match mock JSON shape exactly | `src/dashboard-handler.ts` | Field-by-field mapping |
+
 ### Phase 3: Agent CRUD
 **Goal:** Hire, edit, fire agents via UI.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/software-house/agents/hire` | POST | Create agent persona |
-| `/api/software-house/agents/:id` | PATCH | Edit agent |
-| `/api/software-house/agents/:id` | DELETE | Fire agent |
+| Task | File | Change |
+|------|------|--------|
+| Create hire endpoint | `src/dashboard-handler.ts` | `POST /api/software-house/agents/hire` |
+| Create edit endpoint | `src/dashboard-handler.ts` | `PATCH /api/software-house/agents/:id` |
+| Create fire endpoint | `src/dashboard-handler.ts` | `DELETE /api/software-house/agents/:id` |
+| Wire UI buttons | `dashboard/software-house.html` | Replace mock functions |
 
 ### Phase 4: Room CRUD
 **Goal:** Add, edit, delete rooms via UI.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/software-house/rooms` | POST | Add room |
-| `/api/software-house/rooms/:id` | PATCH | Edit room |
-| `/api/software-house/rooms/:id` | DELETE | Delete room |
-| `/api/software-house/layout/save` | POST | Persist drag/resize positions |
+| Task | File | Change |
+|------|------|--------|
+| Create add endpoint | `src/dashboard-handler.ts` | `POST /api/software-house/rooms` |
+| Create edit endpoint | `src/dashboard-handler.ts` | `PATCH /api/software-house/rooms/:id` |
+| Create delete endpoint | `src/dashboard-handler.ts` | `DELETE /api/software-house/rooms/:id` |
+| Create layout save | `src/dashboard-handler.ts` | `POST /api/software-house/layout/save` |
+| Wire UI drag/resize | `dashboard/software-house.html` | Save positions |
 
 ### Phase 5: Kanban Integration
 **Goal:** Real task management with phase advancement.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/software-house/backlog/move` | POST | Move task between phases |
-
-Must sync: `phase` column ↔ `status` column in `backlog_tasks`.
+| Task | File | Change |
+|------|------|--------|
+| Create move endpoint | `src/dashboard-handler.ts` | `POST /api/software-house/backlog/move` |
+| Wire kanban drag | `dashboard/software-house.html` | Real API calls |
+| Sync phase/status | `src/dashboard-handler.ts` | Keep columns consistent |
 
 ### Phase 6: PM Chat & Quick Actions
 **Goal:** Persistent chat and real quick actions.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/software-house/pm/chat` | GET | Load chat history |
-| `/api/software-house/pm/chat` | POST | Send message |
-
-Quick actions route through existing `handleQuickAction()` + `quickActionSpawn()`.
+| Task | File | Change |
+|------|------|--------|
+| Create chat GET | `src/dashboard-handler.ts` | `GET /api/software-house/pm/chat` |
+| Create chat POST | `src/dashboard-handler.ts` | `POST /api/software-house/pm/chat` |
+| Wire quick actions | `src/dashboard-handler.ts` | Route to `handleQuickAction()` |
+| Wire UI | `dashboard/software-house.html` | Real messages |
 
 ### Phase 7: Vault System
 **Goal:** Browse, edit, inject documents.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/software-house/vault/tree` | GET | List documents |
-| `/api/software-house/vault/doc` | GET | Get document content |
-| `/api/software-house/vault/doc` | PUT | Update document |
-| `/api/software-house/vault/inject` | POST | Inject into AI context |
-| `/api/software-house/vault/sync` | POST | Sync from filesystem |
-
-Vault injection: `sessionTracker.injectedDocs` → consumed by `before_prompt_build` hook.
+| Task | File | Change |
+|------|------|--------|
+| Create vault tree | `src/dashboard-handler.ts` | `GET /api/software-house/vault/tree` |
+| Create vault doc GET | `src/dashboard-handler.ts` | `GET /api/software-house/vault/doc` |
+| Create vault doc PUT | `src/dashboard-handler.ts` | `PUT /api/software-house/vault/doc` |
+| Create vault inject | `src/dashboard-handler.ts` | `POST /api/software-house/vault/inject` |
+| Add injection hook | `src/index.ts` | `before_prompt_build` consumes vault |
 
 ### Phase 8: Polish & Cleanup
-**Goal:** Remove all mock references, ensure everything works.
+**Goal:** Remove classic dashboard, ensure everything works.
 
-- Remove all `toast('...mockup')` calls
-- Remove `loadMockData()` function
-- Wire `loadData()` to bootstrap endpoint
-- Add loading spinners
-- Add proper error handling
-- Test all UI functions
-- Gateway restart (manual)
+| Task | File | Change |
+|------|------|--------|
+| Delete classic dashboard | `dashboard/index.html` | Remove |
+| Remove mock data | `dashboard/software-house.html` | Replace with API |
+| Remove mockup toasts | `dashboard/software-house.html` | Real functions |
+| Add loading spinners | `dashboard/software-house.html` | UX improvement |
+| Test all functions | Manual | Verify every button works |
+| Update documentation | `docs/` | Reflect new architecture |
 
-## Backend Feature → UI Mapping
-
-| Backend Feature | UI Location | Implementation |
-|-----------------|-------------|----------------|
-| Session status | Agent desk state | Map session.status → agent.status |
-| Workflow phase | Kanban column | Map phase → kanban column |
-| QA status | Task badge | Show QA status on task cards |
-| Model routing | Agent model display | Show which model each agent uses |
-| Pipeline status | Status bar | Show pipeline progress |
-| Logs | Logs panel | Add logs panel to Software House |
-| Config | Settings panel | Wire settings to real config |
-| ADR | Vault docs | Show ADRs in vault |
+---
 
 ## Files to Modify
 
@@ -150,14 +451,21 @@ Vault injection: `sessionTracker.injectedDocs` → consumed by `before_prompt_bu
 | `src/dashboard-handler.ts` | 18 new API endpoints |
 | `src/index.ts` | Vault injection in `before_prompt_build` hook |
 | `dashboard/software-house.html` | Wire `loadData()` to bootstrap, remove mock functions |
+| `dashboard/index.html` | DELETE (classic dashboard removed) |
+| `docs/ARCHITECTURE.md` | Update with final architecture |
+| `docs/MERGER-PLAN.md` | Update with final plan |
 
 ## Preserved Files
 
-- `UX-ANALYSIS.md` — Friend's design analysis
-- `SOFTWARE-HOUSE-UI.md` — UI documentation
-- `software-house-mock.json` — API contract fixture
-- All pixel sprites in `assets/pixel-agents/`
-- All CSS and visual styling in `software-house.html`
+| File | Why |
+|------|-----|
+| `UX-ANALYSIS.md` | Friend's design analysis |
+| `SOFTWARE-HOUSE-UI.md` | UI documentation |
+| `software-house-mock.json` | API contract fixture |
+| `assets/pixel-agents/` | All 40 sprites |
+| `software-house.html` | Friend's SPA (modified, not replaced) |
+
+---
 
 ## Deployment
 
@@ -168,4 +476,17 @@ Vault injection: `sessionTracker.injectedDocs` → consumed by `before_prompt_bu
 
 ---
 
-*This plan references `docs/ARCHITECTURE.md` for complete system overview.*
+## Risk Assessment
+
+| Risk | Mitigation |
+|------|------------|
+| Bootstrap API shape mismatch | Match mock JSON field-by-field, test with UI |
+| Session-agent linking breaks | Test registration flow end-to-end |
+| Vault injection fails | Test `before_prompt_build` hook |
+| Kanban phase/status desync | Sync columns in move endpoint |
+| Classic dashboard removal breaks operator access | Software House includes all operator features |
+| Mock data removal breaks UI | Wire all functions before removing mock |
+
+---
+
+*This plan is the single source of truth for the Software House × Orchestrator merger.*
