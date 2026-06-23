@@ -23,7 +23,7 @@ import { handleSoftwareHouseRoute } from "./software-house.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
-const HTML_PATH = path.join(PLUGIN_ROOT, "dashboard", "index.html");
+
 
 // ── MIME TYPES ────────────────────────────────────────────────
 const MIME: Record<string, string> = {
