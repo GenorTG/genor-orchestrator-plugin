@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Genor Orchestrator — Software House</title>
+<style>
+:root {
+  --bg:#0a0e14; --bg-floor:#11161d; --bg-desk:#1a1f2b; --bg-panel:#131820;
+  --border:#252b36; --text:#b4c0d4; --text-dim:#6b7394; --text-bright:#e2e8f4;
+  --blue:#5e9cff; --green:#3fb950; --red:#f85149; --yellow:#e5b83f; --orange:#f0883e;
+  --purple:#a78bfa; --cyan:#22d3ee; --accent:#5e9cff; --radius:8px;
+  --font:'JetBrains Mono','Cascadia Code',monospace;
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --header-h:48px; --sidebar-w:52px; --chat-w:360px; --pipe-h:110px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);font-size:13px;overflow:hidden}
+button,input,select,textarea{font-family:inherit;cursor:pointer}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* HEADER */
+.header{height:var(--header-h);background:var(--bg-panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;z-index:20;position:relative}
+.logo{font-weight:700;font-size:15px;color:var(--text-bright);display:flex;align-items:center;gap:8px}
+.logo em{font-style:normal;color:var(--accent)}
+.badge{font-size:9px;padding:2px 8px;border-radius:10px;font-weight:700;background:var(--yellow);color:#000;letter-spacing:.3px}
+.sep{width:1px;height:18px;background:var(--border)}
+.stats{display:flex;gap:14px;font-size:11px;color:var(--text-dim)}
+.stats b{color:var(--text-bright);font-weight:600}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn{font-size:11px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text);transition:150ms}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+.btn.primary:hover{filter:brightness(1.08);color:#000}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* SHELL */
+.shell{display:flex;height:calc(100% - var(--header-h) - var(--pipe-h))}
+
+/* SIDEBAR */
+.sidebar{width:var(--sidebar-w);background:var(--bg-panel);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px;flex-shrink:0}
+.nav-btn{width:38px;height:38px;border:none;border-radius:var(--radius);background:transparent;color:var(--text-dim);font-size:18px;display:flex;align-items:center;justify-content:center;transition:150ms;position:relative}
+.nav-btn:hover,.nav-btn.active{background:var(--bg-desk);color:var(--accent)}
+.nav-btn.active::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:0 2px 2px 0}
+.sidebar-spacer{flex:1}
+
+/* OFFICE */
+.office-wrap{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.office-toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-panel);border-bottom:1px solid var(--border);font-size:11px;color:var(--text-dim)}
+.office-toolbar .zoom-btn{width:28px;height:28px;border:1px solid var(--border);border-radius:6px;background:var(--bg-desk);color:var(--text);font-size:14px}
+.room-tabs{display:flex;gap:6px;margin-left:8px}
+.room-tab{padding:4px 10px;border-radius:12px;border:1px solid var(--border);background:transparent;color:var(--text-dim);font-size:10px;font-weight:600}
+.room-tab.active,.room-tab:hover{border-color:var(--accent);color:var(--accent);background:rgba(94,156,255,.08)}
+.office{flex:1;position:relative;overflow:hidden;cursor:grab;background:var(--bg-floor)}
+.office.dragging{cursor:grabbing}
+.office-canvas{position:absolute;transform-origin:0 0;will-change:transform}
+.office-grid{position:absolute;inset:0;background-image:radial-gradient(circle,var(--border) 1px,transparent 1px);background-size:40px 40px;opacity:.12;pointer-events:none}
+
+/* ROOM ZONES */
+.room-zone{position:absolute;border:1px dashed var(--border);border-radius:12px;background:rgba(19,24,32,.35);pointer-events:none}
+.room-label{position:absolute;top:10px;left:14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-dim);pointer-events:none}
+.room-label span{display:inline-block;padding:2px 8px;border-radius:4px;background:var(--bg-panel);border:1px solid var(--border)}
+
+/* DESK / AGENT */
+.desk-slot{position:absolute;width:200px;cursor:pointer;transition:filter 150ms,transform 150ms;user-select:none}
+.desk-slot:hover{transform:translateY(-3px);filter:brightness(1.08)}
+.desk-slot.selected{outline:2px solid var(--accent);outline-offset:4px;border-radius:8px}
+.desk-slot .sprite{image-rendering:pixelated;image-rendering:crisp-edges;width:200px;height:200px;display:block;filter:drop-shadow(0 6px 14px rgba(0,0,0,.5))}
+.desk-slot .status-dot{position:absolute;top:6px;right:24px;width:9px;height:9px;border-radius:50%;z-index:2;border:2px solid var(--bg-floor)}
+.desk-slot .status-dot.working{background:var(--orange);box-shadow:0 0 8px var(--orange);animation:pulse 1.5s infinite}
+.desk-slot .status-dot.reviewing{background:var(--purple);box-shadow:0 0 8px var(--purple)}
+.desk-slot .status-dot.idle{background:var(--text-dim)}
+.desk-slot .status-dot.blocked{background:var(--red);box-shadow:0 0 8px var(--red)}
+.desk-slot .task-chip{position:absolute;top:-4px;left:50%;transform:translateX(-50%);background:var(--bg-panel);border:1px solid var(--accent);border-radius:10px;padding:2px 8px;font-size:9px;color:var(--accent);white-space:nowrap;font-family:var(--font);font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.desk-slot .nameplate{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);background:#2d3548;border:1px solid #3a4359;border-radius:4px;padding:2px 10px;font-size:10px;color:#b4c0d4;white-space:nowrap;font-weight:600;z-index:2}
+.desk-slot .role-tag{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);font-size:8px;color:var(--text-dim);white-space:nowrap}
+.desk-slot .tooltip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:11px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 150ms;z-index:50;margin-bottom:6px;line-height:1.5}
+.desk-slot:hover .tooltip{opacity:1}
+
+.empty-slot{position:absolute;width:200px;opacity:.35;transition:opacity 150ms;cursor:pointer}
+.empty-slot:hover{opacity:.85}
+.empty-slot .ghost{width:200px;height:160px;border:2px dashed var(--border);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:rgba(26,31,43,.5)}
+.empty-slot .ghost span{font-size:28px;opacity:.5}
+.empty-slot .ghost p{font-size:10px;color:var(--text-dim);font-weight:600}
+
+/* CHAT */
+.chat-panel{width:var(--chat-w);background:var(--bg-panel);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.chat-head{padding:14px 16px;border-bottom:1px solid var(--border)}
+.chat-head-top{display:flex;align-items:center;gap:10px}
+.orch-avatar{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#1a2744,#0d1520);border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px}
+.orch-name{font-weight:700;font-size:14px;color:var(--text-bright)}
+.orch-role{font-size:10px;color:var(--accent);margin-top:1px}
+.quick-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.chip{font-size:10px;padding:4px 8px;border-radius:12px;border:1px solid var(--border);background:var(--bg-desk);color:var(--text-dim);transition:150ms}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chat-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:92%;padding:10px 12px;border-radius:var(--radius);font-size:12px;line-height:1.55;animation:msgIn .3s ease}
+.msg.bot{background:var(--bg-desk);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:2px}
+.msg.user{background:var(--accent);color:#000;align-self:flex-end;border-bottom-right-radius:2px;font-weight:500}
+.msg .time{font-size:9px;opacity:.5;margin-top:5px}
+.msg .act{display:inline-block;margin:6px 6px 0 0;padding:4px 10px;border-radius:4px;font-size:10px;border:1px solid var(--accent);background:transparent;color:var(--accent);font-weight:600}
+.msg.user .act{border-color:rgba(0,0,0,.3);color:#000}
+.msg .act:hover{background:var(--accent);color:#000}
+@keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.chat-input-wrap{padding:12px;border-top:1px solid var(--border)}
+.chat-input-row{display:flex;gap:8px}
+.chat-input-row input{flex:1;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;color:var(--text);font-size:12px}
+.chat-input-row button{background:var(--accent);color:#000;border:none;border-radius:var(--radius);padding:9px 14px;font-size:12px;font-weight:700}
+
+/* PIPELINE */
+.pipeline{height:var(--pipe-h);background:var(--bg-panel);border-top:1px solid var(--border);display:flex;align-items:stretch;padding:8px 12px;gap:8px;overflow-x:auto;flex-shrink:0}
+.pipe-col{flex:1;min-width:150px;background:var(--bg-desk);border-radius:var(--radius);border:1px solid var(--border);padding:8px;display:flex;flex-direction:column;gap:4px}
+.pipe-col h4{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.pipe-card{font-size:10px;padding:4px 8px;border-radius:4px;background:var(--bg-floor);border-left:2px solid var(--accent);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pipe-card:hover{background:var(--accent);color:#000}
+.pipe-card .who{opacity:.65;font-size:9px}
+
+/* MODALS */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:300;align-items:center;justify-content:center;padding:20px}
+.overlay.show{display:flex}
+.modal{background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;width:520px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,.5)}
+.modal.wide{width:640px}
+.modal-head{padding:18px 20px 12px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.modal-head h2{font-size:16px;color:var(--text-bright)}
+.modal-head p{font-size:11px;color:var(--text-dim);margin-top:4px}
+.modal-close{background:none;border:none;color:var(--text-dim);font-size:20px;padding:4px}
+.modal-close:hover{color:var(--text-bright)}
+.modal-body{padding:18px 20px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form-field{display:flex;flex-direction:column;gap:4px}
+.form-field.full{grid-column:1/-1}
+.form-field label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim)}
+.form-field input,.form-field select,.form-field textarea{background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:12px}
+.form-field textarea{min-height:72px;resize:vertical}
+.sprite-picker{display:flex;gap:10px;margin-top:4px}
+.sprite-opt{flex:1;border:2px solid var(--border);border-radius:8px;padding:8px;text-align:center;cursor:pointer;transition:150ms;background:var(--bg-floor)}
+.sprite-opt:hover,.sprite-opt.picked{border-color:var(--accent);background:rgba(94,156,255,.06)}
+.sprite-opt img{width:80px;height:80px;image-rendering:pixelated;margin:0 auto 4px;display:block}
+.sprite-opt span{font-size:10px;color:var(--text-dim)}
+.modal-foot{padding:12px 20px 18px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--border)}
+.btn.danger{border-color:var(--red);color:var(--red)}
+.btn.danger:hover{background:var(--red);color:#fff}
+
+/* DRAWER */
+.drawer{position:fixed;top:var(--header-h);right:0;bottom:var(--pipe-h);width:400px;background:var(--bg-panel);border-left:1px solid var(--border);z-index:250;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column}
+.drawer.open{transform:translateX(0)}
+.drawer-head{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.drawer-preview{width:72px;height:72px;image-rendering:pixelated;border-radius:8px;background:var(--bg-floor);border:1px solid var(--border)}
+.drawer-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.field label{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-dim);display:block;margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:12px}
+.field textarea{min-height:80px;resize:vertical}
+.progress{height:6px;background:var(--bg-floor);border-radius:3px;overflow:hidden;margin-top:6px}
+.progress>i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+.drawer-foot{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+
+/* TOAST */
+.toast{position:fixed;top:60px;right:16px;background:var(--green);color:#000;padding:10px 16px;border-radius:var(--radius);font-size:12px;font-weight:700;z-index:400;animation:slideIn .3s ease;display:none}
+@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:none;opacity:1}}
+
+/* SETTINGS VIEW */
+.settings-view{display:none;flex:1;padding:24px;overflow-y:auto}
+.settings-view.show{display:block}
+.settings-view h2{font-size:18px;color:var(--text-bright);margin-bottom:16px}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.setting-card{background:var(--bg-panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+.setting-card h3{font-size:13px;color:var(--text-bright);margin-bottom:8px}
+.setting-card p{font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:10px}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;padding:6px 0}
+.toggle{width:36px;height:20px;border-radius:10px;background:var(--border);position:relative;cursor:pointer;transition:150ms}
+.toggle.on{background:var(--accent)}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:150ms}
+.toggle.on::after{left:18px}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">🏢 Genor <em>Orchestrator</em></div>
+  <span class="badge">MOCKUP</span>
+  <div class="sep"></div>
+  <div class="stats">
+    <span>Agenci: <b id="sAgents">0</b></span>
+    <span>Aktywni: <b id="sActive">0</b></span>
+    <span>W pipeline: <b id="sTasks">0</b></span>
+    <span>Pokoje: <b id="sRooms">4</b></span>
+  </div>
+  <div class="hdr-right">
+    <div class="pulse" title="Gateway online"></div>
+    <span style="font-size:10px;color:var(--green)">Online</span>
+    <div class="sep"></div>
+    <button class="btn" onclick="openHireModal()">+ Zatrudnij</button>
+    <button class="btn primary" onclick="orchPlan()">📋 Nowy plan</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="sidebar">
+    <button class="nav-btn active" title="Biuro" onclick="showView('office',this)">🏢</button>
+    <button class="nav-btn" title="Pipeline" onclick="showView('office',this);document.querySelector('.office-wrap').scrollIntoView()">📊</button>
+    <button class="nav-btn" title="Ustawienia" onclick="showView('settings',this)">⚙️</button>
+    <div class="sidebar-spacer"></div>
+    <button class="nav-btn" title="Pomoc" onclick="orchSay('help')">❓</button>
+  </nav>
+
+  <div class="office-wrap" id="officeView">
+    <div class="office-toolbar">
+      <button class="zoom-btn" onclick="zoomOffice(-.1)">−</button>
+      <span id="zoomLabel">100%</span>
+      <button class="zoom-btn" onclick="zoomOffice(.1)">+</button>
+      <button class="btn" style="padding:4px 8px;font-size:10px" onclick="resetView()">Reset widoku</button>
+      <div class="room-tabs" id="roomTabs"></div>
+    </div>
+    <div class="office" id="office">
+      <div class="office-canvas" id="officeCanvas">
+        <div class="office-grid" style="width:1400px;height:900px"></div>
+        <div id="rooms"></div>
+        <div id="desks"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-view" id="settingsView">
+    <h2>⚙️ Ustawienia Software House</h2>
+    <div class="settings-grid">
+      <div class="setting-card">
+        <h3>🏢 Biuro</h3>
+        <p>Domyślny widok biura, zoom i siatka podłogi.</p>
+        <div class="toggle-row"><span>Siatka podłogi</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+        <div class="toggle-row"><span>Animacje pixel-art</span><div class="toggle on" id="animToggle" onclick="toggleAnims(this)"></div></div>
+        <div class="toggle-row"><span>Auto-scroll do pokoju</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+      </div>
+      <div class="setting-card">
+        <h3>🧠 Orchestrator</h3>
+        <p>PM Orchestrator planuje zadania i koordynuje agentów.</p>
+        <div class="toggle-row"><span>Auto-przydział zadań</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+        <div class="toggle-row"><span>Potwierdzenie przed hire</span><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+      </div>
+      <div class="setting-card">
+        <h3>👨‍💻 Agenci</h3>
+        <p>Domyślny model i limit kontekstu dla nowych programistów.</p>
+        <div class="form-field" style="margin-top:8px">
+          <label>Domyślny model</label>
+          <select style="width:100%;background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text)">
+            <option>opencode-go/deepseek-v4-pro</option>
+            <option>openrouter/minimax-m2.5</option>
+            <option>google/gemini-2.5-flash</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-card">
+        <h3>🚪 Pokoje</h3>
+        <p id="roomsList">Backend Bay · Design Studio · QA Corner · Open Floor</p>
+        <button class="btn" style="margin-top:8px" onclick="toast('Dodawanie pokoi — wkrótce')">+ Nowy pokój</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="chat-panel">
+    <div class="chat-head">
+      <div class="chat-head-top">
+        <div class="orch-avatar">🧠</div>
+        <div>
+          <div class="orch-name">Orchestrator PM</div>
+          <div class="orch-role">Twój project manager AI</div>
+        </div>
+      </div>
+      <div class="quick-chips">
+        <button class="chip" onclick="orchSay('status')">Status zespołu</button>
+        <button class="chip" onclick="orchSay('plan')">Plan sprintu</button>
+        <button class="chip" onclick="openHireModal()">Zatrudnij</button>
+        <button class="chip" onclick="orchSay('review')">Code review</button>
+      </div>
+    </div>
+    <div class="chat-msgs" id="chatMsgs">
+      <div class="msg bot">Cześć! 👋 Jestem Orchestratorem Twojego software house. Mogę planować sprinty, zatrudniać programistów do pokoi i przydzielać im zadania.<br><br>Kliknij biurko agenta, żeby edytować ustawienia, albo napisz co chcesz zrobić.
+        <div class="time">teraz</div>
+      </div>
+    </div>
+    <div class="chat-input-wrap">
+      <div class="chat-input-row">
+        <input id="chatInput" placeholder="Napisz do orchestratora…" onkeydown="if(event.key==='Enter')sendChat()">
+        <button onclick="sendChat()">Wyślij</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="pipeline" id="pipeline"></div>
+
+<!-- HIRE MODAL -->
+<div class="overlay" id="hireOverlay" onclick="if(event.target===this)closeHire()">
+  <div class="modal">
+    <div class="modal-head">
+      <div><h2>👨‍💻 Zatrudnij programistę</h2><p>Przypisz do wolnego biurka w wybranym pokoju</p></div>
+      <button class="modal-close" onclick="closeHire()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-field"><label>Imię / nazwa</label><input id="hireName" value="Nowy Agent"></div>
+        <div class="form-field"><label>Rola</label>
+          <select id="hireRole">
+            <option>Backend Developer</option>
+            <option>Frontend Developer</option>
+            <option>Full-Stack Dev</option>
+            <option>UI/UX Designer</option>
+            <option>QA / Reviewer</option>
+            <option>DevOps</option>
+            <option>Business Analyst</option>
+          </select>
+        </div>
+        <div class="form-field"><label>Model LLM</label>
+          <select id="hireModel">
+            <option>opencode-go/deepseek-v4-pro</option>
+            <option>openrouter/minimax-m2.5</option>
+            <option>google/gemini-2.5-flash</option>
+            <option>anthropic/claude-sonnet-4</option>
+          </select>
+        </div>
+        <div class="form-field"><label>Pokój</label>
+          <select id="hireRoom"></select>
+        </div>
+        <div class="form-field full"><label>Wygląd (pixel sprite)</label>
+          <div class="sprite-picker" id="spritePicker">
+            <div class="sprite-opt picked" data-sprite="blue" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/blue/static.png" alt="">
+              <span>Niebieski — dev</span>
+            </div>
+            <div class="sprite-opt" data-sprite="orange" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/orange/static.png" alt="">
+              <span>Pomarańczowy — dual monitor</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-field full"><label>Instrukcje systemowe</label>
+          <textarea id="hirePrompt">Jesteś programistą w software house. Pisz czysty kod, testuj zmiany, raportuj postęp orchestratorowi.</textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeHire()">Anuluj</button>
+      <button class="btn primary" onclick="confirmHire()">✅ Zatrudnij i otwórz ustawienia</button>
+    </div>
+  </div>
+</div>
+
+<!-- AGENT DRAWER -->
+<div class="drawer" id="agentDrawer">
+  <div class="drawer-head">
+    <img class="drawer-preview" id="drawerImg" src="" alt="">
+    <div style="flex:1">
+      <div class="orch-name" id="drawerTitle">Agent</div>
+      <div class="orch-role" id="drawerSubtitle">Rola</div>
+    </div>
+    <button class="modal-close" onclick="closeDrawer()">×</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-foot">
+    <button class="btn danger" onclick="fireAgent()">Zwolnij</button>
+    <button class="btn" onclick="toast('Zadania przepisane')">🔄 Przepisz zadania</button>
+    <button class="btn primary" onclick="saveAgent()">💾 Zapisz</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══ DATA ═══
+const rooms = [
+  { id:'backend', name:'Backend Bay', color:'#5e9cff', x:40, y:40, w:420, h:380,
+    slots:[{x:60,y:100},{x:260,y:100},{x:60,y:260},{x:260,y:260}] },
+  { id:'design', name:'Design Studio', color:'#a78bfa', x:480, y:40, w:420, h:380,
+    slots:[{x:60,y:100},{x:260,y:100},{x:60,y:260}] },
+  { id:'qa', name:'QA Corner', color:'#f0883e', x:920, y:40, w:400, h:380,
+    slots:[{x:60,y:100},{x:260,y:100}] },
+  { id:'open', name:'Open Floor', color:'#3fb950', x:40, y:450, w:1280, h:400,
+    slots:[{x:60,y:80},{x:260,y:80},{x:460,y:80},{x:660,y:80},{x:860,y:80},{x:1060,y:80},
+           {x:60,y:240},{x:260,y:240},{x:460,y:240}] },
+];
+
+let agents = [
+  { id:'alex', name:'Alex', role:'Backend Developer', sprite:'blue', model:'deepseek-v4-pro',
+    status:'working', task:'API Gateway', progress:64, room:'backend', slot:0,
+    prompt:'Backend architect. API design, schemas, microservices.', ctx:'42k/977k' },
+  { id:'maya', name:'Maya', role:'Frontend Developer', sprite:'orange', model:'minimax-m2.5',
+    status:'working', task:'Dashboard UI', progress:72, room:'design', slot:0,
+    prompt:'React/TypeScript specialist. Design systems, a11y.', ctx:'156k/977k' },
+  { id:'eve', name:'Eve', role:'QA / Reviewer', sprite:'orange', model:'gemini-2.5-flash',
+    status:'reviewing', task:'Review: Auth', progress:55, room:'qa', slot:0,
+    prompt:'Senior reviewer. PR standards, security checks.', ctx:'89k/977k' },
+  { id:'charlie', name:'Charlie', role:'Full-Stack Dev', sprite:'blue', model:'claude-sonnet-4',
+    status:'idle', task:null, progress:0, room:'open', slot:0,
+    prompt:'Full-stack delivery. React + Node.', ctx:'0/198k' },
+];
+
+const tasks = [
+  { id:'t1', title:'API Gateway', agent:'alex', phase:'in-progress', pri:'P0' },
+  { id:'t2', title:'Dashboard UI', agent:'maya', phase:'in-progress', pri:'P0' },
+  { id:'t3', title:'Auth Service Review', agent:'eve', phase:'review', pri:'P0' },
+  { id:'t4', title:'E2E Test Suite', agent:null, phase:'backlog', pri:'P1' },
+  { id:'t5', title:'DB Migrations', agent:'alex', phase:'in-progress', pri:'P1' },
+  { id:'t6', title:'Design Tokens', agent:'maya', phase:'in-progress', pri:'P1' },
+  { id:'t7', title:'CI Pipeline', agent:null, phase:'backlog', pri:'P2' },
+  { id:'t8', title:'Sprint Retro Doc', agent:null, phase:'done', pri:'P2' },
+  { id:'t9', title:'Project Scope', agent:'alex', phase:'done', pri:'P0' },
+];
+
+const phases = [
+  { id:'backlog', label:'📥 Backlog', color:'#8b949e' },
+  { id:'in-progress', label:'⚡ W toku', color:'#f0883e' },
+  { id:'review', label:'👁️ Review', color:'#a78bfa' },
+  { id:'done', label:'✅ Done', color:'#3fb950' },
+];
+
+let selectedAgent = null;
+let pickedSprite = 'blue';
+let officeZoom = 1;
+let officePan = { x: 0, y: 0 };
+let animsEnabled = true;
+const framePlayers = new Map();
+
+// ═══ SPRITE ANIMATION ═══
+function spritePath(sprite, frame) {
+  return `assets/pixel-agents/${sprite}/frames/${frame}.png`;
+}
+function staticPath(sprite) {
+  return `assets/pixel-agents/${sprite}/static.png`;
+}
+function startAnim(img, sprite, fps = 8) {
+  stopAnim(img);
+  if (!animsEnabled) { img.src = staticPath(sprite); return; }
+  let i = 0;
+  const tick = () => {
+    img.src = spritePath(sprite, i);
+    i = (i + 1) % 9;
+  };
+  tick();
+  const id = setInterval(tick, 1000 / fps);
+  framePlayers.set(img, id);
+}
+function stopAnim(img) {
+  const id = framePlayers.get(img);
+  if (id) { clearInterval(id); framePlayers.delete(img); }
+}
+function toggleAnims(el) {
+  el.classList.toggle('on');
+  animsEnabled = el.classList.contains('on');
+  renderDesks();
+}
+
+// ═══ RENDER ROOMS ═══
+function renderRooms() {
+  const el = document.getElementById('rooms');
+  el.innerHTML = rooms.map(r => `
+    <div class="room-zone" style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;border-color:${r.color}33">
+      <div class="room-label"><span style="color:${r.color}">${r.name}</span></div>
+    </div>`).join('');
+  const tabs = document.getElementById('roomTabs');
+  tabs.innerHTML = rooms.map(r =>
+    `<button class="room-tab" onclick="focusRoom('${r.id}')">${r.name}</button>`).join('');
+  const hireRoom = document.getElementById('hireRoom');
+  hireRoom.innerHTML = rooms.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+}
+
+function getSlotPos(roomId, slotIdx) {
+  const room = rooms.find(r => r.id === roomId);
+  if (!room || !room.slots[slotIdx]) return null;
+  const s = room.slots[slotIdx];
+  return { x: room.x + s.x, y: room.y + s.y };
+}
+
+function getOccupiedSlots() {
+  const set = new Set();
+  agents.forEach(a => set.add(`${a.room}:${a.slot}`));
+  return set;
+}
+
+function findFreeSlot(roomId) {
+  const room = rooms.find(r => r.id === roomId);
+  if (!room) return null;
+  const occ = getOccupiedSlots();
+  for (let i = 0; i < room.slots.length; i++) {
+    if (!occ.has(`${roomId}:${i}`)) return i;
+  }
+  return null;
+}
+
+// ═══ RENDER DESKS ═══
+function renderDesks() {
+  const container = document.getElementById('desks');
+  let html = '';
+  for (const a of agents) {
+    const pos = getSlotPos(a.room, a.slot);
+    if (!pos) continue;
+    const anim = a.status === 'working' || a.status === 'reviewing';
+    html += `<div class="desk-slot${selectedAgent===a.id?' selected':''}" style="left:${pos.x}px;top:${pos.y}px"
+      onclick="openDrawer('${a.id}')" data-id="${a.id}">
+      <div class="status-dot ${a.status}"></div>
+      ${a.task ? `<div class="task-chip">⏳ ${a.task}</div>` : ''}
+      <div class="tooltip"><b>${a.name}</b> · ${a.role}<br>${a.model} · ${a.status.toUpperCase()}${a.progress?`<br>${a.progress}%`:''}</div>
+      <img class="sprite" data-sprite="${a.sprite}" data-anim="${anim}" src="${anim ? spritePath(a.sprite,0) : staticPath(a.sprite)}" alt="${a.name}">
+      <div class="nameplate">${a.name}</div>
+      <div class="role-tag">${a.role}</div>
+    </div>`;
+  }
+  for (const room of rooms) {
+    const occ = getOccupiedSlots();
+    room.slots.forEach((s, i) => {
+      if (occ.has(`${room.id}:${i}`)) return;
+      const x = room.x + s.x, y = room.y + s.y;
+      html += `<div class="empty-slot" style="left:${x}px;top:${y}px" onclick="event.stopPropagation();openHireModal('${room.id}')">
+        <div class="ghost"><span>+</span><p>Wolne biurko</p></div>
+      </div>`;
+    });
+  }
+  container.innerHTML = html;
+  container.querySelectorAll('.sprite').forEach(img => {
+    if (img.dataset.anim === 'true') startAnim(img, img.dataset.sprite);
+    else { stopAnim(img); img.src = staticPath(img.dataset.sprite); }
+  });
+}
+
+// ═══ PIPELINE ═══
+function renderPipeline() {
+  document.getElementById('pipeline').innerHTML = phases.map(p => {
+    const items = tasks.filter(t => t.phase === p.id);
+    return `<div class="pipe-col"><h4 style="color:${p.color}">${p.label} (${items.length})</h4>
+      ${items.slice(0,5).map(t => {
+        const ag = agents.find(a => a.id === t.agent);
+        return `<div class="pipe-card" onclick="toast('${t.title}')">${t.pri} ${t.title}
+          ${ag ? `<span class="who"> · ${ag.name}</span>` : ''}</div>`;
+      }).join('')}
+      ${items.length > 5 ? `<div style="font-size:9px;color:var(--text-dim)">+${items.length-5} więcej</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function updateStats() {
+  document.getElementById('sAgents').textContent = agents.length;
+  document.getElementById('sActive').textContent = agents.filter(a => a.status !== 'idle').length;
+  document.getElementById('sTasks').textContent = tasks.filter(t => t.phase === 'backlog' || t.phase === 'in-progress').length;
+}
+
+// ═══ OFFICE PAN/ZOOM ═══
+const officeEl = document.getElementById('office');
+const canvasEl = document.getElementById('officeCanvas');
+let dragging = false, dragStart = { x: 0, y: 0 };
+
+officeEl.addEventListener('mousedown', e => {
+  if (e.target.closest('.desk-slot,.empty-slot,.modal,.drawer')) return;
+  dragging = true;
+  officeEl.classList.add('dragging');
+  dragStart = { x: e.clientX - officePan.x, y: e.clientY - officePan.y };
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  officePan.x = e.clientX - dragStart.x;
+  officePan.y = e.clientY - dragStart.y;
+  applyTransform();
+});
+window.addEventListener('mouseup', () => { dragging = false; officeEl.classList.remove('dragging'); });
+
+function applyTransform() {
+  canvasEl.style.transform = `translate(${officePan.x}px,${officePan.y}px) scale(${officeZoom})`;
+  document.getElementById('zoomLabel').textContent = Math.round(officeZoom * 100) + '%';
+}
+function zoomOffice(d) {
+  officeZoom = Math.min(1.4, Math.max(.5, officeZoom + d));
+  applyTransform();
+}
+function resetView() { officeZoom = 1; officePan = { x: 20, y: 10 }; applyTransform(); }
+function focusRoom(id) {
+  const r = rooms.find(x => x.id === id);
+  if (!r) return;
+  officePan.x = -r.x * officeZoom + 80;
+  officePan.y = -r.y * officeZoom + 60;
+  applyTransform();
+  document.querySelectorAll('.room-tab').forEach((t, i) => {
+    t.classList.toggle('active', rooms[i].id === id);
+  });
+}
+
+// ═══ DRAWER ═══
+function openDrawer(id) {
+  selectedAgent = id;
+  const a = agents.find(x => x.id === id);
+  if (!a) return;
+  renderDesks();
+  document.getElementById('drawerTitle').textContent = a.name;
+  document.getElementById('drawerSubtitle').textContent = a.role;
+  document.getElementById('drawerImg').src = staticPath(a.sprite);
+  const agentTasks = tasks.filter(t => t.agent === a.id);
+  document.getElementById('drawerBody').innerHTML = `
+    <div class="field"><label>Status</label>
+      <select id="dStatus">
+        <option value="working"${a.status==='working'?' selected':''}>⚡ Pracuje</option>
+        <option value="reviewing"${a.status==='reviewing'?' selected':''}>👁️ Review</option>
+        <option value="idle"${a.status==='idle'?' selected':''}>💤 Bezczynny</option>
+        <option value="blocked"${a.status==='blocked'?' selected':''}>🚫 Zablokowany</option>
+      </select>
+    </div>
+    <div class="field"><label>Model</label><input id="dModel" value="${a.model}"></div>
+    <div class="field"><label>Pokój</label>
+      <select id="dRoom">${rooms.map(r=>`<option value="${r.id}"${r.id===a.room?' selected':''}>${r.name}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Sprite</label>
+      <select id="dSprite">
+        <option value="blue"${a.sprite==='blue'?' selected':''}>Niebieski (dev)</option>
+        <option value="orange"${a.sprite==='orange'?' selected':''}>Pomarańczowy (dual)</option>
+      </select>
+    </div>
+    <div class="field"><label>Aktualne zadanie</label><input id="dTask" value="${a.task||''}" placeholder="Brak zadania"></div>
+    ${a.progress ? `<div class="field"><label>Postęp — ${a.progress}%</label><div class="progress"><i style="width:${a.progress}%"></i></div></div>` : ''}
+    <div class="field"><label>Kontekst</label><input value="${a.ctx}" disabled style="opacity:.6"></div>
+  <div class="field"><label>Instrukcje systemowe</label><textarea id="dPrompt">${a.prompt}</textarea></div>
+    ${agentTasks.length ? `<div class="field"><label>Przypisane taski (${agentTasks.length})</label>
+      ${agentTasks.map(t=>`<div style="font-size:11px;padding:6px 8px;background:var(--bg-floor);border-radius:4px;margin-top:4px">${t.pri} ${t.title} · <span style="color:var(--text-dim)">${t.phase}</span></div>`).join('')}
+    </div>` : ''}`;
+  document.getElementById('agentDrawer').classList.add('open');
+}
+function closeDrawer() {
+  document.getElementById('agentDrawer').classList.remove('open');
+  selectedAgent = null;
+  renderDesks();
+}
+function saveAgent() {
+  const a = agents.find(x => x.id === selectedAgent);
+  if (!a) return;
+  const newRoom = document.getElementById('dRoom').value;
+  if (newRoom !== a.room) {
+    const slot = findFreeSlot(newRoom);
+    if (slot === null) { toast('Brak wolnych biurek w tym pokoju!'); return; }
+    a.room = newRoom; a.slot = slot;
+  }
+  a.status = document.getElementById('dStatus').value;
+  a.model = document.getElementById('dModel').value;
+  a.sprite = document.getElementById('dSprite').value;
+  a.task = document.getElementById('dTask').value || null;
+  a.prompt = document.getElementById('dPrompt').value;
+  a.progress = a.status === 'idle' ? 0 : (a.progress || 30);
+  closeDrawer();
+  renderDesks(); updateStats();
+  toast(`💾 Zapisano ustawienia ${a.name}`);
+  addBotMsg(`Zaktualizowałem profil <b>${a.name}</b> — status: <b>${a.status}</b>, pokój: <b>${rooms.find(r=>r.id===a.room)?.name}</b>.`);
+}
+function fireAgent() {
+  const a = agents.find(x => x.id === selectedAgent);
+  if (!a || !confirm(`Zwolnić ${a.name}?`)) return;
+  agents = agents.filter(x => x.id !== selectedAgent);
+  tasks.forEach(t => { if (t.agent === selectedAgent) t.agent = null; });
+  closeDrawer(); renderDesks(); renderPipeline(); updateStats();
+  toast(`👋 ${a.name} zwolniony`);
+  addBotMsg(`${a.name} opuścił zespół. Biurko w <b>${rooms.find(r=>r.id===a.room)?.name}</b> jest wolne.`);
+}
+
+// ═══ HIRE ═══
+let prefillRoom = null;
+function openHireModal(roomId) {
+  prefillRoom = roomId || null;
+  if (roomId) document.getElementById('hireRoom').value = roomId;
+  document.getElementById('hireOverlay').classList.add('show');
+}
+function closeHire() { document.getElementById('hireOverlay').classList.remove('show'); }
+function pickSprite(el) {
+  document.querySelectorAll('.sprite-opt').forEach(x => x.classList.remove('picked'));
+  el.classList.add('picked');
+  pickedSprite = el.dataset.sprite;
+}
+function confirmHire() {
+  const roomId = document.getElementById('hireRoom').value;
+  const slot = findFreeSlot(roomId);
+  if (slot === null) { toast('Ten pokój jest pełny!'); return; }
+  const a = {
+    id: 'a' + Date.now(),
+    name: document.getElementById('hireName').value.trim() || 'Nowy Agent',
+    role: document.getElementById('hireRole').value,
+    sprite: pickedSprite,
+    model: document.getElementById('hireModel').value,
+    status: 'idle', task: null, progress: 0,
+    room: roomId, slot,
+    prompt: document.getElementById('hirePrompt').value,
+    ctx: '0/195k',
+  };
+  agents.push(a);
+  closeHire();
+  renderDesks(); updateStats();
+  toast(`👋 Witaj, ${a.name}!`);
+  addBotMsg(`Nowy członek zespołu: <b>${a.name}</b> (${a.role}) — pokój <b>${rooms.find(r=>r.id===roomId)?.name}</b>. Skonfiguruj instrukcje i przydziel zadanie.`);
+  setTimeout(() => openDrawer(a.id), 400);
+}
+
+// ═══ CHAT ═══
+const orchReplies = {
+  status: () => {
+    const lines = agents.map(a => `• <b>${a.name}</b> (${a.role}) — ${a.status}${a.task?`, ${a.task} ${a.progress}%`:''}`).join('<br>');
+    return `📊 <b>Status zespołu</b> (${agents.length} agentów):<br><br>${lines}<br><br>Pipeline: ${tasks.filter(t=>t.phase==='backlog').length} backlog, ${tasks.filter(t=>t.phase==='in-progress').length} w toku.`;
+  },
+  plan: () => `📋 <b>Propozycja sprintu:</b><br><br>1. Dokończyć API Gateway (Alex)<br>2. Dashboard UI — 72% (Maya)<br>3. Auth review (Eve)<br>4. E2E tests — wolny slot<br><br><button class="act" onclick="orchApprovePlan()">✅ Zatwierdź plan</button>`,
+  review: () => `👁️ Eve robi review <b>Auth Service</b> (55%). Po zakończeniu proponuję:<br>• Dashboard wireframes<br>• CI Pipeline<br><br><button class="act" onclick="toast('Dodano do kolejki Eve')">Przypisz Eve</button>`,
+  hire: () => `Mamy ${agents.length} agentów w ${rooms.length} pokojach. Kliknij <b>+ Zatrudnij</b> lub wolne biurko na mapie.<br><br><button class="act" onclick="openHireModal()">Otwórz formularz</button>`,
+  help: () => `❓ <b>Pomoc:</b><br>• Kliknij biurko → ustawienia agenta<br>• Kliknij + na wolnym biurku → zatrudnij<br>• Przeciągnij mapę biura myszką<br>• Pipeline na dole — kanban zadań<br>• Zapytaj o: status, plan, review, zatrudnij`,
+};
+
+function addBotMsg(html) {
+  const el = document.getElementById('chatMsgs');
+  el.innerHTML += `<div class="msg bot">${html}<div class="time">teraz</div></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+function addUserMsg(text) {
+  const el = document.getElementById('chatMsgs');
+  el.innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+function orchSay(key) {
+  if (key === 'hire') { openHireModal(); return; }
+  const fn = orchReplies[key];
+  if (fn) addBotMsg(fn());
+}
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  addUserMsg(text);
+  input.value = '';
+  setTimeout(() => {
+    const l = text.toLowerCase();
+    let reply = 'Rozumiem. Powiedz więcej — chcesz planować sprint, zatrudnić kogoś, czy sprawdzić status?';
+    if (l.includes('status') || l.includes('jak') && l.includes('idzie')) reply = orchReplies.status();
+    else if (l.includes('plan') || l.includes('sprint')) reply = orchReplies.plan();
+    else if (l.includes('review') || l.includes('qa')) reply = orchReplies.review();
+    else if (l.includes('zatrud') || l.includes('hire') || l.includes('nowy')) reply = orchReplies.hire();
+    else if (l.includes('pomoc') || l.includes('help')) reply = orchReplies.help();
+    else if (l.includes('alex') || l.includes('maya')) {
+      const name = l.includes('alex') ? 'alex' : 'maya';
+      const a = agents.find(x => x.id === name);
+      reply = a ? `<b>${a.name}</b>: ${a.status}, zadanie: ${a.task||'brak'}, pokój ${rooms.find(r=>r.id===a.room)?.name}.<br><button class="act" onclick="openDrawer('${a.id}')">Otwórz ustawienia</button>` : 'Nie znalazłem agenta.';
+    }
+    addBotMsg(typeof reply === 'string' ? reply : reply());
+  }, 700);
+}
+function orchPlan() {
+  addUserMsg('Stwórz nowy plan projektu');
+  setTimeout(() => addBotMsg(orchReplies.plan()), 600);
+}
+function orchApprovePlan() {
+  addBotMsg('✅ Plan zatwierdzony! Taski zaktualizowane. Agenci powiadomieni.');
+  toast('Plan sprintu zatwierdzony');
+}
+
+// ═══ VIEWS ═══
+function showView(view, btn) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('officeView').style.display = view === 'office' ? 'flex' : 'none';
+  document.getElementById('settingsView').classList.toggle('show', view === 'settings');
+  document.querySelector('.chat-panel').style.display = view === 'settings' ? 'none' : 'flex';
+  document.getElementById('officeView').style.flex = '1';
+  document.getElementById('officeView').style.flexDirection = 'column';
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.style.display = 'none', 2200);
+}
+
+// ═══ INIT ═══
+renderRooms();
+renderDesks();
+renderPipeline();
+updateStats();
+resetView();
+focusRoom('backend');
+</script>
+</body>
+</html>

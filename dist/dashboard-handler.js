@@ -408,12 +408,6 @@ async function handleProjectState(req, res) {
             roadmap: readProjectDoc("ROADMAP.md"),
             context: readProjectDoc("CONTEXT.md"),
             notes: readProjectDoc("NOTES.md"),
-            project_plan: readProjectDoc("PROJECT_PLAN.md"),
-            features: readProjectDoc("FEATURES.md"),
-            bugs: readProjectDoc("BUGS.md"),
-            changelog: readProjectDoc("CHANGELOG.md"),
-            style_guide: readProjectDoc("STYLE_GUIDE.md"),
-            architecture: readProjectDoc("ARCHITECTURE.md"),
             matched_live: [],
             live_matched_count: 0,
             agents_on_project: false,
@@ -1044,6 +1038,19 @@ export function createDashboardHandler(api) {
             }
             // ── STATIC FILES ──
             if (method === "GET") {
+                // Software House UI proposal (frontend-only mockup)
+                if (pathname === "/software-house" || pathname === "/software-house/") {
+                    sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "software-house.html"));
+                    return true;
+                }
+                // Static assets for dashboard pages (sprites, mock JSON)
+                if (pathname.startsWith("/assets/") || pathname.startsWith("/data/")) {
+                    const assetFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
+                    if (fs.existsSync(assetFile) && fs.statSync(assetFile).isFile()) {
+                        sendFile(res, assetFile);
+                        return true;
+                    }
+                }
                 // Dashboard main page
                 if (pathname === "/" || pathname === "/index.html") {
                     sendFile(res, HTML_PATH);

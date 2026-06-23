@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>⚡ GenorBoard — Kanban + Team Prototype</title>
+<style>
+:root {
+  --bg: #0d1117; --bg-alt: #161b22; --bg-card: #1c2128;
+  --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+  --text-bright: #fff; --blue: #58a6ff; --green: #3fb950;
+  --red: #f85149; --yellow: #d29922; --orange: #f0883e;
+  --purple: #bc8cff; --cyan: #39d2c0; --pink: #f778ba;
+  --accent: #58a6ff; --radius: 8px; --radius-sm: 6px;
+  --font: 'JetBrains Mono','Cascadia Code','Fira Code',monospace;
+  --font-ui: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --header-h: 48px; --sidebar-w: 56px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);font-size:14px;overflow:hidden}
+::placeholder{color:var(--text-dim);opacity:.5}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* HEADER */
+.header{display:flex;align-items:center;height:var(--header-h);padding:0 16px;background:var(--bg-alt);border-bottom:1px solid var(--border);gap:12px;flex-shrink:0}
+.logo{font-size:15px;font-weight:700;color:var(--text-bright);display:flex;align-items:center;gap:6px}
+.logo span{color:var(--accent)}
+.header .sep{width:1px;height:18px;background:var(--border)}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
+.badge.prototype{background:var(--yellow);color:#000}
+.project-selector{display:flex;align-items:center;gap:6px;margin-left:16px;font-size:13px;color:var(--text-dim)}
+.project-selector select{background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 8px;font-size:13px;cursor:pointer}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.header-right .stat{font-size:12px;color:var(--text-dim)}
+.header-right .stat strong{color:var(--text-bright)}
+
+/* LAYOUT */
+.layout{display:flex;height:calc(100% - var(--header-h))}
+.sidebar{width:var(--sidebar-w);background:var(--bg-alt);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:4px;flex-shrink:0}
+.sidebar-btn{width:40px;height:40px;border-radius:var(--radius-sm);border:none;background:none;color:var(--text-dim);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:150ms;position:relative}
+.sidebar-btn:hover{color:var(--text);background:rgba(88,166,255,.1)}
+.sidebar-btn.active{color:var(--accent);background:rgba(88,166,255,.15)}
+.sidebar-btn.active::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;background:var(--accent);border-radius:0 2px 2px 0}
+.tooltip{position:absolute;left:56px;background:var(--bg-card);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm);font-size:12px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 150ms;z-index:100}
+.sidebar-btn:hover .tooltip{opacity:1}
+.main{flex:1;overflow-y:auto;min-width:0}
+
+/* TABS */
+.tab{display:none;padding:0;height:100%}
+.tab.active{display:flex;flex-direction:column}
+
+/* ========== KANBAN BOARD ========== */
+.kanban-header{display:flex;align-items:center;padding:16px 20px 8px;gap:12px;flex-shrink:0}
+.kanban-header h2{font-size:16px;font-weight:600;color:var(--text-bright)}
+.kanban-header .meta{font-size:12px;color:var(--text-dim)}
+.kanban-header .btn{font-size:12px;padding:6px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);color:var(--text);cursor:pointer;transition:150ms}
+.kanban-header .btn:hover{border-color:var(--accent);color:var(--accent)}
+.kanban-header .btn.primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}
+.kanban-filters{display:flex;gap:8px;padding:0 20px 12px;flex-shrink:0}
+.kanban-filters select,.kanban-filters input{background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 8px;font-size:12px}
+.kanban-filters input{width:160px}
+
+.board{display:flex;gap:12px;padding:0 20px 20px;overflow-x:auto;flex:1;min-height:0;align-items:flex-start}
+.column{min-width:280px;max-width:320px;flex:1;background:var(--bg-alt);border-radius:var(--radius);border:1px solid var(--border);display:flex;flex-direction:column;max-height:100%}
+.column.drag-over{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.col-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.col-header h3{font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
+.col-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.col-count{font-size:11px;color:var(--text-dim);background:var(--bg-card);padding:1px 8px;border-radius:10px}
+.col-body{overflow-y:auto;flex:1;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:60px}
+
+/* CARD */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;cursor:grab;transition:150ms;user-select:none}
+.card:hover{border-color:var(--blue);box-shadow:0 2px 8px rgba(88,166,255,.08)}
+.card.dragging{opacity:.4;transform:scale(.98)}
+.card .card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:6px}
+.card .priority{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;flex-shrink:0}
+.card .priority.p0{background:rgba(248,81,73,.15);color:var(--red)}
+.card .priority.p1{background:rgba(240,136,62,.15);color:var(--orange)}
+.card .priority.p2{background:rgba(210,153,34,.15);color:var(--yellow)}
+.card .priority.p3{background:rgba(139,148,158,.15);color:var(--text-dim)}
+.card .title{font-size:13px;font-weight:500;color:var(--text-bright);line-height:1.4;flex:1}
+.card .type-badge{font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(57,210,192,.1);color:var(--cyan)}
+.card .card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--text-dim)}
+.card .assignee{display:flex;align-items:center;gap:5px}
+.card .avatar{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;background:var(--bg-alt);border:1px solid var(--border);flex-shrink:0}
+.card .deadline{font-size:10px}
+.card .card-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.card .tag{font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(188,140,255,.1);color:var(--purple)}
+
+.add-card-btn{width:100%;padding:8px;border:1px dashed var(--border);border-radius:var(--radius-sm);background:none;color:var(--text-dim);font-size:12px;cursor:pointer;transition:150ms;flex-shrink:0}
+.add-card-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ========== TEAM ========== */
+.team-header{display:flex;align-items:center;padding:16px 20px 8px;gap:12px;flex-shrink:0}
+.team-header h2{font-size:16px;font-weight:600;color:var(--text-bright)}
+.team-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;padding:0 20px 20px;overflow-y:auto}
+.agent-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;transition:150ms}
+.agent-card:hover{border-color:var(--accent)}
+.agent-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.agent-avatar{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;background:var(--bg-alt);border:2px solid var(--border)}
+.agent-avatar.busy{border-color:var(--orange)}
+.agent-avatar.online{border-color:var(--green)}
+.agent-avatar.idle{border-color:var(--text-dim)}
+.agent-info{flex:1}
+.agent-name{font-size:14px;font-weight:600;color:var(--text-bright)}
+.agent-model{font-size:12px;color:var(--accent);font-family:var(--font)}
+.agent-status{font-size:10px;font-weight:600;text-transform:uppercase}
+.agent-status.busy{color:var(--orange)}
+.agent-status.online{color:var(--green)}
+.agent-status.idle{color:var(--text-dim)}
+.agent-stats{display:flex;gap:16px;font-size:12px;color:var(--text-dim);margin-bottom:10px}
+.agent-stats .val{color:var(--text-bright);font-weight:600}
+.agent-prompt{font-size:11px;color:var(--text-dim);background:var(--bg-alt);padding:8px 10px;border-radius:var(--radius-sm);margin-bottom:10px;line-height:1.5;max-height:64px;overflow:hidden}
+.agent-projects{display:flex;gap:4px;flex-wrap:wrap}
+.agent-project{font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(88,166,255,.1);color:var(--blue)}
+
+/* TOAST */
+.toast{position:fixed;top:60px;right:16px;background:var(--green);color:#000;padding:8px 16px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;z-index:999;animation:slideIn .3s ease}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);width:500px;max-width:90vw;max-height:85vh;overflow-y:auto;padding:20px}
+.modal h3{font-size:16px;margin-bottom:16px;color:var(--text-bright)}
+.modal label{display:block;font-size:12px;color:var(--text-dim);margin:10px 0 4px}
+.modal input,.modal select,.modal textarea{width:100%;background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;font-family:var(--font-ui)}
+.modal textarea{resize:vertical;min-height:80px;font-family:var(--font)}
+.modal .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.modal .btn{padding:8px 16px;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;border:1px solid var(--border);background:var(--bg-alt);color:var(--text)}
+.modal .btn.primary{background:var(--accent);color:#000;border-color:var(--accent)}
+.modal .btn.danger{background:var(--red);color:#fff;border-color:var(--red)}
+
+/* Responsive */
+@media(max-width:768px){
+  .board{flex-direction:column;align-items:stretch}
+  .column{max-width:100%;min-width:100%}
+  .team-grid{grid-template-columns:1fr}
+  .agent-card{max-width:100%}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">⚡ Genor<span>Board</span></div>
+  <span class="badge prototype">PROTOTYPE</span>
+  <div class="sep"></div>
+  <div class="project-selector">
+    Project:
+    <select id="projectSelect" onchange="changeProject()">
+      <option value="my-saas">my-saas (SaaS Platform)</option>
+      <option value="internal-tool">internal-tool (Admin Tool)</option>
+      <option value="mobile-app">mobile-app (iOS App)</option>
+    </select>
+  </div>
+  <div class="header-right">
+    <div class="stat">Tasks: <strong id="statTasks">12</strong></div>
+    <div class="stat">Agents: <strong id="statAgents">4</strong></div>
+    <div class="stat">Done: <strong id="statDone">3</strong></div>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <button class="sidebar-btn active" data-tab="kanban" onclick="switchTab('kanban')" title="Kanban Board">
+      📋<span class="tooltip">Kanban</span>
+    </button>
+    <button class="sidebar-btn" data-tab="team" onclick="switchTab('team')" title="Agent Team">
+      👥<span class="tooltip">Team</span>
+    </button>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main">
+
+    <!-- KANBAN TAB -->
+    <div id="tab-kanban" class="tab active">
+      <div class="kanban-header">
+        <h2>📋 Kanban Board</h2>
+        <div class="meta" id="projectMeta">my-saas · 5 phases · 12 tasks</div>
+        <button class="btn primary" onclick="openTaskModal()" style="margin-left:auto">+ New Task</button>
+      </div>
+      <div class="kanban-filters">
+        <input type="text" placeholder="🔍 Filter tasks…" oninput="renderKanban()" id="taskFilter">
+        <select onchange="renderKanban()" id="priorityFilter">
+          <option value="all">All priorities</option>
+          <option value="P0">P0 · Critical</option>
+          <option value="P1">P1 · High</option>
+          <option value="P2">P2 · Medium</option>
+          <option value="P3">P3 · Low</option>
+        </select>
+        <select onchange="renderKanban()" id="agentFilter">
+          <option value="all">All agents</option>
+        </select>
+      </div>
+      <div class="board" id="kanbanBoard"></div>
+    </div>
+
+    <!-- TEAM TAB -->
+    <div id="tab-team" class="tab">
+      <div class="team-header">
+        <h2>👥 Agent Team</h2>
+        <button class="btn primary" onclick="openAgentModal()" style="margin-left:auto">+ Add Agent</button>
+      </div>
+      <div class="team-grid" id="teamGrid"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- TASK MODAL -->
+<div class="modal-overlay" id="taskModalOverlay" onclick="if(event.target===this)closeTaskModal()">
+  <div class="modal" id="taskModal"></div>
+</div>
+
+<!-- AGENT MODAL -->
+<div class="modal-overlay" id="agentModalOverlay" onclick="if(event.target===this)closeAgentModal()">
+  <div class="modal" id="agentModal"></div>
+</div>
+
+<div class="toast" id="toast" style="display:none"></div>
+
+<script>
+// ══════════════ DATA ══════════════
+const agents = [
+  { id:'alice', name:'Alice', emoji:'🦊', model:'opencode-go/deepseek-v4-pro', status:'online',
+    prompt:'You are a strategic business analyst. Focus on market research, competitive analysis, business plans, and GTM strategies. Always provide data-backed recommendations.', tasks:2, projects:['my-saas'] },
+  { id:'bob', name:'Bob', emoji:'🐺', model:'opencode-go/minimax-m3', status:'busy',
+    prompt:'You are a backend architect specialized in scalable distributed systems. Focus on API design, database schemas, microservices, and cloud infrastructure.', tasks:3, projects:['my-saas','internal-tool'] },
+  { id:'charlie', name:'Charlie', emoji:'🦉', model:'opencode-go/glm-5.1', status:'idle',
+    prompt:'You are a full-stack developer with expertise in React, TypeScript, and Node.js. Focus on clean code, component architecture, and end-to-end feature delivery.', tasks:0, projects:['my-saas','mobile-app'] },
+  { id:'diana', name:'Diana', emoji:'🐉', model:'opencode-go/qwen3.7-max', status:'online',
+    prompt:'You are a UI/UX designer and frontend specialist. Focus on design systems, component libraries, accessibility, and user research. Think visually, deliver precisely.', tasks:1, projects:['my-saas'] },
+];
+
+const phases = {
+  'my-saas': [
+    { id:'backlog', name:'📋 Backlog', color:'#8b949e', sort:0 },
+    { id:'research', name:'🔍 Research', color:'#bc8cff', sort:1 },
+    { id:'design', name:'🎨 Design', color:'#58a6ff', sort:2 },
+    { id:'dev', name:'⚙️ Development', color:'#f0883e', sort:3 },
+    { id:'done', name:'✅ Done', color:'#3fb950', sort:4 },
+  ],
+  'internal-tool': [
+    { id:'backlog', name:'📋 Backlog', color:'#8b949e', sort:0 },
+    { id:'dev', name:'⚙️ Development', color:'#f0883e', sort:1 },
+    { id:'testing', name:'🧪 Testing', color:'#d29922', sort:2 },
+    { id:'done', name:'✅ Done', color:'#3fb950', sort:3 },
+  ],
+  'mobile-app': [
+    { id:'backlog', name:'📋 Backlog', color:'#8b949e', sort:0 },
+    { id:'design', name:'🎨 Design', color:'#58a6ff', sort:1 },
+    { id:'ios', name:'🍎 iOS Dev', color:'#f0883e', sort:2 },
+    { id:'qa', name:'🧪 QA', color:'#d29922', sort:3 },
+    { id:'done', name:'✅ Done', color:'#3fb950', sort:4 },
+  ]
+};
+
+const tasks = {
+  'my-saas': [
+    { id:'t1', phase:'backlog', title:'Business Plan', desc:'Comprehensive business plan: market analysis, revenue model, GTM strategy, 3-year projections.', priority:'P0', type:'research', agent:'alice', deadline:'2026-06-30', tags:['strategy','critical'], sort:0 },
+    { id:'t2', phase:'backlog', title:'UX Research Plan', desc:'User research methodology, personas, journey maps, competitive UX audit.', priority:'P1', type:'research', agent:'diana', deadline:'2026-07-05', tags:['ux'], sort:1 },
+    { id:'t3', phase:'backlog', title:'Tech Stack Decision', desc:'Evaluate and decide on backend framework, database, hosting, and monitoring stack.', priority:'P1', type:'dev', agent:'bob', deadline:'2026-07-03', tags:['architecture'], sort:2 },
+    { id:'t4', phase:'backlog', title:'Legal & Compliance', desc:'GDPR compliance plan, terms of service, privacy policy draft.', priority:'P2', type:'docs', agent:null, deadline:'2026-07-15', tags:['legal'], sort:3 },
+    { id:'t5', phase:'research', title:'Market Analysis', desc:'TAM/SAM/SOM analysis, competitor matrix, pricing benchmarks.', priority:'P0', type:'research', agent:'alice', deadline:'2026-07-01', tags:['strategy'], sort:0 },
+    { id:'t6', phase:'research', title:'Competitor Deep Dive', desc:'Detailed feature comparison of top 5 competitors. SWOT for each.', priority:'P1', type:'research', agent:'alice', deadline:'2026-07-02', tags:['competitive'], sort:1 },
+    { id:'t7', phase:'design', title:'Design System Setup', desc:'Typography, color palette, spacing tokens, component primitives. Figma file + code tokens.', priority:'P0', type:'design', agent:'diana', deadline:'2026-07-05', tags:['design-system'], sort:0 },
+    { id:'t8', phase:'design', title:'Dashboard Wireframes', desc:'Low-fi wireframes for main dashboard, settings, and analytics views.', priority:'P1', type:'design', agent:'diana', deadline:'2026-07-08', tags:['wireframes'], sort:1 },
+    { id:'t9', phase:'dev', title:'Database Schema Design', desc:'PostgreSQL schema: users, projects, tasks, teams. Migrations + ERD.', priority:'P0', type:'dev', agent:'bob', deadline:'2026-07-10', tags:['backend'], sort:0 },
+    { id:'t10', phase:'dev', title:'Auth Service', desc:'JWT-based authentication with refresh tokens, OAuth2 providers (Google, GitHub).', priority:'P0', type:'dev', agent:'bob', deadline:'2026-07-12', tags:['backend','security'], sort:1 },
+    { id:'t11', phase:'dev', title:'API Gateway Setup', desc:'Express/Fastify gateway with rate limiting, request validation, logging middleware.', priority:'P1', type:'dev', agent:'charlie', deadline:'2026-07-14', tags:['backend','infra'], sort:2 },
+    { id:'t12', phase:'done', title:'Project Scope Doc', desc:'✅ Project scope approved. 8 features, MVP timeline 6 weeks.', priority:'P0', type:'docs', agent:'alice', deadline:'2026-06-25', tags:['done'], sort:0 },
+    { id:'t13', phase:'done', title:'Initial Architecture', desc:'✅ High-level architecture diagram with component breakdown.', priority:'P1', type:'dev', agent:'bob', deadline:'2026-06-26', tags:['done','architecture'], sort:1 },
+    { id:'t14', phase:'done', title:'Team Assignments', desc:'✅ All team members assigned to initial workstreams.', priority:'P2', type:'docs', agent:null, deadline:'2026-06-24', tags:['done','org'], sort:2 },
+  ],
+  'internal-tool': [
+    { id:'t20', phase:'backlog', title:'User Management CRUD', desc:'Admin panel for managing users: create, edit, delete, search, bulk actions.', priority:'P0', type:'dev', agent:'bob', deadline:'2026-07-10', tags:['admin'], sort:0 },
+    { id:'t21', phase:'dev', title:'Role-Based Access', desc:'Implement RBAC with roles: admin, editor, viewer. Permission middleware.', priority:'P0', type:'dev', agent:'bob', deadline:'2026-07-08', tags:['security'], sort:0 },
+    { id:'t22', phase:'testing', title:'Integration Tests', desc:'Cypress E2E tests for user management flow and RBAC enforcement.', priority:'P1', type:'dev', agent:'charlie', deadline:'2026-07-15', tags:['testing'], sort:0 },
+  ],
+  'mobile-app': [
+    { id:'t30', phase:'backlog', title:'App Concept Document', desc:'Feature list, target audience, platform requirements, competitive analysis.', priority:'P0', type:'research', agent:'diana', deadline:'2026-07-05', tags:['planning'], sort:0 },
+    { id:'t31', phase:'design', title:'iOS Design System', desc:'SwiftUI component library based on Human Interface Guidelines.', priority:'P0', type:'design', agent:'diana', deadline:'2026-07-12', tags:['ios','design-system'], sort:0 },
+  ]
+};
+
+let currentTab = 'kanban';
+let currentProject = 'my-saas';
+
+// ═══ RENDER ═══
+function getAgent(id){ return agents.find(a=>a.id===id); }
+function getTasks(){ return tasks[currentProject]||[]; }
+function getPhases(){ return phases[currentProject]||[]; }
+
+function renderKanban(){
+  const board = document.getElementById('kanbanBoard');
+  const taskFilter = (document.getElementById('taskFilter')?.value||'').toLowerCase();
+  const priorityFilter = document.getElementById('priorityFilter')?.value||'all';
+  const agentFilter = document.getElementById('agentFilter')?.value||'all';
+  const allTasks = getTasks();
+  
+  let html = '';
+  for(const phase of getPhases()){
+    const phaseTasks = allTasks.filter(t=>t.phase===phase.id).sort((a,b)=>a.sort-b.sort);
+    const filtered = phaseTasks.filter(t=>{
+      if(taskFilter && !t.title.toLowerCase().includes(taskFilter) && !t.desc.toLowerCase().includes(taskFilter)) return false;
+      if(priorityFilter!=='all' && t.priority!==priorityFilter) return false;
+      if(agentFilter!=='all' && t.agent!==agentFilter) return false;
+      return true;
+    });
+    
+    html += `<div class="column" data-phase="${phase.id}" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">`;
+    html += `<div class="col-header">`;
+    html += `<h3><span class="col-dot" style="background:${phase.color}"></span>${phase.name.replace(/^[^ ]+ /,'')}</h3>`;
+    html += `<span class="col-count">${filtered.length}</span>`;
+    html += `</div>`;
+    html += `<div class="col-body">`;
+    
+    for(const task of filtered){
+      const agent = getAgent(task.agent);
+      html += `<div class="card" draggable="true" data-task="${task.id}" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)" onclick="openTaskDetail('${task.id}')">
+        <div class="card-header">
+          <span class="priority ${task.priority.toLowerCase()}">${task.priority}</span>
+          <span class="title">${task.title}</span>
+          <span class="type-badge">${task.type}</span>
+        </div>
+        ${task.tags.length ? `<div class="card-tags">${task.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>` : ''}
+        <div class="card-footer">
+          ${agent ? `<span class="assignee"><span class="avatar">${agent.emoji}</span>${agent.name}</span>` : '<span class="assignee" style="opacity:.4">Unassigned</span>'}
+          ${task.deadline ? `<span class="deadline">📅 ${task.deadline}</span>` : ''}
+        </div>
+      </div>`;
+    }
+    
+    html += `</div>`;
+    html += `<button class="add-card-btn" onclick="quickAdd('${phase.id}')">+ Add task</button>`;
+    html += `</div>`;
+  }
+  
+  board.innerHTML = html;
+  updateStats();
+}
+
+function renderTeam(){
+  const grid = document.getElementById('teamGrid');
+  grid.innerHTML = agents.map(a=>`
+    <div class="agent-card">
+      <div class="agent-header">
+        <div class="agent-avatar ${a.status}">${a.emoji}</div>
+        <div class="agent-info">
+          <div class="agent-name">${a.name}</div>
+          <div class="agent-model">${a.model.split('/').pop()}</div>
+          <div class="agent-status ${a.status}">${a.status.toUpperCase()}</div>
+        </div>
+      </div>
+      <div class="agent-stats">
+        <span>Tasks: <span class="val">${a.tasks} active</span></span>
+        <span>Projects: <span class="val">${a.projects.length}</span></span>
+      </div>
+      <div class="agent-prompt">${a.prompt}</div>
+      <div class="agent-projects">${a.projects.map(p=>`<span class="agent-project">📁 ${p}</span>`).join('')}</div>
+    </div>
+  `).join('');
+}
+
+function updateStats(){
+  const allTasks = getTasks();
+  document.getElementById('statTasks').textContent = allTasks.length;
+  document.getElementById('statAgents').textContent = agents.length;
+  document.getElementById('statDone').textContent = allTasks.filter(t=>t.phase==='done').length;
+  
+  // Update agent filter
+  const sel = document.getElementById('agentFilter');
+  if(sel){
+    const current = sel.value;
+    sel.innerHTML = '<option value="all">All agents</option>';
+    agents.forEach(a=>{
+      sel.innerHTML += `<option value="${a.id}" ${current===a.id?'selected':''}>${a.emoji} ${a.name}</option>`;
+    });
+  }
+  
+  const phases = getPhases();
+  document.getElementById('projectMeta').textContent = `${currentProject} · ${phases.length} phases · ${allTasks.length} tasks`;
+}
+
+// ═══ DRAG & DROP ═══
+let draggedTask = null;
+
+function handleDragStart(e){
+  draggedTask = e.target.closest('.card');
+  if(!draggedTask) return;
+  draggedTask.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', draggedTask.dataset.task);
+}
+
+function handleDragEnd(e){
+  if(draggedTask) draggedTask.classList.remove('dragging');
+  document.querySelectorAll('.column').forEach(c=>c.classList.remove('drag-over'));
+}
+
+function handleDragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const col = e.target.closest('.column');
+  if(col) col.classList.add('drag-over');
+}
+
+function handleDragLeave(e){
+  const col = e.target.closest('.column');
+  if(col) col.classList.remove('drag-over');
+}
+
+function handleDrop(e){
+  e.preventDefault();
+  const col = e.target.closest('.column');
+  if(!col) return;
+  col.classList.remove('drag-over');
+  const taskId = e.dataTransfer.getData('text/plain');
+  const newPhase = col.dataset.phase;
+  const task = getTasks().find(t=>t.id===taskId);
+  if(!task) return;
+  const oldPhase = task.phase;
+  task.phase = newPhase;
+  
+  showToast(`📋 "${task.title}" → ${getPhases().find(p=>p.id===newPhase)?.name.split(' ')[1]}`);
+  if(newPhase==='done' && oldPhase!=='done') showToast(`✅ Task completed!`, 2000);
+  
+  draggedTask = null;
+  renderKanban();
+}
+
+// ═══ MODALS ═══
+function openTaskDetail(id){
+  const task = getTasks().find(t=>t.id===id);
+  if(!task) return;
+  const agent = getAgent(task.agent);
+  const phase = getPhases().find(p=>p.id===task.phase);
+  
+  document.getElementById('taskModal').innerHTML = `
+    <h3>${task.title}</h3>
+    <label>Phase</label><div style="font-size:13px;color:var(--text)">${phase.name} · Priority: <b class="${task.priority.toLowerCase()}" style="font-weight:700">${task.priority}</b> · Type: ${task.type}</div>
+    <label>Assigned Agent</label><div style="font-size:13px;color:var(--text)">${agent ? `${agent.emoji} ${agent.name} (${agent.model.split('/').pop()})` : '<i>Unassigned</i>'}</div>
+    <label>Deadline</label><div style="font-size:13px;color:var(--text)">${task.deadline||'No deadline'}</div>
+    <label>Description</label><div style="font-size:13px;color:var(--text-dim);background:var(--bg-alt);padding:10px;border-radius:6px">${task.desc}</div>
+    <label>Tags</label><div style="display:flex;gap:4px">${task.tags.map(t=>`<span class="tag" style="font-size:11px">${t}</span>`).join('')}</div>
+    <div class="btn-row">
+      <button class="btn danger" onclick="closeTaskModal()">Close</button>
+      <button class="btn primary" onclick="simulateDispatch('${task.id}');closeTaskModal()">▶ Dispatch to Agent</button>
+    </div>
+  `;
+  document.getElementById('taskModalOverlay').classList.add('show');
+}
+
+function openTaskModal(){
+  const taskPhases = getPhases();
+  document.getElementById('taskModal').innerHTML = `
+    <h3>New Task</h3>
+    <form id="newTaskForm" onsubmit="addTask(event)">
+      <label>Title</label><input type="text" id="newTitle" required placeholder="e.g. Business Plan">
+      <label>Phase</label><select id="newPhase">${taskPhases.filter(p=>p.id!=='done').map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+      <label>Priority</label><select id="newPriority"><option value="P0" selected>P0 · Critical</option><option value="P1">P1 · High</option><option value="P2">P2 · Medium</option><option value="P3">P3 · Low</option></select>
+      <label>Type</label><select id="newType"><option value="research">🔍 Research</option><option value="design">🎨 Design</option><option value="dev">⚙️ Development</option><option value="docs">📝 Docs</option><option value="review">👁️ Review</option></select>
+      <label>Assign Agent</label><select id="newAgent"><option value="">-- Unassigned --</option>${agents.map(a=>`<option value="${a.id}">${a.emoji} ${a.name} (${a.model.split('/').pop()})</option>`).join('')}</select>
+      <label>Deadline</label><input type="date" id="newDeadline">
+      <label>Description</label><textarea id="newDesc" placeholder="Task description, requirements, acceptance criteria..."></textarea>
+      <label>Tags (comma separated)</label><input type="text" id="newTags" placeholder="e.g. backend, critical, v1">
+      <div class="btn-row">
+        <button type="button" class="btn" onclick="closeTaskModal()">Cancel</button>
+        <button type="submit" class="btn primary">Create Task</button>
+      </div>
+    </form>
+  `;
+  document.getElementById('taskModalOverlay').classList.add('show');
+}
+
+function quickAdd(phaseId){
+  const task = { 
+    id:'t' + Date.now(), phase:phaseId, title:'New Task', desc:'Click to edit details.', 
+    priority:'P2', type:'dev', agent:null, deadline:'', tags:[], sort:99 
+  };
+  getTasks().push(task);
+  renderKanban();
+  showToast('📝 Task added. Click to edit.');
+  setTimeout(()=>openTaskDetail(task.id), 200);
+}
+
+function addTask(e){
+  e.preventDefault();
+  const task = {
+    id: 't' + Date.now(),
+    phase: document.getElementById('newPhase').value,
+    title: document.getElementById('newTitle').value,
+    desc: document.getElementById('newDesc').value || 'No description',
+    priority: document.getElementById('newPriority').value,
+    type: document.getElementById('newType').value,
+    agent: document.getElementById('newAgent').value || null,
+    deadline: document.getElementById('newDeadline').value || '',
+    tags: (document.getElementById('newTags').value||'').split(',').map(t=>t.trim()).filter(Boolean),
+    sort: 99
+  };
+  getTasks().push(task);
+  closeTaskModal();
+  renderKanban();
+  showToast(`✅ Task "${task.title}" created`);
+}
+
+function closeTaskModal(){
+  document.getElementById('taskModalOverlay').classList.remove('show');
+}
+
+function simulateDispatch(taskId){
+  const task = getTasks().find(t=>t.id===taskId);
+  const agent = getAgent(task.agent);
+  if(!task) return;
+  
+  // Move to next phase if not in done
+  const currentPhaseIdx = getPhases().findIndex(p=>p.id===task.phase);
+  if(currentPhaseIdx < getPhases().length - 1){
+    const nextPhase = getPhases()[currentPhaseIdx + 1];
+    task.phase = nextPhase.id;
+  }
+  
+  if(agent) agent.status = 'busy';
+  renderKanban();
+  renderTeam();
+  
+  showToast(`🚀 Dispatched "${task.title}" to ${agent ? agent.emoji+' '+agent.name : 'unassigned agent'}`);
+  
+  // Simulate completion after 3s
+  setTimeout(()=>{
+    if(agent) agent.status = 'online';
+    renderTeam();
+    showToast(`✅ ${agent ? agent.name : 'Agent'} completed task!`);
+  }, 3000);
+}
+
+// ═══ AGENT MODAL ═══
+function openAgentModal(){
+  document.getElementById('agentModal').innerHTML = `
+    <h3>Add Agent</h3>
+    <form id="newAgentForm" onsubmit="addAgent(event)">
+      <label>Name</label><input type="text" id="agName" required placeholder="e.g. Alice">
+      <label>Emoji</label><input type="text" id="agEmoji" value="🤖" maxlength="2" style="width:60px;font-size:20px;text-align:center">
+      <label>Model</label><select id="agModel">
+        <option value="opencode-go/deepseek-v4-pro">DeepSeek V4 Pro</option>
+        <option value="opencode-go/minimax-m3">MiniMax M3</option>
+        <option value="opencode-go/glm-5.1">GLM 5.1</option>
+        <option value="opencode-go/qwen3.7-max">Qwen 3.7 Max</option>
+        <option value="opencode-go/mimo-v2.5">Mimo V2.5</option>
+        <option value="opencode-go/deepseek-v4-flash">DeepSeek V4 Flash</option>
+      </select>
+      <label>System Instructions</label>
+      <textarea id="agPrompt" placeholder="You are a... Focus on... Always...">You are a specialized agent. Focus on delivering high-quality work. Think step by step.</textarea>
+      <label>Projects</label>
+      <div id="agProjects" style="display:flex;gap:8px">
+        <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" value="my-saas" checked> my-saas</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" value="internal-tool"> internal-tool</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" value="mobile-app"> mobile-app</label>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn" onclick="closeAgentModal()">Cancel</button>
+        <button type="submit" class="btn primary">Create Agent</button>
+      </div>
+    </form>
+  `;
+  document.getElementById('agentModalOverlay').classList.add('show');
+}
+
+function addAgent(e){
+  e.preventDefault();
+  const agent = {
+    id: 'agent' + Date.now(),
+    name: document.getElementById('agName').value,
+    emoji: document.getElementById('agEmoji').value || '🤖',
+    model: document.getElementById('agModel').value,
+    status: 'idle',
+    prompt: document.getElementById('agPrompt').value,
+    tasks: 0,
+    projects: Array.from(document.querySelectorAll('#agProjects input:checked')).map(cb=>cb.value)
+  };
+  agents.push(agent);
+  closeAgentModal();
+  renderTeam();
+  showToast(`👥 Agent "${agent.name}" added to team`);
+}
+
+function closeAgentModal(){
+  document.getElementById('agentModalOverlay').classList.remove('show');
+}
+
+// ═══ TABS ═══
+function switchTab(tab){
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.sidebar-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  document.querySelector(`.sidebar-btn[data-tab="${tab}"]`).classList.add('active');
+  if(tab==='kanban') renderKanban();
+  if(tab==='team') renderTeam();
+}
+
+function changeProject(){
+  currentProject = document.getElementById('projectSelect').value;
+  renderKanban();
+}
+
+// ═══ UTILS ═══
+function showToast(msg, duration=1500){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  t.style.animation = 'none';
+  t.offsetHeight;
+  t.style.animation = 'slideIn .3s ease';
+  setTimeout(()=>{ t.style.display='none' }, duration);
+}
+
+// ═══ INIT ═══
+renderKanban();
+renderTeam();
+</script>
+</body>
+</html>
