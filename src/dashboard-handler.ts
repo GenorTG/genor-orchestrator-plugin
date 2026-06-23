@@ -1063,9 +1063,10 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
             return true;
           }
         }
-        // Dashboard main page
+        // Dashboard main page — redirect to Software House
         if (pathname === "/" || pathname === "/index.html") {
-          sendFile(res, HTML_PATH);
+          res.writeHead(302, { Location: "/software-house" });
+          res.end();
           return true;
         }
         // Other static HTML files in dashboard dir
