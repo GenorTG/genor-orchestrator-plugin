@@ -2845,12 +2845,16 @@ const _plugin = definePluginEntry({
                     }
                 }
                 // ── Preset: "custom" or "custom-fallbacks-only" — try model_routing chains ──
-                // Determine the task category (infer from task name when possible)
+                // Determine the task category — explicit Task Type: line takes priority, else infer
                 const ctx2 = sessionTracker.getSessionContext(ctxSessionKey);
                 const taskStr = ctx2?.task || "";
                 const taskLower = taskStr.toLowerCase();
+                const typeMatch = taskLower.match(/task\s*type:\s*(\w+)/);
                 let taskCategory = "coding"; // default
-                if (taskLower.includes("fix") || taskLower.includes("bug") || taskLower.includes("error") || taskLower.includes("broken"))
+                if (typeMatch && ["coding", "fixing", "research", "qa", "documentation", "test"].includes(typeMatch[1])) {
+                    taskCategory = typeMatch[1];
+                }
+                else if (taskLower.includes("fix") || taskLower.includes("bug") || taskLower.includes("error") || taskLower.includes("broken"))
                     taskCategory = "fixing";
                 else if (taskLower.includes("research") || taskLower.includes("investigat") || taskLower.includes("explore") || taskLower.includes("learn") || taskLower.includes("find out"))
                     taskCategory = "research";
@@ -2858,6 +2862,8 @@ const _plugin = definePluginEntry({
                     taskCategory = "qa";
                 else if (taskLower.includes("doc") || taskLower.includes("readme") || taskLower.includes("adr") || taskLower.includes("manual") || taskLower.includes("write up"))
                     taskCategory = "documentation";
+                else if (taskLower.includes("test") || taskLower.includes("spec") || taskLower.includes("unit") || taskLower.includes("e2e"))
+                    taskCategory = "test";
                 const modelRouting = pc?.model_routing || {};
                 const chain = modelRouting[taskCategory];
                 if (chain && Array.isArray(chain) && chain.length > 0) {
@@ -4052,7 +4058,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.",
             parameters: Type.Object({
                 task: Type.String({ description: "Task description for the subagent." }),
-                model: Type.Optional(Type.String({ description: "Optional model override. Omit to use project routing rules." })),
+                task_type: Type.Optional(Type.Union([
+                    Type.Literal("coding"),
+                    Type.Literal("fixing"),
+                    Type.Literal("research"),
+                    Type.Literal("qa"),
+                    Type.Literal("documentation"),
+                    Type.Literal("test"),
+                ], { description: "Task category for model routing. Required when model is not specified — auto-selects from project routing config." })),
+                model: Type.Optional(Type.String({ description: "Optional model override. Omit to use project routing rules (requires task_type or auto-inferred from task text)." })),
                 taskName: Type.Optional(Type.String({ description: "Optional stable name for subagent (lowercase with underscores/hyphens)." })),
                 timeoutSeconds: Type.Optional(Type.Number({ description: "Optional timeout in seconds (default: 300, max: 1800)." })),
             }),
@@ -4065,9 +4079,37 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 }
                 const project = sessionTracker.currentProject;
                 const task = params.task;
-                const model = params.model || sessionTracker.currentModel || undefined;
+                const taskType = params.task_type;
+                let model = params.model || sessionTracker.currentModel || undefined;
                 const taskName = params.taskName || `sub-${project}-${Date.now().toString(36)}`;
                 const timeoutSeconds = Math.min(params.timeoutSeconds || 300, 1800);
+                // Auto-resolve model from project routing config when task_type given but no model
+                if (!model && taskType) {
+                    try {
+                        const pc = getProjectConfig(project);
+                        const routing = pc?.model_routing || {};
+                        const chain = routing[taskType];
+                        if (chain && chain.length > 0) {
+                            const allModels = listModels();
+                            for (const chainId of chain) {
+                                const found = allModels.find(m => m.id === chainId && m.status === "active" && m.agent_ready !== false);
+                                if (found) {
+                                    model = found.id;
+                                    logger.info("routing", `Auto-routed ${project}/${taskType} → ${found.id}`);
+                                    break;
+                                }
+                            }
+                            if (!model)
+                                logger.warn("routing", `Chain for ${project}/${taskType} all inactive — spawning without explicit model`);
+                        }
+                        else {
+                            logger.warn("routing", `No routing chain for ${project}/${taskType} — spawning without explicit model`);
+                        }
+                    }
+                    catch (e) {
+                        logger.error("routing", `Auto-route error: ${e.message}`);
+                    }
+                }
                 // Log the subagent spawn
                 sessionTracker.trackSubagent(`pending-${taskName}`, {
                     parentKey: sessionTracker.sessionKey || "unknown",
@@ -4083,6 +4125,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     `Project: ${project}`,
                     `Parent Session: ${sessionTracker.sessionKey || "unknown"}`,
                     `Task: ${task}`,
+                    taskType ? `Task Type: ${taskType}` : "",
                     model ? `Model: ${model}` : "",
                     `Timeout: ${timeoutSeconds}s`,
                 ].filter(Boolean).join("\n");
