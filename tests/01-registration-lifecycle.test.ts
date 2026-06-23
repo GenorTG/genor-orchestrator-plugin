@@ -36,10 +36,11 @@ describe("PLUGIN-001a — Registration & Session Lifecycle", () => {
 
   // ── genorch_session_register ─────────────────────────────────
   describe("genorch_session_register", () => {
-    it("should fail without session key", async () => {
+    it("should use synthetic fallback when no session key", async () => {
       const exec = api.tools.get("genorch_session_register")!;
       const result = await unwrap(exec("", {}));
-      expect(typeof result === "string" && result.includes("session key")).toBe(true);
+      expect(result).toHaveProperty("ok", true);
+      expect(result).toHaveProperty("synthetic", true);
     });
 
     it("should register after setting session key", async () => {

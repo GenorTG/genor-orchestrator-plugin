@@ -2773,6 +2773,25 @@ const _plugin: Record<string, any> = definePluginEntry({
     //  HOOKS
     // ═══════════════════════════════════════════════════════════
 
+    api.on("session_start", async (event: any) => {
+      try {
+        const sk = (event.sessionKey || "").toString();
+        if (!sk) return;
+        // Adopt the real gateway key so genorch_session_register can find it
+        if (sessionTracker.sessionKey !== sk) {
+          sessionTracker.start(sk, event.reason || "new");
+        }
+        // Auto-register so tools like genorch_session_start_work can work
+        // without manually calling genorch_session_register first.
+        if (!sessionTracker.isSessionRegistered(sk)) {
+          sessionTracker.registerSession(sk);
+          logger.info("hooks", `session_start auto-registered: ${sk} (reason: ${event.reason || ""})`);
+        }
+      } catch (e: any) {
+        logger.warn("hooks", `session_start error: ${e.message}`);
+      }
+    });
+
     api.on("session_end", async (event: any) => {
       try {
         const sk_end = (event.sessionKey || "").toString();
@@ -3488,12 +3507,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       description: "Register this session for orchestrator tracking. Must be called BEFORE genorch_session_start_work. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        // Resolve the session key: prefer the hook-populated key, fall back
-        // to a synthetic stable key derived from agent identity + timestamp.
-        // session_start may not fire for sessions that existed before a
-        // gateway restart, so we can't depend on it for existing sessions.
-        const sk = sessionTracker.sessionKey;
-        if (!sk) return txt("error: no session key available");
+        // session_start hook now auto-populates sessionTracker.sessionKey.
+        // If still null (e.g. plugin loaded after session start), use a
+        // synthetic fallback key so registration works regardless.
+        let sk = sessionTracker.sessionKey;
+        let synthetic = false;
+        if (!sk) {
+          sk = `agent:main:plugin:orphan-${Date.now().toString(36)}`;
+          sessionTracker.start(sk, "orphan-fallback");
+          synthetic = true;
+          logger.warn("registration", `No session key — using synthetic fallback: ${sk}`);
+        }
         
         // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
         // If this session key doesn't match tracker's current key and there's
@@ -3522,14 +3546,16 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             message: "registered",
             session_key: sk,
             total_registered: existingSessions.length + 1,
+            synthetic: synthetic || undefined,
             warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
           });
         }
-        // Already registered (auto-registration in before_model_resolve handles this now)
+        // Already registered (auto-registration handles this)
         return txt({
           ok: true,
           message: "already_registered",
           session_key: sk,
+          synthetic: synthetic || undefined,
           note: "Session is auto-registered. Call genorch_session_start_work to bind to a project.",
         });
       },
