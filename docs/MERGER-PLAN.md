@@ -490,10 +490,10 @@ genorch_workflow_advance_phase (advances phase)
 |------|--------|
 | `src/db.ts` | V4 migration: 4 new tables + 2 extended |
 | `src/dashboard-handler.ts` | 18 new API endpoints |
+| `src/software-house.ts` | Software House API handler (NEW) |
 | `src/index.ts` | Vault injection in `before_prompt_build` hook |
 | `dashboard/software-house.html` | Wire `loadData()` to bootstrap, remove mock functions |
 | `dashboard/index.html` | DELETE (classic dashboard removed) |
-| `docs/ARCHITECTURE.md` | Update with final architecture |
 | `docs/MERGER-PLAN.md` | Update with final plan |
 
 ## Preserved Files
@@ -501,7 +501,7 @@ genorch_workflow_advance_phase (advances phase)
 | File | Why |
 |------|-----|
 | `UX-ANALYSIS.md` | Friend's design analysis |
-| `SOFTWARE-HOUSE-UI.md` | UI documentation |
+| `FEATURES.md` | Feature reference |
 | `software-house-mock.json` | API contract fixture |
 | `assets/pixel-agents/` | All 40 sprites |
 | `software-house.html` | Friend's SPA (modified, not replaced) |
