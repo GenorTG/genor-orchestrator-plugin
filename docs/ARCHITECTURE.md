@@ -5,6 +5,50 @@
 
 ---
 
+## The Architecture: Workers → Sessions → Tasks
+
+**Worker persona layer is the DEFAULT layer.** When you interact with the system, you interact with workers first. Workers get sessions when they work.
+
+```
+Worker persona (persistent)
+  → Worker gets a session (ephemeral)
+  → Session works on task
+  → Session ends
+  → Worker goes back to sleep
+```
+
+### Flow
+
+1. **Hire worker** (creates worker persona in `workers` table)
+2. **Assign worker to room** (groups workers by task type)
+3. **Assign task to worker** (backlog_tasks.worker_id)
+4. **Worker starts work** (creates session via genorch_session_register → genorch_session_start_work)
+5. **Worker works** (session is active, task is in-progress)
+6. **Worker finishes work** (session ends, task moves to done)
+7. **Worker goes back to sleep** (no active session)
+
+### Visual States
+
+| Worker Status | Meaning | Session State |
+|---------------|---------|---------------|
+| `sleep` | Idle, no active work | No session |
+| `working` | Active session, executing task | Session running |
+| `thinking` | QA review, pipeline, or planning | Session active (waiting) |
+| `success` | Just completed work | Session ending |
+| `error` | Failed during work | Session failed |
+
+### The Layer Model
+
+| Layer | Persistence | Purpose |
+|-------|-------------|---------|
+| Worker persona | Persistent (`workers` table) | Identity, role, model, prompt, room |
+| Session | Ephemeral (`sessions` table) | Execution mechanism for work |
+| Task | Persistent (`backlog_tasks` table) | Work item with phase, assignment |
+
+**Key insight:** Workers are the PRIMARY abstraction. Sessions are the MECHANISM for work. The UI shows workers, not sessions.
+
+---
+
 ## The Problem
 
 Two separate systems exist today:
@@ -42,9 +86,19 @@ The UI shows **workers** (employees with roles, models, sprites) doing **tasks**
 | PM Chat | `pm_chat` | Communication (messages, timestamps) |
 | Session | `sessions` | Ephemeral execution (worker + task + status + context) |
 
-### Key Insight: Workers Are Personas, Sessions Are Ephemeral
+### Registration Flow (Worker → Session → Task)
 
-A worker is a persistent persona. It can have multiple sessions over time, each working on different tasks. The worker persona is persistent, but sessions are ephemeral.
+```
+1. Worker persona exists (workers table)
+2. Task assigned to worker (backlog_tasks.worker_id)
+3. Worker starts work:
+   a. genorch_session_register — registers session with orchestrator
+   b. genorch_project_bind — loads project docs
+   c. genorch_session_start_work — begins work on task
+4. Worker works (session active, task in-progress)
+5. Worker finishes (session ends, task moves to done)
+6. Worker goes back to sleep (no active session)
+```
 
 ---
 
@@ -61,7 +115,6 @@ A worker is a persistent persona. It can have multiple sessions over time, each 
 | `Agent persona` | `Worker persona` |
 | `Agent CRUD` | `Worker CRUD` |
 | `Agent desk` | `Worker desk` |
-| `Agent sprites` | `Worker sprites` |
 
 ---
 
