@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getDataDir } from "./shared.js";
 import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, updateProjectConfig, listSessions, addSession, updateSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, deleteBacklogTask, listModels, getModel, updateModel, getLiveAgents, setLiveAgents, getLiveSessions, getPendingRegistrations, addPendingRegistration, removePendingRegistration, getControlResults, addControlResult, getLogs, addLog, addStateEvent } from "./db.js";
+import { handleSoftwareHouseRoute } from "./software-house.js";
 
 // ── RESOLVE PLUGIN ROOT ──────────────────────────────────────
 // Match the resolution in src/index.ts so dashboard relative paths work
@@ -1078,6 +1079,9 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
       }
 
       // ── API ROUTES ──
+      // Software House routes (must be checked first)
+      if (await handleSoftwareHouseRoute(req, res)) return true;
+
       if (method === "GET") {
         switch (pathname) {
           case "/api/status": handleStatus(req, res); return true;
