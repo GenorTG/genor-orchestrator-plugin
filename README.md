@@ -7,7 +7,7 @@
 ![Tools](https://img.shields.io/badge/tools-43-success)
 ![Hooks](https://img.shields.io/badge/hooks-7-ff69b4)
 
-> **✨ 47 tools + 7 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
+> **✨ 43 tools + 7 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
 
 The orchestrator doesn't take over your thinking. It handles the scaffolding so your LLM can focus on what matters: **coding, solving problems, and building cool stuff.** 🚀
 
