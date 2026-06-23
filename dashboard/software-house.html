@@ -687,6 +687,7 @@ function loadProject(id, skipSave) {
   rooms = deepClone(p.rooms);
   agents = deepClone(p.agents);
   tasks = deepClone(p.tasks);
+  project.vault = p.vault || {};
   manualRoomLayout = false;
   roomEditEnabled = false;
   document.getElementById('layoutToggle').textContent = '✥ Edycja pokoi: OFF';

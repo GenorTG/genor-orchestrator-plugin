@@ -503,17 +503,25 @@ export async function handleVaultDocPut(req: IncomingMessage, res: ServerRespons
  * Inject a document into AI context.
  */
 export async function handleVaultInject(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
   const body = await parseBody(req);
-  const { path, sessionKey } = body;
+  const { path, content, project } = body;
 
   if (!path) {
     json(res, { error: "path required" }, 400);
     return;
   }
 
-  // TODO: Implement actual injection via before_prompt_build hook
-  // For now, just acknowledge the request
-  json(res, { ok: true, path, message: "Injection queued" });
+  const proj = project || "genor-orchestrator-plugin";
+  const title = path.split('/').pop()?.replace(/\.md$/, '') || path;
+  const folder = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '';
+
+  db.prepare(`
+    INSERT OR REPLACE INTO vault_docs (path, title, content, folder, project, status, tags, links, icon, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'active', '[]', '[]', '📄', datetime('now'))
+  `).run(path, title, content || '', folder, proj);
+
+  json(res, { ok: true, path });
 }
 
 // ── ROUTER ───────────────────────────────────────────────────
