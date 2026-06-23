@@ -840,6 +840,31 @@ function setRoomLayout(roomId, layout) {
   renderDesks();
 }
 
+// Save layout to API
+function saveLayoutToAPI() {
+  const layoutData = rooms.map(r => ({
+    id: r.id,
+    x: r.x,
+    y: r.y,
+    w: r.w,
+    h: r.h
+  }));
+  
+  fetch(`/orchestrator/api/software-house/layout/save?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rooms: layoutData })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      console.log('Layout saved to API');
+    } else {
+      console.error('Layout save failed:', data.error);
+    }
+  }).catch(err => {
+    console.error('Layout save error:', err);
+  });
+}
+
 function spritePath(s, f) { return `assets/pixel-agents/${s}/frames/${f}.png`; }
 function staticPath(s) { return `assets/pixel-agents/${s}/static.png`; }
 
@@ -1124,10 +1149,14 @@ window.addEventListener('mouseup', () => {
     roomPointer = null;
   }
   if (draggingRoomId) {
+    // Save layout to API after drag
+    saveLayoutToAPI();
     draggingRoomId = null;
     document.querySelectorAll('.room-zone').forEach(el => el.classList.remove('dragging-room'));
   }
   if (resizingRoom) {
+    // Save layout to API after resize
+    saveLayoutToAPI();
     resizingRoom = null;
     document.querySelectorAll('.room-zone').forEach(el => el.classList.remove('resizing'));
   }
@@ -1599,15 +1628,30 @@ function sendChat() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
+  
+  // Display user message
   document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   input.value = '';
-  setTimeout(() => {
-    const l = text.toLowerCase();
-    if (l.includes('status')) orchSay('status');
-    else if (l.includes('plan')) orchSay('plan');
-    else if (l.includes('zatrud') || l.includes('hire')) orchSay('hire');
-    else addBotMsg('Rozumiem. Mogę pokazać status, zaplanować sprint albo zatrudnić kogoś — napisz co potrzebujesz.');
-  }, 600);
+  
+  // Send to real API
+  fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text, sender: 'user' })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      // Generate local response based on keywords
+      const l = text.toLowerCase();
+      if (l.includes('status')) orchSay('status');
+      else if (l.includes('plan')) orchSay('plan');
+      else if (l.includes('zatrud') || l.includes('hire')) orchSay('hire');
+      else addBotMsg('Rozumiem. Mogę pokazać status, zaplanować sprint albo zatrudnić kogoś — napisz co potrzebujesz.');
+    } else {
+      addBotMsg(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    addBotMsg(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 function orchPlan() { sendChat._fake = true; document.getElementById('chatInput').value = 'Stwórz plan sprintu'; sendChat(); }
 
@@ -1781,7 +1825,7 @@ function openVaultFile(path, skipTree) {
     ${doc.links?.length ? `<h4 style="margin-top:16px">Powiązane</h4><div class="vault-link-list">${doc.links.map(l=>`<span class="vault-link" onclick="openVaultFile('${l}')">${l}</span>`).join('')}</div>` : ''}
     <h4 style="margin-top:16px">Orchestrator</h4>
     <p style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-top:6px">Ten vault będzie synchronizowany z <code>orchestrator-data/</code> i wstrzykiwany do kontekstu agentów przez hooki pluginu.</p>
-    <button class="btn primary" style="width:100%;margin-top:12px;font-size:11px" onclick="toast('Context injection — mockup')">📥 Wstrzyknij do sesji</button>`;
+    <button class="btn primary" style="width:100%;margin-top:12px;font-size:11px" onclick="injectVaultDoc('${path}')">📥 Wstrzyknij do sesji</button>`;
   if (!skipTree) {
     document.querySelectorAll('.vault-file').forEach(el => {
       el.classList.toggle('active', el.textContent.includes(path.split('/').pop()));
@@ -1796,10 +1840,50 @@ function renderVaultTreeActive(path) {
   });
 }
 
+// Vault inject function
+function injectVaultDoc(path) {
+  fetch(`/orchestrator/api/software-house/vault/inject?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      toast(`📥 Dokument "${path}" wstrzyknięty do kontekstu`);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
+}
+
 function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.style.display = 'block';
   clearTimeout(t._t); t._t = setTimeout(() => t.style.display = 'none', 2200);
+}
+
+// Load chat history from API
+async function loadChatHistory() {
+  try {
+    const res = await fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.ok && data.messages) {
+      const chatMsgs = document.getElementById('chatMsgs');
+      chatMsgs.innerHTML = '';
+      data.messages.forEach(msg => {
+        if (msg.sender === 'user') {
+          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        } else {
+          chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        }
+      });
+      chatMsgs.scrollTop = chatMsgs.scrollHeight;
+    }
+  } catch (e) {
+    console.error('Chat history load failed:', e);
+  }
 }
 
 // INIT
@@ -1815,7 +1899,7 @@ document.addEventListener('click', e => {
 });
 window.addEventListener('resize', () => { if (pmBubbleOpen) positionPmBubble(); });
 initProjectSelect();
-loadMockData();
+loadMockData().then(() => loadChatHistory());
 applyTransform();
 </script>
 </body>
