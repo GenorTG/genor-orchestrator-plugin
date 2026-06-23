@@ -2904,7 +2904,7 @@ const _plugin = definePluginEntry({
                     }).join(", ");
                     logger.warn("routing", `Chain for ${taskCategory} unavailable: ${chainInfo} — falling back to tier-based`);
                 }
-                // ── Fallback: tier-based model selection ──
+                // ── Fallback: first-eligible model selection ──
                 if (eligible.length > 0) {
                     const best = eligible
                         .filter(m => m.agent_ready !== false && m.status === "active")[0];
