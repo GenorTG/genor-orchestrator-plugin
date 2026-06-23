@@ -580,7 +580,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 <div class="toast" id="toast"></div>
 
 <script>
-const MOCK_DATA_URL = 'data/software-house-mock.json';
+const BOOTSTRAP_URL = '/orchestrator/api/software-house/bootstrap';
 let projectsCatalog = {};
 let currentProjectId = 'genor-orchestrator-plugin';
 let project = projectsCatalog[currentProjectId];
@@ -657,17 +657,18 @@ function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
 async function loadMockData() {
   try {
-    const res = await fetch(MOCK_DATA_URL);
+    const res = await fetch(BOOTSTRAP_URL + '?project=' + currentProjectId);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    projectsCatalog = data.projects || data;
+    if (!data.ok) throw new Error(data.error || 'Bootstrap failed');
+    projectsCatalog = data.projects || {};
     currentProjectId = data.defaultProjectId || Object.keys(projectsCatalog)[0];
     loadProject(currentProjectId, true);
     applyTransform();
     focusRoom('command');
   } catch (e) {
-    console.error('Mock data load failed:', e);
-    toast('⚠️ Nie wczytano danych mock — sprawdź JSON');
+    console.error('Bootstrap load failed:', e);
+    toast('⚠️ Nie wczytano danych z API — sprawdź logi');
   }
 }
 
@@ -1267,26 +1268,56 @@ function renderAgentPanel(id) {
 function saveAgent() {
   const a = agents.find(x => x.id === selectedAgent);
   if (!a) return;
-  a.status = document.getElementById('mStatus').value;
-  a.model = document.getElementById('mModel').value;
-  a.room = document.getElementById('mRoom').value;
-  a.sprite = document.getElementById('mSprite').value;
-  a.task = document.getElementById('mTask').value || null;
-  a.prompt = document.getElementById('mPrompt').value;
-  if (!manualRoomLayout) manualRoomLayout = false;
-  renderAll();
-  renderAgentPanel(a.id);
-  toast(`💾 ${a.name} zaktualizowany`);
+  
+  const updates = {
+    status: document.getElementById('mStatus').value,
+    model: document.getElementById('mModel').value,
+    room: document.getElementById('mRoom').value,
+    sprite: document.getElementById('mSprite').value,
+    task: document.getElementById('mTask').value || null,
+    prompt: document.getElementById('mPrompt').value,
+  };
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/workers/${a.id}?project=${currentProjectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates)
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      Object.assign(a, updates);
+      if (!manualRoomLayout) manualRoomLayout = false;
+      renderAll();
+      renderAgentPanel(a.id);
+      toast(`💾 ${a.name} zaktualizowany`);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 function fireAgent() {
   const a = agents.find(x => x.id === selectedAgent);
   if (!a || a.isOrchestrator || !confirm(`Zwolnić ${a.name}?`)) return;
-  agents = agents.filter(x => x.id !== selectedAgent);
-  tasks.forEach(t => { if (t.agent === selectedAgent) t.agent = null; });
-  closeDetailPanel();
-  renderAll();
-  toast(`👋 ${a.name} zwolniony`);
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/workers/${a.id}?project=${currentProjectId}`, {
+    method: 'DELETE'
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      agents = agents.filter(x => x.id !== selectedAgent);
+      tasks.forEach(t => { if (t.agent === selectedAgent) t.agent = null; });
+      closeDetailPanel();
+      renderAll();
+      toast(`👋 ${a.name} zwolniony`);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 function renderTaskPanel(id) {
@@ -1316,7 +1347,35 @@ function renderTaskPanel(id) {
     ${targetRoom ? `<button class="btn" style="width:100%;margin-top:8px" onclick="openRoomPanel('${targetRoom.id}')">🏢 Pokój: ${targetRoom.name}</button>` : ''}`;
 
   document.getElementById('detailFoot').innerHTML = `
-    ${t.phase !== 'done' ? '<button class="btn primary" onclick="toast(\'Task przesunięty\')">→ Następna faza</button>' : '<button class="btn" onclick="closeDetailPanel()">Zamknij</button>'}`;
+    ${t.phase !== 'done' ? `<button class="btn primary" onclick="moveTask('${t.id}')">→ Następna faza</button>` : '<button class="btn" onclick="closeDetailPanel()">Zamknij</button>'}`;
+}
+
+function moveTask(taskId) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t || t.phase === 'done') return;
+  
+  const phaseOrder = ['backlog', 'in-progress', 'review', 'done'];
+  const currentIdx = phaseOrder.indexOf(t.phase);
+  const nextPhase = phaseOrder[currentIdx + 1];
+  if (!nextPhase) return;
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/backlog/move?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId: t.id, phase: nextPhase })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      t.phase = nextPhase;
+      renderAll();
+      renderTaskPanel(t.id);
+      toast(`✅ Task przesunięty do: ${nextPhase}`);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 function roomForTaskType(type) {
@@ -1384,13 +1443,31 @@ function toggleRoomTaskType(id) {
 function saveRoomPanel() {
   const r = rooms.find(x => x.id === editingRoomId);
   if (!r || r.isCommand) return;
-  r.name = document.getElementById('rmName').value.trim() || r.name;
-  r.color = document.getElementById('rmColor').value;
-  r.purpose = document.getElementById('rmPurpose').value;
-  r.taskTypes = [...pickedRoomTaskTypes];
-  renderAll();
-  renderRoomPanel(r.id);
-  toast(`🏢 Pokój "${r.name}" zapisany`);
+  
+  const updates = {
+    name: document.getElementById('rmName').value.trim() || r.name,
+    color: document.getElementById('rmColor').value,
+    purpose: document.getElementById('rmPurpose').value,
+    taskTypes: [...pickedRoomTaskTypes],
+  };
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/rooms/${r.id}?project=${currentProjectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates)
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      Object.assign(r, updates);
+      renderAll();
+      renderRoomPanel(r.id);
+      toast(`🏢 Pokój "${r.name}" zapisany`);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 function deleteRoom() {
@@ -1398,26 +1475,59 @@ function deleteRoom() {
   if (!r || r.isCommand) return;
   const inRoom = agents.filter(a => a.room === r.id);
   if (inRoom.length && !confirm(`Pokój ma ${inRoom.length} agentów. Przenieść na Open Floor?`)) return;
-  const fallback = rooms.find(x => x.isOpenFloor) || rooms.find(x => !x.isCommand && x.id !== r.id);
-  inRoom.forEach(a => { if (fallback) a.room = fallback.id; });
-  rooms = rooms.filter(x => x.id !== editingRoomId);
-  manualRoomLayout = false;
-  closeDetailPanel();
-  renderAll();
-  toast('Pokój usunięty');
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/rooms/${r.id}?project=${currentProjectId}`, {
+    method: 'DELETE'
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      const fallback = rooms.find(x => x.isOpenFloor) || rooms.find(x => !x.isCommand && x.id !== r.id);
+      inRoom.forEach(a => { if (fallback) a.room = fallback.id; });
+      rooms = rooms.filter(x => x.id !== editingRoomId);
+      manualRoomLayout = false;
+      closeDetailPanel();
+      renderAll();
+      toast('Pokój usunięty');
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 function addRoom() {
-  const id = 'room_' + Date.now().toString(36);
-  rooms.push({
-    id, name: 'Nowy pokój', tag: 'custom', color: '#22d3ee',
+  const roomData = {
+    name: 'Nowy pokój',
     purpose: 'Opisz do czego służy ten pokój w projekcie.',
-    taskTypes: ['dev'], layout: 'auto', x: 40, y: 400, w: MIN_ROOM_W, h: MIN_ROOM_H,
+    taskTypes: ['dev'],
+    x: 40, y: 400, w: 160, h: 160,
+  };
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/rooms?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(roomData)
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      const id = data.room.id;
+      rooms.push({
+        id, name: roomData.name, tag: 'custom', color: '#22d3ee',
+        purpose: roomData.purpose,
+        taskTypes: roomData.taskTypes, layout: 'auto',
+        x: roomData.x, y: roomData.y, w: roomData.w, h: roomData.h,
+      });
+      manualRoomLayout = false;
+      renderAll();
+      openRoomPanel(id);
+      toast('Ustaw nazwę, tag i routing tasków');
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
   });
-  manualRoomLayout = false;
-  renderAll();
-  openRoomPanel(id);
-  toast('Ustaw nazwę, tag i routing tasków');
 }
 
 // HIRE
@@ -1431,24 +1541,41 @@ function pickSprite(el) {
   el.classList.add('picked'); pickedSprite = el.dataset.sprite;
 }
 function confirmHire() {
-  const a = {
-    id: 'a' + Date.now(),
+  const workerData = {
     name: document.getElementById('hireName').value.trim() || 'Nowy Agent',
     role: document.getElementById('hireRole').value,
     sprite: pickedSprite,
     model: document.getElementById('hireModel').value,
-    status: 'sleep', task: null, progress: 0,
     room: document.getElementById('hireRoom').value,
     prompt: document.getElementById('hirePrompt').value,
-    ctx: '0/195k',
   };
-  agents.push(a);
-  closeHire();
-  if (!manualRoomLayout) manualRoomLayout = false;
-  renderAll();
-  toast(`👋 ${a.name} zatrudniony!`);
-  addBotMsg(`Zatrudniono <b>${a.name}</b> (${a.role}) → ${rooms.find(r=>r.id===a.room)?.name}. Bez limitu miejsc — pokój się rozciąga.`);
-  setTimeout(() => openAgentPanel(a.id), 350);
+  
+  // Call real API
+  fetch(`/orchestrator/api/software-house/workers/hire?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(workerData)
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      const a = {
+        id: data.worker.id,
+        ...workerData,
+        status: 'sleep', task: null, progress: 0,
+        ctx: '0/195k',
+      };
+      agents.push(a);
+      closeHire();
+      if (!manualRoomLayout) manualRoomLayout = false;
+      renderAll();
+      toast(`👋 ${a.name} zatrudniony!`);
+      addBotMsg(`Zatrudniono <b>${a.name}</b> (${a.role}) → ${rooms.find(r=>r.id===a.room)?.name}. Bez limitu miejsc — pokój się rozciąga.`);
+      setTimeout(() => openAgentPanel(a.id), 350);
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 // CHAT
