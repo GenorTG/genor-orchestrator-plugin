@@ -924,7 +924,7 @@ async function showProject(name){
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${sessions.length}</div><div class="mc-label">Sessions</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
 
-        <div class="metric-card"><div class="mc-value" style="font-size:15px">${(bl&&bl.errors?bl.errors.length:st.errors?.length||0)}</div><div class="mc-label">Errors</div></div>
+        <div class="metric-card"><div class="mc-value" style="font-size:15px">${st.errors?.length||0}</div><div class="mc-label">Errors</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.routing_preset||'default'}</div><div class="mc-label">Routing</div></div>
       </div>
       ${renderTabBar('sessions')}
