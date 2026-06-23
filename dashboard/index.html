@@ -133,12 +133,6 @@ code,.code{font-family:var(--font)}
    TABLES — RESIZABLE COLUMNS, SORTING
    ═══════════════════════════════════════════════════════════ */
 .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
-#routing-table td{overflow:visible;white-space:normal}
-.routing-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;margin:2px;border-radius:var(--radius);font-size:11px;background:var(--bg-card);cursor:pointer;border:1px solid var(--border);user-select:none;transition:all 120ms ease}
-.routing-chip:hover{border-color:var(--blue);background:var(--accent-bg)}
-.routing-chip input{accent-color:var(--blue);margin:0;width:14px;height:14px;cursor:pointer}
-.routing-chip:has(input:checked){border-color:var(--blue);background:rgba(88,166,255,.18);color:var(--blue)}
-.routing-grid{display:flex;flex-wrap:wrap;gap:3px;max-height:240px;overflow-y:auto;padding:2px}
 .table-wrap table{width:100%;border-collapse:collapse}
 th{position:relative;padding:7px 28px 7px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--bg-alt);color:var(--text-dim);font-weight:600;font-size:12px;white-space:nowrap;user-select:none;overflow:hidden;text-overflow:ellipsis}
 td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);font-size:13px;overflow:hidden;text-overflow:ellipsis}
@@ -285,6 +279,7 @@ th.sort-desc .th-sort-arrow{color:var(--accent);opacity:1}
     <span class="status-text" id="status-text" style="font-size:12px">Connecting…</span>
   </div>
   <div class="header-stats" id="header-stats"></div>
+  <a href="/orchestrator/software-house" class="btn" style="font-size:11px;padding:5px 10px;text-decoration:none;border:1px solid var(--purple);color:var(--purple);border-radius:6px;white-space:nowrap" title="Preview: pixel-art office UI proposal">🏢 Software House</a>
   <button class="theme-btn" id="theme-btn" aria-label="Toggle theme" title="Toggle dark/light theme">🌙</button>
 </header>
 
@@ -600,7 +595,7 @@ function renderProjects(data){
           <td title="Created ${fmtDate(p.created)}">${fmtDate(p.created)}</td>
           <td>${p.free_only?'<span class="badge badge-yellow" title="Only free models">Free only</span>':'<span class="badge badge-green" title="Allows paid models">Flexible</span>'}</td>
           <td><span class="badge badge-blue" title="Routing strategy: ${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}">${(config.projects&&config.projects[p.name]?.routing_preset)||'default'}</span></td>
-          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, docs, settings, routing">Details</button></td>
+          <td><button class="btn btn-sm" onclick="event.stopPropagation();showProject('${safeName}')" title="View project sessions, backlog, settings, routing">Details</button></td>
         </tr>`;
       }).join('')}${!projects.length?'<tr><td colspan="6" class="empty">No projects</td></tr>':''}
       </tbody></table>
@@ -753,16 +748,6 @@ function renderSettings(data){
     </div>
 
     <div class="card" style="margin-bottom:10px">
-      <div class="section-title" style="font-size:13px">🧠 Global Model Routing <span class="badge">defaults</span></div>
-      <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">Per-category model chains inherited by all projects. Project overrides take priority.</div>
-      <div id="global-routing-grid">
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${['coding','fixing','research','qa','documentation','test'].map(c=>`<div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:var(--radius);padding:8px;background:var(--bg-alt)"><div class="s-label" style="margin-bottom:4px">${c}</div><div class="global-routing-models" data-cat="${c}" style="display:flex;flex-wrap:wrap;gap:2px"><span style="color:var(--text-dim);font-size:11px">loading...</span></div></div>`).join('')}</div>
-        <button class="btn btn-sm btn-primary" onclick="saveGlobalRouting()" style="margin-top:8px">💾 Save Global Routing</button>
-        <span id="global-routing-msg" style="margin-left:8px;font-size:12px;color:var(--text-dim)"></span>
-      </div>
-    </div>
-
-    <div class="card" style="margin-bottom:10px">
       <div class="section-title" style="font-size:13px">⚡ Quick Actions</div>
       <div class="btn-group">
         <button class="btn btn-sm btn-primary" onclick="quickAction('doctor')" title="Run full orchestrator diagnostics">🩺 Run Doctor</button>
@@ -781,40 +766,6 @@ function renderSettings(data){
     </div>
   </div>`;
 }
-
-/* ═══════════════════════════════════════════════════════════
-   GLOBAL ROUTING — populates chip grids + saves to default_model_routing
-   ═══════════════════════════════════════════════════════════ */
-window.populateGlobalRouting=async function(){
-  try{
-    const cfg=await API('/api/config');
-    const globalRouting=cfg.default_model_routing||{};
-    const md=await API('/api/models');
-    const allModels=(md.models||[]).map(m=>m.id||m.name||m);
-    document.querySelectorAll('.global-routing-models').forEach(el=>{
-      const cat=el.dataset.cat;
-      const selected=globalRouting[cat]||[];
-      el.innerHTML=allModels.map(m=>`<label class="routing-chip"><input type="checkbox" value="${esc(m)}" data-gcat="${esc(cat)}" ${selected.includes(m)?'checked':''}><span>${esc(m)}</span></label>`).join('');
-    });
-  }catch(e){toast('Failed to load global routing: '+e.message,'error');}
-};
-
-window.saveGlobalRouting=async function(){
-  const btn=document.querySelector('#global-routing-grid .btn-primary');if(!btn)return;
-  btn.disabled=true;btn.textContent='Saving…';
-  const msg=document.getElementById('global-routing-msg');if(msg)msg.textContent='';
-  const default_model_routing={};
-  document.querySelectorAll('.global-routing-models').forEach(el=>{
-    const cat=el.dataset.cat;
-    const checked=[...el.querySelectorAll('.routing-chip input:checked')].map(cb=>cb.value);
-    if(checked.length)default_model_routing[cat]=checked;
-  });
-  try{
-    const r=await API('/api/config',{method:'POST',body:JSON.stringify({default_model_routing}),headers:{'Content-Type':'application/json'}});
-    if(r&&r.ok){if(msg)msg.textContent='Saved ✓';toast('Global routing saved','success');}else throw new Error(r?.error||'Save failed');
-  }catch(e){if(msg)msg.textContent='Error: '+e.message;toast(e.message,'error');}
-  finally{btn.disabled=false;btn.textContent='💾 Save Global Routing';}
-};
 
 /* ═══════════════════════════════════════════════════════════
    SESSION DETAIL (modal)
@@ -892,9 +843,6 @@ function renderActiveTab(tabId,data){
   if(tabId==='dashboard'){
     API('/api/all').then(a=>{const e=$('#metric-sessions');if(e)e.textContent=a.sessions?.length||0;}).catch(()=>{});
   }
-  if(tabId==='settings'){
-    setTimeout(populateGlobalRouting,100);
-  }
 }
 
 function refreshTab(tabId){loadTabData(tabId,true).then(d=>renderActiveTab(tabId,d));}
@@ -940,18 +888,20 @@ window.filterProjects=function(){
 async function showProject(name){
   const main=$('#main-content');main.innerHTML=`<div class="loading"></div>`;
   try{
-    const [state,errors]=await Promise.allSettled([
+    const [state,backlog,errors]=await Promise.allSettled([
       API('/api/project-state?name='+encodeURIComponent(name)),
+      API('/api/project-backlog?project='+encodeURIComponent(name)),
       API('/api/project-errors?project='+encodeURIComponent(name)),
     ]);
     const st=state.status==='fulfilled'?state.value:{};
-    const sessions=st.sessions||[];const config=st.config||{};
+    const bl=backlog.status==='fulfilled'?backlog.value:{tasks:[]};
+    const sessions=st.sessions||[];const config=st.config||{};const tasks=bl.tasks||[];
     const rev=[...sessions].reverse();
-    window._projState={name,sessions,rev,st,config,tab:'sessions'};
+    window._projState={name,sessions,rev,st,config,tasks,tab:'sessions'};
 
     function renderTabBar(active){
       return '<div class="subtabs">'+
-        [{id:'sessions',l:'Sessions'},{id:'settings',l:'Settings'},{id:'routing',l:'Routing'},{id:'docs',l:'Docs'}]
+        [{id:'sessions',l:'Sessions'},{id:'backlog',l:'Backlog'},{id:'settings',l:'Settings'},{id:'routing',l:'Routing'},{id:'docs',l:'Docs'}]
         .map(t=>`<button class="subtab ${active===t.id?'active':''}" onclick="showProjTab('${t.id}')">${t.l}</button>`).join('')+'</div>';
     }
 
@@ -976,8 +926,8 @@ async function showProject(name){
       <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${sessions.length}</div><div class="mc-label">Sessions</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.workflow?.current_phase||'—'}</div><div class="mc-label">Phase</div></div>
-
-        <div class="metric-card"><div class="mc-value" style="font-size:15px">${st.errors?.length||0}</div><div class="mc-label">Errors</div></div>
+        <div class="metric-card"><div class="mc-value" style="font-size:15px">${tasks.length}</div><div class="mc-label">Backlog</div></div>
+        <div class="metric-card"><div class="mc-value" style="font-size:15px">${(bl&&bl.errors?bl.errors.length:st.errors?.length||0)}</div><div class="mc-label">Errors</div></div>
         <div class="metric-card"><div class="mc-value" style="font-size:15px">${config.routing_preset||'default'}</div><div class="mc-label">Routing</div></div>
       </div>
       ${renderTabBar('sessions')}
@@ -1013,9 +963,12 @@ window.showProjTab=async function(tab){
 
   // Re-fetch for data-dependent tabs
   if(tab!=='sessions'&&tab!=='docs'){
-    try{const state=await API('/api/project-state?name='+encodeURIComponent(ps.name));
-    if(state&&state.config){ps.config=state.config||{};ps.sessions=state.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
-    }catch(e){}
+    try{const [state,backlog]=await Promise.allSettled([
+      API('/api/project-state?name='+encodeURIComponent(ps.name)),
+      API('/api/project-backlog?project='+encodeURIComponent(ps.name)),
+    ]);
+    if(state.status==='fulfilled'&&state.value.config){const st=state.value;ps.config=st.config||{};ps.sessions=st.sessions||ps.sessions;ps.rev=[...ps.sessions].reverse();}
+    if(backlog.status==='fulfilled')ps.tasks=backlog.value.tasks||ps.tasks;}catch(e){}
   }
 
   // Update active tab in sub-bar
@@ -1039,6 +992,23 @@ window.showProjTab=async function(tab){
       <div class="filter-bar"><input type="text" id="proj-session-search" placeholder="🔍 Search sessions…" oninput="filterProjSessions()">
       <select id="proj-session-status" onchange="filterProjSessions()"><option value="">All</option><option value="done">done</option><option value="running">running</option><option value="failed">failed</option></select></div>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>Agent</th><th>Model</th><th>Status</th><th>Task</th><th>Started</th><th>Duration</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="empty">No sessions</td></tr>'}</tbody></table></div>`;
+  } else if(tab==='backlog'){
+    const tasks=ps.tasks||[];
+    if(!tasks.length){content.innerHTML='<div class="empty">No backlog tasks</div>';return;}
+    const todo=tasks.filter(t=>t.status==='todo');const done=tasks.filter(t=>t.status==='done'||t.status==='complete');
+    let h=`<div class="section-title">Backlog <span class="badge">${tasks.length}</span>
+      <button class="btn btn-sm" style="margin-left:8px" onclick="cleanupDoneTasks('${esc(ps.name)}')" title="Remove completed tasks">🗑 Cleanup Done</button></div>
+      <div class="card" style="padding:8px 10px;font-size:12px;color:var(--text-dim)">${done.length}/${tasks.length} completed · ${todo.length} pending</div>
+      <div class="table-wrap list-scroll" style="max-height:500px"><table><thead><tr><th>ID</th><th>Task</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead><tbody>`;
+    const sorted=[...tasks].sort((a,b)=>{const p={p0:0,p1:1,p2:2,p3:3};return(p[a.priority]??99)-(p[b.priority]??99);});
+    for(const t of sorted){
+      const sc=t.status==='done'?'badge-green':t.status==='in_progress'?'badge-yellow':t.status==='blocked'?'badge-red':'badge-yellow';
+      h+=`<tr><td style="font-size:11px">${esc(t.id)}</td><td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</td>
+        <td><span class="tag">${esc(t.priority||'—')}</span></td><td><span class="badge ${sc}">${esc(t.status)}</span></td>
+        <td>${t.status!=='done'?`<button class="btn btn-sm" onclick="completeBacklogTask('${esc(ps.name)}','${esc(t.id)}')" title="Mark done">✅</button> `:''}
+        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteBacklogTask('${esc(ps.name)}','${esc(t.id)}')" title="Delete">✕</button></td></tr>`;
+    }
+    content.innerHTML=h+'</tbody></table></div>';
   } else if(tab==='settings'){
     const docs=ps.config||{};const wf=docs.workflow||{};
     content.innerHTML=`<div class="section-title">⚙️ Settings</div>
@@ -1052,10 +1022,9 @@ window.showProjTab=async function(tab){
       </div>`;
   } else if(tab==='routing'){
     const cfg=ps.config||{};
-    const projRouting=cfg.model_routing||{};
-    const globalRouting=cfg.default_model_routing||{};
-    const allCats=['coding','fixing','research','qa','documentation','test'];
-    const catsWithRouting=allCats.filter(c=>projRouting[c]?.length||globalRouting[c]?.length);
+    const routing=cfg.model_routing||{};
+    const categories=Object.keys(routing);
+    const hasRouting=categories.length>0;
     content.innerHTML=`<div class="section-title">🧠 Model Routing <span class="badge">${cfg.routing_preset||'custom'}</span></div>
       <div class="card" style="margin-bottom:10px">
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px">
@@ -1063,118 +1032,34 @@ window.showProjTab=async function(tab){
           <div><span style="color:var(--text-dim);font-size:11px">Free Only</span><br>${cfg.free_only?'<span class="badge badge-yellow">Yes</span>':'<span class="badge badge-green">No</span>'}</div>
           <div><span style="color:var(--text-dim);font-size:11px">Single Provider</span><br><span>${cfg.routing_single_provider||'—'}</span></div>
           <div><span style="color:var(--text-dim);font-size:11px">Allowlist</span><br><span>${cfg.model_allowlist?.length||0} models</span></div>
-          <div><span style="color:var(--text-dim);font-size:11px">Inherit</span><br><span style="font-size:11px;color:var(--text-dim)">Unchecked categories use global defaults</span></div>
         </div>
-        <button class="btn btn-sm btn-primary" id="routing-save-btn" onclick="saveRouting('${esc(ps.name)}')" style="margin-top:8px">💾 Save Routing</button>
-        <span id="routing-save-msg" style="margin-left:8px;font-size:12px;color:var(--text-dim)"></span>
       </div>
-      ${catsWithRouting.length>0?`
-      <div class="section-title" style="font-size:13px">Per-Category Routing <span class="badge">${catsWithRouting.length}</span></div>
-      <div style="margin-bottom:8px;font-size:11px;color:var(--text-dim)">Override = project-specific model chain. Inherited = uses global defaults. Click chip to toggle.</div>
-      <div class="table-wrap"><table id="routing-table" class="routing-editor"><thead><tr>
-        <th title="Task category" style="width:100px">Category</th><th title="Source: project override or global default" style="width:70px">Source</th><th title="Model chain for this category (first = primary, rest = fallbacks)">Model Chain (primary ⇢ fallback)</th>
-      </tr></thead><tbody>${allCats.map(cat=>{
-        const isOverride=!!(projRouting[cat]?.length);
-        const chain=projRouting[cat]||globalRouting[cat]||[];
-        return `<tr data-cat="${esc(cat)}" class="routing-cat-row">
-          <td><span class="badge badge-purple">${esc(cat)}</span></td>
-          <td><span class="badge ${isOverride?'badge-blue':'badge-gray'}" style="font-size:10px">${isOverride?'Override':'Inherited'}</span></td>
-          <td class="routing-models" data-cat="${esc(cat)}" data-override="${isOverride}">
-            <div class="routing-grid">${chain.length?`[loading]`:`<span style="color:var(--text-dim);font-size:11px">No models assigned</span>`}</div>
-          </td>
-        </tr>`;
-      }).join('')}</tbody></table></div>
-      `:'<div class="empty">No routing configured — set global defaults in ⚙️ Settings</div>'}
+      ${hasRouting?`
+      <div class="section-title" style="font-size:13px">Per-Category Routing</div>
+      <div class="table-wrap"><table id="routing-table"><thead><tr>
+        <th title="Task category">Category</th><th title="Models assigned to this category">Models</th>
+      </tr></thead><tbody>${categories.map(cat=>`
+        <tr><td><span class="badge badge-purple">${esc(cat)}</span></td>
+        <td>${routing[cat].map(m=>`<span class="tag" title="Model: ${esc(m)}">${esc(m)}</span>`).join(' ')||'<span class="badge badge-gray">none</span>'}</td></tr>
+      `).join('')}</tbody></table></div>
+      `:'<div class="empty">No routing configured</div>'}
       ${cfg.model_allowlist?.length?`<div class="card" style="margin-top:8px">
         <div class="section-title" style="font-size:13px">🔒 Model Allowlist</div>
         <div>${cfg.model_allowlist.map(m=>`<span class="tag" title="Whitelisted model">${esc(m)}</span>`).join('')}</div>
       </div>`:''}
     `;
-    // Fetch model list and populate checkboxes with inheritance UI
-    (async()=>{
-      try{
-        const md=await API('/api/models');
-        const allModels=(md.models||[]).map(m=>m.id||m.name||m);
-        document.querySelectorAll('.routing-models').forEach(td=>{
-          const cat=td.dataset.cat;
-          const isOverride=td.dataset.override==='true';
-          const chain=projRouting[cat]||globalRouting[cat]||[];
-          const globalChain=globalRouting[cat]||[];
-          // Show chips with override/inherit styling
-          const chipHtml=allModels.map((m,i)=>{
-            const checked=chain.includes(m);
-            const disabled=!isOverride;  // inherit mode = read-only
-            return `<label class="routing-chip ${checked?'checked':''} ${disabled?'routing-chip-inherited':''}" style="${disabled&&checked?'opacity:0.65':''}">
-              <input type="checkbox" value="${esc(m)}" data-cat="${esc(cat)}" ${checked?'checked':''} ${disabled?'disabled':''}>
-              <span>${esc(m)}</span>
-            </label>`;
-          }).join('');
-          // Source info + action button
-          const sourceLabel=isOverride?'Override':'Inherited';
-          td.innerHTML='<div style="margin-bottom:4px">'+
-            (isOverride
-              ? `<button class="btn btn-xs" onclick="inheritRoutingCat('${esc(ps.name)}','${esc(cat)}')" title="Remove project override for this category — uses global defaults">↩ Use Global</button>`
-              : `<button class="btn btn-xs" onclick="overrideRoutingCat('${esc(ps.name)}','${esc(cat)}')" title="Create project-specific override">↗ Override</button>`
-            )+
-            ` <span style="font-size:11px;color:var(--text-dim);margin-left:4px">${isOverride?'Project chain — first model = primary, rest = fallbacks':'Inherited from global defaults'}</span>`+
-            '</div><div class="routing-grid" style="position:relative">'+chipHtml+'</div>';
-        });
-      }catch(e){toast('Failed to load models: '+e.message,'error');}
-    })();
     setTimeout(()=>content.querySelectorAll('.table-wrap table').forEach(enableCols),50);
   } else if(tab==='docs'){
-    // Read state from API to check which docs exist
-    content.innerHTML='<div class="section-title">📄 Project Docs</div>'+
-      '<div style="margin-bottom:8px;color:var(--text-dim);font-size:11px">Project documents — click to view</div>'+
-      '<div style="display:flex;flex-direction:column;gap:8px">'+
-        '<div><b style="font-size:11px;color:var(--text)">📋 Planning</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
-          [
-            {id:'PROJECT_PLAN',l:'Project Plan',desc:'Vision, goals, milestones'},
-            {id:'FEATURES',l:'Features',desc:'Planned/in-progress/completed'},
-            {id:'CHANGELOG',l:'Changelog',desc:'What changed over time'},
-          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+
-        '<div><b style="font-size:11px;color:var(--text)">🐛 Issues</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
-          [
-            {id:'BUGS',l:'Bugs & Issues',desc:'Known bugs, fixed issues, limitations'},
-          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+
-        '<div><b style="font-size:11px;color:var(--text)">🏛️ Architecture</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
-          [
-            {id:'ARCHITECTURE',l:'Architecture',desc:'System design, data flow, patterns'},
-            {id:'STYLE_GUIDE',l:'Style Guide',desc:'Code conventions, design language'},
-          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+
-        '<div><b style="font-size:11px;color:var(--text)">⚙️ Orchestrator</b><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
-          [
-            {id:'STATE',l:'State',desc:'Computed project state'},
-            {id:'ROADMAP',l:'Roadmap',desc:'Project roadmap'},
-            {id:'CONTEXT',l:'Context',desc:'Project context'},
-            {id:'NOTES',l:'Notes',desc:'General notes'},
-            {id:'RECOVERY',l:'Recovery',desc:'Recovery/handoff'},
-          ].map(d=>`<button class="btn btn-sm doc-tab-btn" id="doc-btn-${d.id}" onclick="showDocTab('${esc(ps.name)}','${d.id}')" title="${esc(d.desc)}" style="font-size:11px">${esc(d.l)}</button>`).join('')+'</div></div>'+
-      '</div>'+
-      '<div id="doc-content" style="margin-top:10px;background:var(--bg-alt);padding:12px;border-radius:var(--radius);font-size:12px;font-family:var(--font);white-space:pre-wrap;max-height:500px;overflow:auto;border:1px solid var(--border)"><span style="color:var(--text-dim)">Select a doc above</span></div>';
+    content.innerHTML='<div class="section-title">📄 Docs</div>'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
+      ['STATE','ROADMAP','CONTEXT','NOTES'].map(d=>`<button class="btn btn-sm" onclick="showDocTab('${esc(ps.name)}','${d}')" title="View ${d}.md">${d}</button>`).join('')+'</div>'+
+      '<div id="doc-content" style="background:var(--bg-alt);padding:12px;border-radius:var(--radius);font-size:12px;font-family:var(--font);white-space:pre-wrap;max-height:500px;overflow:auto;border:1px solid var(--border)"><span style="color:var(--text-dim)">Select a doc above</span></div>';
   }
   // Update subtitle active
   const btns=document.getElementById('main-content')?.querySelectorAll('.subtab');
   if(btns) btns.forEach(b=>b.classList.toggle('active',b.textContent.trim().toLowerCase()===tab));
   // Enable cols
   setTimeout(()=>{content.querySelectorAll('.table-wrap table').forEach(enableCols);},50);
-};
-
-window.saveRouting=async function(project){
-  const btn=document.getElementById('routing-save-btn');if(!btn)return;
-  btn.disabled=true;btn.textContent='Saving…';
-  const msgEl=document.getElementById('routing-save-msg');if(msgEl)msgEl.textContent='';
-  const modelRouting={};
-  document.querySelectorAll('#routing-table tbody tr[data-cat]').forEach(tr=>{
-    const cat=tr.dataset.cat;
-    const checked=[...tr.querySelectorAll('.routing-chip input:checked')].map(cb=>cb.value);
-    if(checked.length)modelRouting[cat]=checked;
-  });
-  try{
-    const r=await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify({project,model_routing:modelRouting}),headers:{'Content-Type':'application/json'}});
-    if(r&&r.ok){if(msgEl)msgEl.textContent='Saved ✓';toast('Routing saved','success');}else{throw new Error(r?.error||'Save failed');}
-  }catch(e){if(msgEl)msgEl.textContent='Error: '+e.message;toast(e.message,'error');}
-  finally{btn.disabled=false;btn.textContent='💾 Save Routing';}
 };
 
 window.showDocTab=async function(project,docName){
@@ -1188,27 +1073,17 @@ window.showDocTab=async function(project,docName){
   }catch(e){content.innerHTML='<span style="color:var(--red)">Error: '+esc(e.message)+'</span>';}
 };
 
-// Override/inherit helpers for per-project routing
-window.overrideRoutingCat=async function(project,cat){
-  // Copy global chain to project override so user can edit it
-  const cfg=await API('/api/config');
-  const globalChain=(cfg.default_model_routing||{})[cat]||[];
-  const body={project,model_routing:{}};
-  body.model_routing[cat]=globalChain.length?globalChain:[];  // empty = starts with none checked
-  await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});
-  toast('Override created for '+cat,'success');
-  showProjTab('routing');
+window.completeBacklogTask=async function(project,id){
+  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'done'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Task done','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
 };
-
-window.inheritRoutingCat=async function(project,cat){
-  // Remove project override (set to null = delete)
-  const body={project,model_routing:{}};
-  body.model_routing[cat]=null;
-  await API('/api/update-project-workflow',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});
-  toast('Now inheriting global default for '+cat,'success');
-  showProjTab('routing');
+window.deleteBacklogTask=async function(project,id){
+  if(!confirm('Delete task '+id+'?'))return;
+  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,id,status:'deleted'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Deleted','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
 };
-
+window.cleanupDoneTasks=async function(project){
+  if(!confirm('Delete all completed tasks?'))return;
+  try{const r=await API('/api/update-backlog-task',{method:'POST',body:JSON.stringify({project,status:'cleanup_done'}),headers:{'Content-Type':'application/json'}});if(r&&r.ok){toast('Cleaned up','success');showProjTab('backlog');}else toast('Failed','error');}catch(e){toast(e.message,'error');}
+};
 window.toggleProjSetting=async function(project,key,value){
   try{
     const body={project};

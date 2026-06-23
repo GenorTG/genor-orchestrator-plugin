@@ -1,0 +1,156 @@
+{
+  "defaultProjectId": "genor-orchestrator-plugin",
+  "projects": {
+    "genor-orchestrator-plugin": {
+      "id": "genor-orchestrator-plugin",
+      "name": "GenorBoard v2",
+      "rooms": [
+        { "id": "command", "name": "Command Center", "tag": "pm", "color": "#a78bfa", "isCommand": true, "purpose": "Project Manager planuje sprint, przydziela taski i koordynuje zespół.", "taskTypes": ["docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "backend", "name": "Backend Bay", "tag": "backend", "color": "#5e9cff", "purpose": "API, bazy danych, logika serwera, migracje.", "taskTypes": ["dev", "devops"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "design", "name": "Design Studio", "tag": "design", "color": "#c084fc", "purpose": "UI/UX, design tokens, komponenty frontendowe.", "taskTypes": ["design"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "qa", "name": "QA & Review", "tag": "qa", "color": "#f0883e", "purpose": "Code review, testy, akceptacja przed merge.", "taskTypes": ["qa", "review"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "open", "name": "Open Floor", "tag": "open", "color": "#3fb950", "isOpenFloor": true, "purpose": "Ad-hoc, full-stack, overflow.", "taskTypes": ["dev", "docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 }
+      ],
+      "agents": [
+        { "id": "pm", "name": "Project Manager", "role": "Project Manager projektu", "sprite": "blue", "model": "orchestrator-brain", "status": "thinking", "task": "Planowanie sprintu", "progress": 0, "room": "command", "isOrchestrator": true, "prompt": "Project manager projektu.", "ctx": "—" },
+        { "id": "alex", "name": "Alex", "role": "Backend Developer", "sprite": "blue", "model": "deepseek-v4-pro", "status": "working", "task": "API Gateway", "progress": 64, "room": "backend", "prompt": "Backend architect.", "ctx": "42k/977k" },
+        { "id": "maya", "name": "Maya", "role": "Frontend Developer", "sprite": "orange", "model": "minimax-m2.5", "status": "working", "task": "Dashboard UI", "progress": 72, "room": "design", "prompt": "React/TS.", "ctx": "156k/977k" },
+        { "id": "eve", "name": "Eve", "role": "QA / Reviewer", "sprite": "violet", "model": "gemini-2.5-flash", "status": "reviewing", "task": "Review: Auth", "progress": 55, "room": "qa", "prompt": "Code review.", "ctx": "89k/977k" },
+        { "id": "charlie", "name": "Charlie", "role": "Full-Stack Dev", "sprite": "blue", "model": "claude-sonnet-4", "status": "sleep", "task": null, "progress": 0, "room": "open", "prompt": "Full-stack.", "ctx": "0/198k" },
+        { "id": "bob", "name": "Bob", "role": "DevOps", "sprite": "hacker", "model": "deepseek-v4-pro", "status": "error", "task": "CI Pipeline", "progress": 12, "room": "backend", "prompt": "CI/CD.", "ctx": "91k/200k" },
+        { "id": "nina", "name": "Nina", "role": "Technical Writer", "sprite": "violet", "model": "gemini-2.5-flash", "status": "working", "task": "Vault docs sync", "progress": 38, "room": "open", "prompt": "Docs & ADRs.", "ctx": "31k/200k" },
+        { "id": "leo", "name": "Leo", "role": "Security Engineer", "sprite": "hacker", "model": "claude-sonnet-4", "status": "thinking", "task": "Threat model review", "progress": 20, "room": "qa", "prompt": "Security audits.", "ctx": "18k/200k" }
+      ],
+      "tasks": [
+        { "id": "t1", "title": "API Gateway", "desc": "API Gateway z rate limiting i auth middleware.", "agent": "alex", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "t2", "title": "Dashboard UI", "desc": "Widok software house z pixel-art agentami.", "agent": "maya", "phase": "in-progress", "pri": "P0", "type": "design" },
+        { "id": "t3", "title": "Auth Service Review", "desc": "Przegląd JWT + refresh tokens.", "agent": "eve", "phase": "review", "pri": "P0", "type": "review" },
+        { "id": "t4", "title": "E2E Test Suite", "desc": "Playwright testy hire → assign → complete.", "agent": null, "phase": "backlog", "pri": "P1", "type": "qa" },
+        { "id": "t5", "title": "DB Migrations", "desc": "Prisma migracje v2 schema.", "agent": "alex", "phase": "in-progress", "pri": "P1", "type": "dev" },
+        { "id": "t6", "title": "CI Pipeline", "desc": "GitHub Actions — failing lint step.", "agent": "bob", "phase": "in-progress", "pri": "P0", "type": "devops" },
+        { "id": "t7", "title": "Design Tokens", "desc": "CSS variables dark theme.", "agent": "maya", "phase": "in-progress", "pri": "P1", "type": "design" },
+        { "id": "t8", "title": "Sprint Retro", "desc": "Dokumentacja retro.", "agent": null, "phase": "done", "pri": "P2", "type": "docs" },
+        { "id": "t9", "title": "Project Scope", "desc": "Initial scope doc.", "agent": "alex", "phase": "done", "pri": "P0", "type": "docs" },
+        { "id": "t10", "title": "Vault ↔ Orchestrator sync", "desc": "Context injection z plików vault.", "agent": "nina", "phase": "in-progress", "pri": "P1", "type": "docs" },
+        { "id": "t11", "title": "Security audit", "desc": "OWASP checklist dla spawn API.", "agent": "leo", "phase": "in-progress", "pri": "P0", "type": "review" }
+      ],
+      "vault": {
+        "STATE.md": { "folder": null, "icon": "📊", "title": "STATE — Status projektu", "updated": "2026-06-23", "tags": ["status", "live"], "status": "active", "links": ["ROADMAP.md", "docs/ARCHITECTURE.md"], "html": "<h1>STATE — GenorBoard v2</h1><div class=\"callout ok\"><b>Faza:</b> MVP mockup software house · <b>Wersja pluginu:</b> 0.9.3</div><h2>Aktywne prace</h2><ul><li><b>Dashboard UI</b> — Maya (72%)</li><li><b>API Gateway</b> — Alex (64%)</li><li><b>CI Pipeline</b> — Bob (<span style=\"color:var(--red)\">ERROR</span>)</li><li><b>Vault sync</b> — Nina (38%)</li></ul><h2>Blokery</h2><div class=\"callout warn\">Bob: CI lint fail — wymaga interwencji PM</div>" },
+        "ROADMAP.md": { "folder": null, "icon": "🗺️", "title": "ROADMAP", "updated": "2026-06-20", "tags": ["planning"], "status": "stable", "links": ["STATE.md"], "html": "<h1>ROADMAP</h1><h2>v1.0 — Software House UI</h2><ul><li>Pixel-art office view</li><li>Project vault panel</li><li>PM chat bubble</li></ul><h2>v1.1 — Integracja</h2><ul><li>Vault ↔ orchestrator-data sync</li><li>Live agent status z gateway</li></ul>" },
+        "docs/ARCHITECTURE.md": { "folder": "docs", "icon": "🏗️", "title": "ARCHITECTURE", "updated": "2026-06-18", "tags": ["docs", "architecture"], "status": "stable", "links": ["STATE.md"], "html": "<h1>Architektura Genor Orchestrator</h1><pre>Gateway → genor-orchestrator plugin\n  ├── 40 tools\n  ├── Dashboard SPA\n  └── orchestrator-data/</pre>" },
+        "docs/AGENTS.md": { "folder": "docs", "icon": "🤖", "title": "AGENTS", "updated": "2026-06-15", "tags": ["docs"], "status": "stable", "links": ["STATE.md"], "html": "<h1>AGENTS.md</h1><p>40 tools, 8 hooks, session-project binding, subagent spawning.</p>" },
+        "docs/WORKFLOW.md": { "folder": "docs", "icon": "🔄", "title": "WORKFLOW", "updated": "2026-06-21", "tags": ["workflow"], "status": "stable", "links": ["STATE.md"], "html": "<h1>Workflow Enforcement</h1><p>work → qa → log phases. QA approve/reject tools.</p>" },
+        "decisions/ADR-001-session-spawn.md": { "folder": "decisions", "icon": "⚖️", "title": "ADR-001 Session Spawn", "updated": "2026-06-10", "tags": ["adr"], "status": "accepted", "links": ["docs/ARCHITECTURE.md"], "html": "<h1>ADR-001: OpenAI Endpoint Session Spawn</h1><p>POST /v1/chat/completions z x-openclaw-session-key.</p>" },
+        "decisions/ADR-002-software-house-ui.md": { "folder": "decisions", "icon": "⚖️", "title": "ADR-002 Software House UI", "updated": "2026-06-23", "tags": ["adr", "ui"], "status": "draft", "links": ["STATE.md"], "html": "<h1>ADR-002: Software House jako propozycja UI</h1><p>Osobna trasa /orchestrator/software-house — frontend-only mockup bez psucia obecnego dashboardu.</p>" },
+        "sessions/handoff-2026-06-22.md": { "folder": "sessions", "icon": "📝", "title": "Handoff 22.06", "updated": "2026-06-22", "tags": ["handoff"], "status": "archive", "links": ["STATE.md"], "html": "<h1>Handoff — 2026-06-22</h1><p>Dashboard redesign, QA tools, PM2 removed.</p>" }
+      }
+    },
+    "api-gateway-svc": {
+      "id": "api-gateway-svc",
+      "name": "API Gateway Service",
+      "rooms": [
+        { "id": "command", "name": "Command Center", "tag": "pm", "color": "#a78bfa", "isCommand": true, "purpose": "Koordynacja projektu gateway.", "taskTypes": ["docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "backend", "name": "Backend Bay", "tag": "backend", "color": "#5e9cff", "purpose": "API gateway, rate limiting.", "taskTypes": ["dev"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "open", "name": "Open Floor", "tag": "open", "color": "#3fb950", "isOpenFloor": true, "purpose": "DevOps i overflow.", "taskTypes": ["devops", "dev"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 }
+      ],
+      "agents": [
+        { "id": "pm", "name": "Project Manager", "role": "Project Manager", "sprite": "blue", "model": "orchestrator-brain", "status": "thinking", "task": "Architektura gateway", "progress": 0, "room": "command", "isOrchestrator": true, "prompt": "PM.", "ctx": "—" },
+        { "id": "sam", "name": "Sam", "role": "Backend Developer", "sprite": "blue", "model": "deepseek-v4-pro", "status": "working", "task": "Rate Limiter", "progress": 45, "room": "backend", "prompt": "Go/Rust.", "ctx": "22k/200k" },
+        { "id": "ria", "name": "Ria", "role": "DevOps", "sprite": "orange", "model": "gemini-2.5-flash", "status": "sleep", "task": null, "progress": 0, "room": "open", "prompt": "K8s.", "ctx": "0/195k" },
+        { "id": "tomas", "name": "Tomas", "role": "SRE", "sprite": "hacker", "model": "deepseek-v4-pro", "status": "working", "task": "Observability stack", "progress": 30, "room": "open", "prompt": "Prometheus/Grafana.", "ctx": "12k/200k" }
+      ],
+      "tasks": [
+        { "id": "a1", "title": "Rate Limiter", "desc": "Token bucket rate limiting.", "agent": "sam", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "a2", "title": "K8s Manifests", "desc": "Deployment + HPA.", "agent": null, "phase": "backlog", "pri": "P1", "type": "devops" },
+        { "id": "a3", "title": "OpenAPI Spec", "desc": "Spec v3 dla gateway.", "agent": "sam", "phase": "done", "pri": "P0", "type": "docs" },
+        { "id": "a4", "title": "Grafana dashboards", "desc": "Latency + error rate panels.", "agent": "tomas", "phase": "in-progress", "pri": "P1", "type": "devops" }
+      ],
+      "vault": {
+        "STATE.md": { "folder": null, "icon": "📊", "title": "STATE", "updated": "2026-06-20", "tags": ["status"], "status": "active", "links": ["ROADMAP.md"], "html": "<h1>STATE — API Gateway</h1><div class=\"callout ok\">Rate Limiter 45% · OpenAPI spec done</div>" },
+        "ROADMAP.md": { "folder": null, "icon": "🗺️", "title": "ROADMAP", "updated": "2026-06-18", "tags": ["planning"], "status": "stable", "links": ["STATE.md"], "html": "<h1>ROADMAP</h1><ul><li>Rate limiting MVP</li><li>K8s deployment</li><li>Observability</li></ul>" },
+        "docs/RUNBOOK.md": { "folder": "docs", "icon": "📖", "title": "RUNBOOK", "updated": "2026-06-19", "tags": ["ops"], "status": "stable", "links": ["STATE.md"], "html": "<h1>Runbook</h1><p>Incident response dla gateway outages.</p>" }
+      }
+    },
+    "fintech-mobile-app": {
+      "id": "fintech-mobile-app",
+      "name": "FinPay Mobile",
+      "rooms": [
+        { "id": "command", "name": "Command Center", "tag": "pm", "color": "#a78bfa", "isCommand": true, "purpose": "Koordynacja release mobile.", "taskTypes": ["docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "mobile", "name": "Mobile Lab", "tag": "mobile", "color": "#22d3ee", "purpose": "React Native, iOS/Android builds.", "taskTypes": ["dev", "design"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "backend", "name": "Payments API", "tag": "backend", "color": "#5e9cff", "purpose": "Stripe, PCI compliance, webhooks.", "taskTypes": ["dev"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "qa", "name": "QA & Compliance", "tag": "qa", "color": "#f0883e", "purpose": "Regulatory review, E2E mobile tests.", "taskTypes": ["qa", "review"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 }
+      ],
+      "agents": [
+        { "id": "pm", "name": "Sofia", "role": "Project Manager", "sprite": "violet", "model": "orchestrator-brain", "status": "working", "task": "Release 2.4 planning", "progress": 0, "room": "command", "isOrchestrator": true, "prompt": "FinTech PM.", "ctx": "—" },
+        { "id": "kai", "name": "Kai", "role": "React Native Dev", "sprite": "orange", "model": "claude-sonnet-4", "status": "working", "task": "Biometric login", "progress": 58, "room": "mobile", "prompt": "RN + Expo.", "ctx": "88k/200k" },
+        { "id": "zara", "name": "Zara", "role": "UI Designer", "sprite": "violet", "model": "minimax-m2.5", "status": "working", "task": "Payment flow redesign", "progress": 80, "room": "mobile", "prompt": "Figma → RN.", "ctx": "45k/200k" },
+        { "id": "omar", "name": "Omar", "role": "Backend Developer", "sprite": "blue", "model": "deepseek-v4-pro", "status": "reviewing", "task": "Webhook handler", "progress": 90, "room": "backend", "prompt": "Node + Stripe.", "ctx": "67k/200k" },
+        { "id": "ivy", "name": "Ivy", "role": "QA Engineer", "sprite": "violet", "model": "gemini-2.5-flash", "status": "working", "task": "Detox E2E suite", "progress": 35, "room": "qa", "prompt": "Mobile E2E.", "ctx": "29k/200k" },
+        { "id": "marc", "name": "Marc", "role": "Compliance Analyst", "sprite": "hacker", "model": "gemini-2.5-flash", "status": "thinking", "task": "PCI checklist", "progress": 15, "room": "qa", "prompt": "PCI-DSS.", "ctx": "8k/200k" }
+      ],
+      "tasks": [
+        { "id": "f1", "title": "Biometric login", "desc": "Face ID + fingerprint na iOS/Android.", "agent": "kai", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "f2", "title": "Payment flow UI", "desc": "Nowy checkout 3-step.", "agent": "zara", "phase": "in-progress", "pri": "P0", "type": "design" },
+        { "id": "f3", "title": "Stripe webhooks", "desc": "Idempotent webhook processing.", "agent": "omar", "phase": "review", "pri": "P0", "type": "dev" },
+        { "id": "f4", "title": "Detox tests", "desc": "Critical path E2E.", "agent": "ivy", "phase": "in-progress", "pri": "P1", "type": "qa" },
+        { "id": "f5", "title": "App Store submission", "desc": "Release 2.4 metadata.", "agent": null, "phase": "backlog", "pri": "P1", "type": "docs" }
+      ],
+      "vault": {
+        "STATE.md": { "folder": null, "icon": "📊", "title": "STATE", "updated": "2026-06-23", "tags": ["status", "fintech"], "status": "active", "links": ["compliance/PCI-CHECKLIST.md"], "html": "<h1>STATE — FinPay Mobile</h1><div class=\"callout warn\"><b>Release 2.4</b> za 12 dni — PCI review w toku</div><h2>Progress</h2><ul><li>Biometric login 58%</li><li>Payment UI 80%</li><li>Webhooks w review</li></ul>" },
+        "compliance/PCI-CHECKLIST.md": { "folder": "compliance", "icon": "🔒", "title": "PCI Checklist", "updated": "2026-06-22", "tags": ["compliance"], "status": "active", "links": ["STATE.md"], "html": "<h1>PCI-DSS Checklist</h1><p>Marc prowadzi audyt przed release 2.4.</p>" },
+        "docs/MOBILE-ARCH.md": { "folder": "docs", "icon": "📱", "title": "Mobile Architecture", "updated": "2026-06-15", "tags": ["architecture"], "status": "stable", "links": ["STATE.md"], "html": "<h1>React Native Architecture</h1><p>Expo + native modules. Shared design system z web.</p>" }
+      }
+    },
+    "ml-recommendation-engine": {
+      "id": "ml-recommendation-engine",
+      "name": "RecoML Engine",
+      "rooms": [
+        { "id": "command", "name": "Command Center", "tag": "pm", "color": "#a78bfa", "isCommand": true, "purpose": "ML project coordination.", "taskTypes": ["docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "ml", "name": "ML Lab", "tag": "ml", "color": "#c084fc", "purpose": "Training pipelines, feature store.", "taskTypes": ["dev"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "data", "name": "Data Engineering", "tag": "data", "color": "#22d3ee", "purpose": "ETL, data quality, embeddings.", "taskTypes": ["dev", "devops"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "open", "name": "Open Floor", "tag": "open", "color": "#3fb950", "isOpenFloor": true, "purpose": "Research spikes.", "taskTypes": ["dev", "docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 }
+      ],
+      "agents": [
+        { "id": "pm", "name": "Dr. Chen", "role": "Project Manager", "sprite": "blue", "model": "orchestrator-brain", "status": "thinking", "task": "Model eval planning", "progress": 0, "room": "command", "isOrchestrator": true, "prompt": "ML PM.", "ctx": "—" },
+        { "id": "priya", "name": "Priya", "role": "ML Engineer", "sprite": "hacker", "model": "deepseek-v4-pro", "status": "working", "task": "Embedding pipeline v2", "progress": 67, "room": "ml", "prompt": "PyTorch, vector DB.", "ctx": "112k/500k" },
+        { "id": "dan", "name": "Dan", "role": "Data Engineer", "sprite": "orange", "model": "claude-sonnet-4", "status": "working", "task": "Feature store migration", "progress": 41, "room": "data", "prompt": "Spark, Airflow.", "ctx": "78k/500k" },
+        { "id": "yuki", "name": "Yuki", "role": "MLOps", "sprite": "hacker", "model": "gemini-2.5-flash", "status": "error", "task": "Model serving deploy", "progress": 5, "room": "data", "prompt": "Kubeflow, ONNX.", "ctx": "34k/500k" },
+        { "id": "ana", "name": "Ana", "role": "Research Scientist", "sprite": "violet", "model": "minimax-m2.5", "status": "sleep", "task": null, "progress": 0, "room": "open", "prompt": "Recsys papers.", "ctx": "0/500k" }
+      ],
+      "tasks": [
+        { "id": "m1", "title": "Embedding pipeline v2", "desc": "Multimodal embeddings dla produktów.", "agent": "priya", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "m2", "title": "Feature store", "desc": "Migracja z Redis do Feast.", "agent": "dan", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "m3", "title": "Model serving", "desc": "ONNX runtime deploy — FAILING.", "agent": "yuki", "phase": "in-progress", "pri": "P0", "type": "devops" },
+        { "id": "m4", "title": "Offline eval metrics", "desc": "NDCG@10 benchmark suite.", "agent": null, "phase": "backlog", "pri": "P1", "type": "qa" }
+      ],
+      "vault": {
+        "STATE.md": { "folder": null, "icon": "📊", "title": "STATE", "updated": "2026-06-23", "tags": ["ml", "status"], "status": "active", "links": ["experiments/EXP-042.md"], "html": "<h1>STATE — RecoML</h1><div class=\"callout warn\">Yuki: model serving deploy ERROR</div><p>Embedding v2: 67% · Feature store: 41%</p>" },
+        "experiments/EXP-042.md": { "folder": "experiments", "icon": "🧪", "title": "EXP-042 Embeddings", "updated": "2026-06-22", "tags": ["experiment"], "status": "active", "links": ["STATE.md"], "html": "<h1>Experiment 042</h1><p>Multimodal embeddings — NDCG@10: 0.34 → 0.41 (target 0.45)</p>" },
+        "docs/DATA-CATALOG.md": { "folder": "docs", "icon": "🗄️", "title": "Data Catalog", "updated": "2026-06-17", "tags": ["data"], "status": "stable", "links": ["STATE.md"], "html": "<h1>Data Catalog</h1><p>47 feature groups · 12 training datasets · lineage map</p>" }
+      }
+    },
+    "docs-portal-redesign": {
+      "id": "docs-portal-redesign",
+      "name": "Docs Portal 3.0",
+      "rooms": [
+        { "id": "command", "name": "Command Center", "tag": "pm", "color": "#a78bfa", "isCommand": true, "purpose": "Docs portal relaunch.", "taskTypes": ["docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "content", "name": "Content Studio", "tag": "content", "color": "#c084fc", "purpose": "MDX, search, i18n.", "taskTypes": ["design", "docs"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 },
+        { "id": "open", "name": "Open Floor", "tag": "open", "color": "#3fb950", "isOpenFloor": true, "purpose": "Overflow.", "taskTypes": ["dev"], "layout": "auto", "x": 0, "y": 0, "w": 0, "h": 0 }
+      ],
+      "agents": [
+        { "id": "pm", "name": "Elena", "role": "Project Manager", "sprite": "violet", "model": "orchestrator-brain", "status": "working", "task": "Content migration plan", "progress": 0, "room": "command", "isOrchestrator": true, "prompt": "Docs PM.", "ctx": "—" },
+        { "id": "jade", "name": "Jade", "role": "Technical Writer", "sprite": "blue", "model": "gemini-2.5-flash", "status": "working", "task": "API reference migration", "progress": 52, "room": "content", "prompt": "MDX, OpenAPI.", "ctx": "40k/200k" },
+        { "id": "finn", "name": "Finn", "role": "Frontend Developer", "sprite": "orange", "model": "minimax-m2.5", "status": "working", "task": "Search UI", "progress": 44, "room": "content", "prompt": "Next.js, Algolia.", "ctx": "55k/200k" }
+      ],
+      "tasks": [
+        { "id": "d1", "title": "API reference migration", "desc": "240 endpoints → MDX.", "agent": "jade", "phase": "in-progress", "pri": "P0", "type": "docs" },
+        { "id": "d2", "title": "Full-text search", "desc": "Algolia integration.", "agent": "finn", "phase": "in-progress", "pri": "P0", "type": "dev" },
+        { "id": "d3", "title": "i18n framework", "desc": "PL + EN support.", "agent": null, "phase": "backlog", "pri": "P2", "type": "docs" }
+      ],
+      "vault": {
+        "STATE.md": { "folder": null, "icon": "📊", "title": "STATE", "updated": "2026-06-21", "tags": ["docs"], "status": "active", "links": ["content/MIGRATION-PLAN.md"], "html": "<h1>STATE — Docs Portal 3.0</h1><p>API ref migration 52% · Search UI 44%</p>" },
+        "content/MIGRATION-PLAN.md": { "folder": "content", "icon": "📋", "title": "Migration Plan", "updated": "2026-06-20", "tags": ["migration"], "status": "active", "links": ["STATE.md"], "html": "<h1>Content Migration</h1><p>240 API pages · 89 guides · deadline Q3</p>" }
+      }
+    }
+  }
+}

@@ -327,7 +327,7 @@ function handleConfigGET(_req: IncomingMessage, res: ServerResponse): void {
 
 function handleConfigPOST(req: IncomingMessage, res: ServerResponse): Promise<void> {
   return readBody(req).then((data) => {
-    for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models", "safeguards", "default_model_routing"]) {
+    for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models", "safeguards"]) {
       if (data[key] !== undefined) setGlobalConfig(key, data[key]);
     }
     if (data.projects && typeof data.projects === "object") {
@@ -409,14 +409,10 @@ async function handleProjectState(req: IncomingMessage, res: ServerResponse): Pr
       try { return fs.readFileSync(fp, "utf-8"); } catch { return ""; }
     };
 
-    // Merge global default_model_routing so per-project UI can show inheritance
-    const globalCfg = getAllGlobalConfig();
-    const mergedConfig = { ...projCfg, default_model_routing: globalCfg?.default_model_routing || {} };
-
     sendJSON(res, {
       ok: true,
       name,
-      config: mergedConfig,
+      config: projCfg,
       sessions,
       session_count: sessions.length,
       docs,
@@ -424,12 +420,6 @@ async function handleProjectState(req: IncomingMessage, res: ServerResponse): Pr
       roadmap: readProjectDoc("ROADMAP.md"),
       context: readProjectDoc("CONTEXT.md"),
       notes: readProjectDoc("NOTES.md"),
-      project_plan: readProjectDoc("PROJECT_PLAN.md"),
-      features: readProjectDoc("FEATURES.md"),
-      bugs: readProjectDoc("BUGS.md"),
-      changelog: readProjectDoc("CHANGELOG.md"),
-      style_guide: readProjectDoc("STYLE_GUIDE.md"),
-      architecture: readProjectDoc("ARCHITECTURE.md"),
       matched_live: [],
       live_matched_count: 0,
       agents_on_project: false,
@@ -1055,6 +1045,19 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
 
       // ── STATIC FILES ──
       if (method === "GET") {
+        // Software House UI proposal (frontend-only mockup)
+        if (pathname === "/software-house" || pathname === "/software-house/") {
+          sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "software-house.html"));
+          return true;
+        }
+        // Static assets for dashboard pages (sprites, mock JSON)
+        if (pathname.startsWith("/assets/") || pathname.startsWith("/data/")) {
+          const assetFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
+          if (fs.existsSync(assetFile) && fs.statSync(assetFile).isFile()) {
+            sendFile(res, assetFile);
+            return true;
+          }
+        }
         // Dashboard main page
         if (pathname === "/" || pathname === "/index.html") {
           sendFile(res, HTML_PATH);
