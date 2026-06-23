@@ -2783,10 +2783,9 @@ const _plugin: Record<string, any> = definePluginEntry({
         }
         // Auto-register so tools like genorch_session_start_work can work
         // without manually calling genorch_session_register first.
-        if (!sessionTracker.isSessionRegistered(sk)) {
-          sessionTracker.registerSession(sk);
-          logger.info("hooks", `session_start auto-registered: ${sk} (reason: ${event.reason || ""})`);
-        }
+        // NOTE: Key is adopted but NOT auto-registered.
+        // Registration is explicit — user must call genorch_session_register.
+        logger.info("hooks", `session_start adopted key: ${sk} (reason: ${event.reason || ""})`);
       } catch (e: any) {
         logger.warn("hooks", `session_start error: ${e.message}`);
       }
@@ -3038,21 +3037,13 @@ const _plugin: Record<string, any> = definePluginEntry({
         const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":acp:");
         
         if (!isBackground) {
-          // ── Adopt the real gateway key ──
+          // ── Adopt the real gateway key (NO auto-registration) ──
+          // Key adoption is safe singleton set-once from null logic.
+          // Registration is EXPLICIT — user must call genorch_session_register.
           if (sessionTracker.sessionKey !== ctxSessionKey) {
             sessionTracker.start(ctxSessionKey, "resumed");
           }
           logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
-          
-          // ── Auto-register sessions as they're discovered ──
-          // This fixes the chicken-and-egg: you can't register without
-          // a key, but you only get a key if already registered.
-          // Auto-registration is safe because project context injection
-          // is separately gated by genorch_session_start_work.
-          if (!sessionTracker.isSessionRegistered(ctxSessionKey)) {
-            sessionTracker.registerSession(ctxSessionKey);
-            logger.info("hooks", `Auto-registered session: ${ctxSessionKey}`);
-          }
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -3245,10 +3236,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         // Session A's established key.
         if (!sessionTracker.sessionKey) {
           sessionTracker.start(hk, "resumed");
-          if (!sessionTracker.isSessionRegistered(hk)) {
-            sessionTracker.registerSession(hk);
-            logger.info("hooks", `before_prompt_build adopted orphan session key: ${hk}`);
-          }
+          logger.info("hooks", `before_prompt_build adopted orphan session key: ${hk}`);
         }
         const sk = hk;
         if (!sessionTracker.isSessionRegistered(sk)) return;
