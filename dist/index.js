@@ -2058,8 +2058,7 @@ function getModels(dataDir, opts, logger) {
         total: all.length,
         filtered: f.length,
         models: f.map((m) => ({
-            id: m.id, provider: m.provider, name: m.name, tier: m.tier,
-            speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
+            id: m.id, provider: m.provider, name: m.name, status: m.status, agent_ready: m.agent_ready,
             cost_type: m.cost?.type || "unknown", context_window: m.context_window || 0,
             capabilities: m.capabilities || {}, notes: m.notes || "",
         })),
@@ -2096,8 +2095,7 @@ function checkModels(dataDir, project, logger) {
         disabled_models: d, filters_applied: filters, total_available: all,
         eligible_count: eligible.length,
         eligible_models: eligible.map((m) => ({
-            id: m.id, provider: m.provider, name: m.name, tier: m.tier,
-            speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
+            id: m.id, provider: m.provider, name: m.name, status: m.status, agent_ready: m.agent_ready,
             cost_type: m.cost?.type || "unknown",
         })),
     };
@@ -2534,21 +2532,6 @@ const _plugin = definePluginEntry({
             fs.writeFileSync(firstRunMarker, new Date().toISOString(), "utf-8");
             logger.info("boot", `═══════════ First-run onboarding complete ═══════════`);
         }
-        // Schedule nightly model population
-        try {
-            const scriptDir = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
-            if (fs.existsSync(scriptDir)) {
-                const cronCmd = `python3 "${scriptDir}" 2>&1 >> "${path.join(dataDir, "logs", "auto-populate.log")}"`;
-                const existing = execSync("crontab -l 2>/dev/null || true", { encoding: "utf-8", timeout: 5000 });
-                if (!existing.includes("auto-populate-models.py")) {
-                    execSync(`(crontab -l 2>/dev/null; echo "0 3 * * * ${cronCmd} # genor-orchestrator auto-populate") | crontab -`, { timeout: 5000 });
-                    logger.info("boot", "Scheduled nightly model population (3 AM)");
-                }
-            }
-        }
-        catch {
-            logger.debug("boot", "Cron scheduling skipped (no crontab access)");
-        }
         logger.info("plugin", "Plugin loaded", { dataDir, logLevel, logRetention });
         // ═══════════════════════════════════════════════════════════
         //  HOOKS
@@ -2904,7 +2887,7 @@ const _plugin = definePluginEntry({
                         }
                     }
                     if (selected) {
-                        sessionTracker.trackModel(selected.id, selected.provider, selected.tier);
+                        sessionTracker.trackModel(selected.id, selected.provider);
                         logger.info("routing", `[${routingPreset}] Routed ${sessionTracker.currentProject}/${taskCategory} → ${selected.id} (${selected.provider})`);
                         // For custom-fallbacks-only: still let OpenClaw resolve primary,
                         // but set modelOverride so it uses our chain if primary resolution fails
@@ -2924,18 +2907,17 @@ const _plugin = definePluginEntry({
                 // ── Fallback: tier-based model selection ──
                 if (eligible.length > 0) {
                     const best = eligible
-                        .filter(m => m.agent_ready !== false && m.status === "active")
-                        .sort((a, b) => (b.tier || 0) - (a.tier || 0))[0];
+                        .filter(m => m.agent_ready !== false && m.status === "active")[0];
                     if (best) {
-                        sessionTracker.trackModel(best.id, best.provider, best.tier);
-                        logger.info("routing", `[tier-fallback] Routed ${sessionTracker.currentProject} → ${best.id} (T${best.tier})`);
+                        sessionTracker.trackModel(best.id, best.provider);
+                        logger.info("routing", `[tier-fallback] Routed ${sessionTracker.currentProject} → ${best.id}`);
                         return { modelOverride: best.id };
                     }
                 }
                 // ── Last resort: track whatever OpenClaw resolved ──
                 if (event?.resolvedModel) {
                     const resolvedInfo = allModels.find((m) => m.id === event.resolvedModel);
-                    sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider, resolvedInfo?.tier);
+                    sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider);
                     logger.info("routing", `[pass-through] No eligible models for ${sessionTracker.currentProject}, using resolved: ${event.resolvedModel}`);
                 }
             }
@@ -3642,8 +3624,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 // ── Preset: free-only ──
                 if (preset === "free-only") {
                     const freeModels = allModels
-                        .filter(m => !isPaid(m) && m.agent_ready !== false && m.status === "active")
-                        .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+                        .filter(m => !isPaid(m) && m.agent_ready !== false && m.status === "active");
                     return txt({
                         ok: true,
                         project: proj,
@@ -3656,8 +3637,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                         model_quality: freeModels.slice(0, 5).map(m => ({
                             id: m.id,
                             provider: m.provider,
-                            tier: m.tier,
-                            speed: m.speed_rating || 0,
                             context: m.context_window || 0,
                             cost_type: m.cost_type || null,
                         })),
@@ -3666,8 +3645,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 // ── Preset: single-provider ──
                 if (preset === "single-provider" && singleProvider) {
                     const provModels = allModels
-                        .filter(m => m.provider === singleProvider && m.agent_ready !== false && m.status === "active")
-                        .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+                        .filter(m => m.provider === singleProvider && m.agent_ready !== false && m.status === "active");
                     return txt({
                         ok: true,
                         project: proj,
@@ -3681,8 +3659,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                         model_quality: provModels.slice(0, 5).map(m => ({
                             id: m.id,
                             provider: m.provider,
-                            tier: m.tier,
-                            speed: m.speed_rating || 0,
                             context: m.context_window || 0,
                         })),
                     });
@@ -3701,12 +3677,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                     return found ? {
                         id: found.id,
                         provider: found.provider,
-                        tier: found.tier,
-                        speed: found.speed_rating || 0,
                         context: found.context_window || 0,
                         status: found.status || "unknown",
                         agent_ready: found.agent_ready !== false,
-                    } : { id, provider: "?", tier: 0, speed: 0, context: 0, status: "unknown", agent_ready: false };
+                    } : { id, provider: "?", context: 0, status: "unknown", agent_ready: false };
                 });
                 const available = enriched.filter((m) => m.status === "active" && m.agent_ready);
                 const blocked = enriched.filter((m) => m.status !== "active" || !m.agent_ready);

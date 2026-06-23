@@ -3,8 +3,8 @@
 [![ClawHub](https://img.shields.io/badge/ClawHub-genor--orchestrator--plugin-blue)](https://clawhub.com/packages/genor-orchestrator-plugin)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-brightgreen)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/GenorTG/genor-orchestrator-plugin)](https://github.com/GenorTG/genor-orchestrator-plugin/releases)
-![Version](https://img.shields.io/badge/version-0.9.1-blue)
-![Tools](https://img.shields.io/badge/tools-47-success)
+![Version](https://img.shields.io/badge/version-0.9.3-blue)
+![Tools](https://img.shields.io/badge/tools-43-success)
 ![Hooks](https://img.shields.io/badge/hooks-7-ff69b4)
 
 > **✨ 47 tools + 7 lifecycle hooks that turn OpenClaw into an AI-powered project orchestration powerhouse.** Model routing with 5 routing presets, session logging, backlog management, live agent tracking, active-project binding, context injection, ADR management, workflow phase enforcement, QA review cycles, a built-in dashboard — all inside OpenClaw with zero external processes.
