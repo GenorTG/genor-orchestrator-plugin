@@ -685,7 +685,7 @@ function loadProject(id, skipSave) {
   currentProjectId = id;
   project = p;
   rooms = deepClone(p.rooms);
-  agents = deepClone(p.agents);
+  agents = deepClone(p.workers || p.agents || []);
   tasks = deepClone(p.tasks);
   project.vault = p.vault || {};
   manualRoomLayout = false;
