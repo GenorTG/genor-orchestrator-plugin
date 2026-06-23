@@ -2306,29 +2306,25 @@ const _plugin = definePluginEntry({
             }
         }
         // ═══════════════════════════════════════════════════════════
-        //  FIRST-RUN ONBOARDING
+        //  BOOT MODEL SYNC
         // ═══════════════════════════════════════════════════════════
-        // On first load, run all initialization tasks:
-        //   1. Ensure all data directories exist
-        //   2. Auto-populate model inventory from gateway config
-        //   3. Create default dashboard-config.json if missing
-        //   4. Create STATE.md for any existing project dirs that lack one
-        //   5. Run genorch_system_diagnose checks to surface issues early
-        //   6. Write .FIRST_RUN marker so this only runs once
+        // Auto-populate model inventory from gateway config on EVERY boot.
+        // This keeps models.json in sync: new models are added, and models
+        // removed from the gateway config are pruned (not preserved as orphans).
+        //
+        // Also runs first-run onboarding tasks on initial install.
         const firstRunMarker = path.join(dataDir, ".FIRST_RUN");
+        // Auto-populate model inventory — runs every boot to stay in sync
+        try {
+            autoPopulate(dataDir, logger);
+            logger.info("boot", "Models synced from gateway config");
+        }
+        catch (e) {
+            logger.warn("boot", `Boot model sync skipped — ${e.message}`);
+        }
+        // ── First-run onboarding ──
         if (!fs.existsSync(firstRunMarker)) {
             logger.info("boot", "═══════════ First run detected — running onboarding... ═══════════");
-            // Auto-populate model inventory
-            try {
-                const modelsPath = path.join(dataDir, "models.json");
-                if (!fs.existsSync(modelsPath)) {
-                    autoPopulate(dataDir, logger);
-                    logger.info("boot", "First-run: models auto-populated");
-                }
-            }
-            catch (e) {
-                logger.warn("boot", `First-run: model population skipped — ${e.message}`);
-            }
             // Create default dashboard config if missing
             try {
                 const configPath = path.join(dataDir, "dashboard-config.json");

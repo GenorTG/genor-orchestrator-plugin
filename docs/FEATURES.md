@@ -271,9 +271,8 @@
 | **Introduced** | v0.6.0 |
 | **Status** | ✅ Active |
 | **Tool** | `genorch_models_auto_discover` |
-| **Cron** | Nightly at 3 AM |
 
-**What it does:** Syncs model inventory from OpenClaw gateway config. Scrapes the gateway for all configured models, merges into `models.json`, preserves manual ratings (tier, speed, status). Uses atomic writes (`.tmp` → `renameSync`). Also runs via cron nightly and on plugin init.
+**What it does:** Syncs model inventory from OpenClaw gateway config on every plugin boot. Scrapes the gateway for all configured models, merges into `models.json`. Models removed from the gateway config are pruned (not preserved as orphans). Uses atomic writes (`.tmp` → `renameSync`). Can also be triggered manually via `genorch_models_auto_discover` tool.
 
 ---
 

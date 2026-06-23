@@ -309,7 +309,7 @@ orchestrator_auto_populate()
 |-------|------|----------|-------------|
 | *(none)* | | | Just call it. |
 
-**When to use:** After installing new models or providers, or if the model inventory seems out of date. Also runs automatically nightly at 3 AM via cron. 🌙
+**When to use:** After installing new models or providers, or if the model inventory seems out of date. Auto-populates from gateway config on every boot. 🔄
 
 ---
 

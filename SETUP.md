@@ -22,26 +22,20 @@ openclaw plugins install --force .
 openclaw plugins enable genor-orchestrator
 ```
 
-### Step 3 — Populate Models
-
-```bash
-npx tsx scripts/auto-populate-models.ts
-```
-
-### Step 4 — Restart Gateway
+### Step 3 — Restart Gateway
 
 ```bash
 openclaw gateway restart
 ```
 
-### Step 5 — Verify
+### Step 4 — Verify
 
 ```bash
 openclaw plugins list | grep orchestrator
 openclaw plugins inspect genor-orchestrator
 ```
 
-### Step 6 — Open Dashboard
+### Step 5 — Open Dashboard
 
 The dashboard lives at your gateway's `/orchestrator` route — no separate server needed:
 
@@ -53,6 +47,8 @@ open http://localhost:18789/orchestrator
 open https://genorbox1.tailxxx.ts.net/orchestrator
 ```
 
+Model inventory auto-populates from your gateway config on every boot — no manual step needed.
+
 That's it. **9 dashboard tabs, 40 tools, 8 hooks** — all running inside your gateway as a native extension (installed at `~/.openclaw/extensions/genor-orchestrator/`).
 
 ---
@@ -62,7 +58,7 @@ That's it. **9 dashboard tabs, 40 tools, 8 hooks** — all running inside your g
 | What | When |
 |------|------|
 | 📁 Data dirs created | On first plugin load |
-| 🌙 Nightly model sync | 3 AM via cron |
+| 🔄 Boot-time model sync | Every plugin load (auto-populates from gateway config) |
 | 🔧 Maintenance tick | Every 30 min (log rotation, session normalization, recovery docs) |
 | 📝 Session auto-logging | On every session_end hook |
 | 🚦 Model routing | On every before_model_resolve (per-project allowlists & routing presets) |

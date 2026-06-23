@@ -658,22 +658,18 @@ function renderModels(data){
       <table id="models-table"><thead><tr>
         <th title="Model identifier">ID</th>
         <th title="Provider name">Provider</th>
-        <th title="Quality tier (lower=better)">Tier</th>
         <th title="Status in orchestrator">Status</th>
-        <th title="Speed rating 0-10">Speed</th>
-        <th title="Available for agent use">Agent Ready</th>
+        <th title="Available for agent use">Ready</th>
         <th title="Verification status">Verified</th>
       </tr></thead>
       <tbody id="models-tbody">${models.map(m=>`
-        <tr class="model-row" style="cursor:pointer" onclick="showModelEdit(this)" title="${esc(m.id)} — ${m.status||'unknown'} — Tier ${m.tier!==undefined?m.tier:'?'}" data-json='${esc(JSON.stringify(m))}' data-name="${esc(m.id).toLowerCase()}" data-status="${m.status||''}" data-provider="${esc(m.provider||'')}">
+        <tr class="model-row" style="cursor:pointer" onclick="showModelEdit(this)" title="${esc(m.id)} — ${m.status||'unknown'}" data-json='${esc(JSON.stringify(m))}' data-name="${esc(m.id).toLowerCase()}" data-status="${m.status||''}" data-provider="${esc(m.provider||'')}">
           <td title="${esc(m.id)}" class="code" style="font-size:12px">${esc(m.id)}</td>
           <td><span class="tag" title="Provider: ${esc(m.provider||'')}">${esc(m.provider||'—')}</span></td>
-          <td data-sort="${m.tier!==undefined?m.tier:999}" title="Quality tier: ${m.tier!==undefined?m.tier:'unset'}">${m.tier!==undefined?m.tier:'?'}</td>
           <td><span class="badge ${m.status==='active'?'badge-green':m.status==='discovered'?'badge-yellow':m.status==='offline'?'badge-gray':'badge-gray'}" title="Status: ${m.status||'unknown'}">${m.status||'unknown'}</span></td>
-          <td data-sort="${m.speed_rating!==undefined?m.speed_rating:-1}" title="Speed: ${m.speed_rating!==undefined?m.speed_rating+'/10':'not rated'}">${m.speed_rating!==undefined?m.speed_rating+'/10':'—'}</td>
           <td>${m.agent_ready?'<span class="badge badge-green" title="Ready for agent use">Ready</span>':'<span class="badge badge-gray" title="Not available for agents">No</span>'}</td>
           <td data-sort="${m.verified_status||'z'}" style="font-size:12px;color:var(--text-dim)" title="Verification: ${m.verified_status||'not verified'}">${m.verified_status||'—'}</td>
-        </tr>`).join('')}${!models.length?'<tr><td colspan="7" class="empty">No models</td></tr>':''}
+        </tr>`).join('')}${!models.length?'<tr><td colspan="5" class="empty">No models</td></tr>':''}
       </tbody></table>
     </div>
   </div>`;
@@ -1113,7 +1109,7 @@ window.showModelEdit=function(row){
     var cost=m.cost||{};var routingHints=(m.routing_hints||[]).join(', ');
     showModal('🧠 '+esc(m.id),
       '<div style="display:flex;flex-direction:column;gap:6px;font-size:13px">'+
-      ['Description','context_window','speed_rating','tier','routing_hints'].map(f=>`<label style="color:var(--text-dim);font-size:11px">${f}</label><input id="med-${f}" value="${esc(m[f]??'')}" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 6px;font:inherit;font-size:12px">`).join('')+
+      ['Description','context_window','routing_hints'].map(f=>`<label style="color:var(--text-dim);font-size:11px">${f}</label><input id="med-${f}" value="${esc(m[f]??'')}" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 6px;font:inherit;font-size:12px">`).join('')+
       '<label style="color:var(--text-dim);font-size:11px">Cost Type</label>'+
       `<select id="med-cost-type" style="background:var(--bg-alt);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 6px;font:inherit;font-size:12px">`+
         ['free','payg','subscription','unknown'].map(o=>`<option value="${o}" ${(cost.type||'unknown')===o?'selected':''}>${o}</option>`).join('')+'</select>'+
@@ -1129,7 +1125,6 @@ window.saveModelEdit=async function(id){
   try{
     const body={
       id,description:$('#med-description')?.value||'',context_window:$('#med-context_window')?.value||'',
-      speed_rating:parseInt($('#med-speed_rating')?.value)||0,tier:parseInt($('#med-tier')?.value)||0,
       cost:{type:$('#med-cost-type')?.value||'unknown',amount:parseFloat($('#med-cost-amt')?.value)||0},
       routing_hints:($('#med-routing_hints')?.value||'').split(',').map(s=>s.trim()).filter(Boolean),
       status:$('#med-status')?.value||'active',
