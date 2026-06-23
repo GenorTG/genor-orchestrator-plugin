@@ -327,7 +327,7 @@ function handleConfigGET(_req: IncomingMessage, res: ServerResponse): void {
 
 function handleConfigPOST(req: IncomingMessage, res: ServerResponse): Promise<void> {
   return readBody(req).then((data) => {
-    for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models", "safeguards"]) {
+    for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models", "safeguards", "default_model_routing"]) {
       if (data[key] !== undefined) setGlobalConfig(key, data[key]);
     }
     if (data.projects && typeof data.projects === "object") {
@@ -409,10 +409,14 @@ async function handleProjectState(req: IncomingMessage, res: ServerResponse): Pr
       try { return fs.readFileSync(fp, "utf-8"); } catch { return ""; }
     };
 
+    // Merge global default_model_routing so per-project UI can show inheritance
+    const globalCfg = getAllGlobalConfig();
+    const mergedConfig = { ...projCfg, default_model_routing: globalCfg?.default_model_routing || {} };
+
     sendJSON(res, {
       ok: true,
       name,
-      config: projCfg,
+      config: mergedConfig,
       sessions,
       session_count: sessions.length,
       docs,

@@ -2984,6 +2984,28 @@ const _plugin: Record<string, any> = definePluginEntry({
       }
     });
 
+    // ═══ Model routing resolution — merges project overrides with global defaults ═══
+    function getEffectiveChain(project: string | null, category: string): string[] | null {
+      try {
+        // 1. Project-specific routing takes priority
+        if (project) {
+          const pc = getProjectConfig(project);
+          if (pc?.model_routing?.[category]?.length) {
+            return pc.model_routing[category];
+          }
+        }
+        // 2. Fall back to global default routing
+        const globalCfg = getAllGlobalConfig();
+        const globalRouting = globalCfg?.default_model_routing || {};
+        if (globalRouting[category]?.length) {
+          return globalRouting[category];
+        }
+      } catch (e: any) {
+        logger.warn("routing", `getEffectiveChain error: ${e.message}`);
+      }
+      return null;
+    }
+
     api.on("before_model_resolve", async (event: any, hookCtx: any) => {
       try {
         const ctxSessionKey = hookCtx?.sessionKey || "";
@@ -3102,8 +3124,11 @@ const _plugin: Record<string, any> = definePluginEntry({
         else if (taskLower.includes("doc") || taskLower.includes("readme") || taskLower.includes("adr") || taskLower.includes("manual") || taskLower.includes("write up")) taskCategory = "documentation";
         else if (taskLower.includes("test") || taskLower.includes("spec") || taskLower.includes("unit") || taskLower.includes("e2e")) taskCategory = "test";
         
+        // Merge project overrides + global defaults
+        const chain = getEffectiveChain(sessionTracker.currentProject, taskCategory);
+
+        // Also pass explicitly-set model_routing for per-project filtering below
         const modelRouting = pc?.model_routing || {};
-        const chain = modelRouting[taskCategory];
         
         if (chain && Array.isArray(chain) && chain.length > 0) {
           // Try models in chain order until we find an active one
@@ -4331,12 +4356,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const taskName = params.taskName || `sub-${project}-${Date.now().toString(36)}`;
         const timeoutSeconds = Math.min(params.timeoutSeconds || 300, 1800);
 
-        // Auto-resolve model from project routing config when task_type given but no model
+        // Auto-resolve model using effective routing (project override + global fallback)
         if (!model && taskType) {
           try {
-            const pc = getProjectConfig(project);
-            const routing = pc?.model_routing || {};
-            const chain = routing[taskType];
+            // Helper to get effective chain (same logic as getEffectiveChain in before_model_resolve)
+            function getChain(proj: string, cat: string): string[] | null {
+              const pc2 = getProjectConfig(proj);
+              if (pc2?.model_routing?.[cat]?.length) return pc2.model_routing[cat];
+              const gc = getAllGlobalConfig();
+              const gr = gc?.default_model_routing || {};
+              if (gr[cat]?.length) return gr[cat];
+              return null;
+            }
+            const chain = getChain(project, taskType);
             if (chain && chain.length > 0) {
               const allModels = listModels();
               for (const chainId of chain) {
