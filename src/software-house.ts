@@ -149,19 +149,22 @@ export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse
 export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const db = getDb();
   const body = await parseBody(req);
-  const { id, name, role, sprite, model, prompt, room, project } = body;
+  const { id: providedId, name, role, sprite, model, prompt, room, project } = body;
 
-  if (!id || !name) {
-    json(res, { error: "id and name required" }, 400);
+  if (!name) {
+    json(res, { error: "name required" }, 400);
     return;
   }
+
+  // Generate ID if not provided
+  const id = providedId || `w${Date.now()}`;
 
   db.prepare(`
     INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin");
 
-  json(res, { ok: true, id });
+  json(res, { ok: true, worker: { id, name } });
 }
 
 /**

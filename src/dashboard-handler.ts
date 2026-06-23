@@ -1065,7 +1065,7 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
         }
         // Dashboard main page — redirect to Software House
         if (pathname === "/" || pathname === "/index.html") {
-          res.writeHead(302, { Location: "/software-house" });
+          res.writeHead(302, { Location: "/orchestrator/software-house" });
           res.end();
           return true;
         }
