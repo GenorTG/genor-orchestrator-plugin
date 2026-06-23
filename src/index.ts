@@ -2439,6 +2439,11 @@ function requireRegistration(): string | null {
   return "This session is not registered with the orchestrator. Call genorch_session_register first to opt in to orchestrator tracking and project context injection.";
 }
 
+function requireBinding(): string | null {
+  if (!sessionTracker.currentProject) return "No project bound. Call genorch_project_bind first to bind this session to a project and receive project context injection.";
+  return null;
+}
+
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
   projDir(project, dataDir);
 
@@ -2454,9 +2459,10 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
   let sessionCount = countSessions(project);
   const isFresh = sessionCount === 0;
 
-  // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
+  // Auto-log session only when task is specified AND model is assigned
+  // (binding-only calls with empty task skip logging)
   const sessionModel = sessionTracker.currentModel;
-  if (sessionModel && sessionModel !== "pending") {
+  if (task && sessionModel && sessionModel !== "pending") {
     const truncatedPrompt = originalPrompt ? String(originalPrompt).slice(0, 500) : null;
     logSession(dataDir, {
       project,
@@ -3255,7 +3261,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
    analyze → plan → document → work → log → finish
 `;
         ctx += `**Enforced gates** (code blocks these if violated):
-• Must call \`genorch_session_register\` then \`genorch_session_start_work\` before project work
+• Must call \`genorch_session_register\` → \`genorch_project_bind\` → \`genorch_session_start_work\` in order
 • work→log: BLOCKED until QA approves (run \`genorch_qa_submit\` → \`genorch_qa_approve\`)\n• log→finish: BLOCKED until \`genorch_session_log\` AND \`genorch_handoff_create\` complete
 `;
         ctx += `**Model routing**: Orchestrator auto-selects the best model per task category.
@@ -3471,18 +3477,24 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
     api.registerTool({
       name: "genorch_session_start_work",
-      label: "Orchestrator Set Context",
-      description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.",
+      label: "Orchestrator Start Work",
+      description: "Start working on a specific task in the bound project. Requires project bound via genorch_project_bind first. Sets task context with type, description, and optional original prompt. Enables auto-routing, auto-logging, and context injection.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project name (e.g., kfinance, kotw)." }),
-        task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, rebuild and restart gateway.'" }),
-        original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request that triggered this task. Captured in the session log for traceability — so we can see WHY the work was started, not just WHAT was done. Recommended: include the user's full request verbatim. Truncated to 500 chars." })),
+        task: Type.String({ description: "Describe the task concisely. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files/systems are involved)" }),
+        task_type: Type.Optional(Type.Enum({ coding: "coding", fixing: "fixing", research: "research", qa: "qa", documentation: "documentation", test: "test" }, { description: "Task category for model routing. If omitted, inferred from task text." })),
+        project: Type.Optional(Type.String({ description: "DEPRECATED: If provided, binds to project and starts work in one step (legacy behavior). Prefer genorch_project_bind first, then call without project." })),
+        original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request, verbatim. Truncated to 500 chars." })),
       }),
-      async execute(_id: string, params: any) {
+      async execute(_id: string, _params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
+        const params = _params as { task: string; task_type?: string; project?: string; original_prompt?: string };
+        let project = params.project || sessionTracker.currentProject;
+        if (!project) {
+          return txt({ ok: false, error: "No project specified and no project bound. Call genorch_project_bind first or pass project parameter." });
+        }
         try {
-          return txt(setContext(dataDir, params.project, params.task, logger, params.original_prompt));
+          return txt(setContext(dataDir, project, params.task, logger, params.original_prompt));
         } catch (err: any) {
           return txt({ ok: false, error: err.message });
         }
@@ -4338,6 +4350,31 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             ok: false,
             error: `Failed to join project "${params.project}": ${err.message}`,
           });
+        }
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_project_bind",
+      label: "Orchestrator Bind Project",
+      description: "Bind this session to a project. Loads project context (README, architecture, style guides, plan) for injection into prompts. Use BEFORE genorch_session_start_work. The LLM will receive full project knowledge on the next turn.",
+      parameters: Type.Object({
+        project: Type.String({ description: "Project name (e.g., kfinance, kotw). Use genorch_project_list_active to see available projects." }),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        try {
+          const result = setContext(dataDir, params.project, "", logger);
+          logger.info("sessions", `Session bound to project: ${params.project} (session=${sessionTracker.sessionKey})`);
+          return txt({
+            ok: true,
+            bound_project: params.project,
+            message: `Bound to project "${params.project}". Project context will be injected on next prompt. Call genorch_session_start_work to begin a task.`,
+            details: result,
+          });
+        } catch (err: any) {
+          return txt({ ok: false, error: `Failed to bind project "${params.project}": ${err.message}` });
         }
       },
     });
