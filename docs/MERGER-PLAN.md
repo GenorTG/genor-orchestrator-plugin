@@ -14,7 +14,6 @@ Two separate systems exist today:
 - 8 hooks for lifecycle events
 - 25 API routes for the classic dashboard
 - 8 DB tables for persistence
-- Session lifecycle, project management, backlog, models, workflow, QA, tests, pipeline, delegation, knowledge, ADR, logs, config
 
 **Frontend (what's pretty):**
 - Software House UI — pixel-art office visualization
@@ -29,7 +28,41 @@ Two separate systems exist today:
 - Classic dashboard has features Software House doesn't (models, logs, settings)
 
 **The goal:**
-Delete classic dashboard. Make Software House the single frontend. Refactor backend so every function works in the new system. The concept: workers (agents) with task types doing things in projects.
+Delete classic dashboard. Make Software House the single frontend. Refactor backend so every function works in the new system. The concept: workers (employees) with task types doing things in projects.
+
+---
+
+## Naming: "Workers" (Not "Agents")
+
+**Problem:** The term "agents" conflicts with OpenClaw's built-in agent system.
+
+**Solution:** Rename to "workers" throughout the codebase.
+
+| Old Name | New Name |
+|----------|----------|
+| `agents` table | `workers` table |
+| `agent_id` column | `worker_id` column |
+| `Agent persona` | `Worker persona` |
+| `Agent CRUD` | `Worker CRUD` |
+| `Agent desk` | `Worker desk` |
+| `Agent sprites` | `Worker sprites` |
+| `Agent model` | `Worker model` |
+| `Agent prompt` | `Worker prompt` |
+| `Agent room` | `Worker room` |
+| `Agent status` | `Worker status` |
+| `Agent project` | `Worker project` |
+| `Agent context` | `Worker context` |
+| `Agent progress` | `Worker progress` |
+| `Hire modal` | `Hire modal` (keep) |
+| `Fire agent` | `Fire worker` |
+
+**Files to update:**
+- `docs/MERGER-PLAN.md` — All references
+- `docs/ARCHITECTURE.md` — All references
+- `src/db.ts` — V4 migration (table/column names)
+- `src/dashboard-handler.ts` — API endpoints
+- `src/index.ts` — Tool descriptions, comments
+- `dashboard/software-house.html` — UI labels
 
 ---
 
@@ -37,61 +70,61 @@ Delete classic dashboard. Make Software House the single frontend. Refactor back
 
 ### Core Concept: Workers in Projects
 
-The UI shows a concept of **workers** (agents with roles, models, sprites) doing **tasks** (backlog items with phases) in **projects** (with rooms, vault, chat).
-
-The backend needs to support this concept:
+The UI shows **workers** (employees with roles, models, sprites) doing **tasks** (backlog items with phases) in **projects** (with rooms, vault, chat).
 
 | UI Concept | Backend Table | Purpose |
 |------------|---------------|---------|
-| Agent persona | `agents` | Persistent identity (name, role, sprite, model, prompt, room) |
+| Worker persona | `workers` | Persistent identity (name, role, sprite, model, prompt, room) |
 | Room | `rooms` | Workspace grouping (purpose, task types) |
-| Task | `backlog_tasks` | Work item (phase, agent assignment, priority) |
+| Task | `backlog_tasks` | Work item (phase, worker assignment, priority) |
 | Vault | `vault_docs` | Document storage (path, content) |
 | PM Chat | `pm_chat` | Communication (messages, timestamps) |
-| Session | `sessions` | Ephemeral execution (agent + task + status + context) |
+| Session | `sessions` | Ephemeral execution (worker + task + status + context) |
 
-### Key Insight: Agents Are Personas, Sessions Are Ephemeral
+### Key Insight: Workers Are Personas, Sessions Are Ephemeral
 
-An agent (like "Alex - Backend Dev") is a persistent persona. It can have multiple sessions over time, each working on different tasks. The agent persona is persistent, but sessions are ephemeral.
+A worker is a persistent persona. It can have multiple sessions over time, each working on different tasks. The worker persona is persistent, but sessions are ephemeral.
 
 This maps cleanly to the orchestrator's existing model:
-- **Agent persona** = persistent configuration (name, role, model, prompt, room)
-- **Session** = ephemeral execution (agent + task + status + context)
-- **Task** = work item (backlog task with phase, agent assignment)
+- **Worker persona** = persistent configuration (name, role, model, prompt, room)
+- **Session** = ephemeral execution (worker + task + status + context)
+- **Task** = work item (backlog task with phase, worker assignment)
 
 ---
 
-## What Changes vs What Stays
+## What Stays vs What Changes
 
 ### What STAYS (all 44 tools work as-is)
 
-All existing tools remain unchanged. They operate on the existing data model:
+**ALL 44 TOOLS ARE STILL NEEDED.** After analyzing every tool, hook, API route, and DB table:
 
 | Category | Tools | Why They Stay |
 |----------|-------|---------------|
-| Session lifecycle | register, unregister, start_work, clear_work, log, status | Core functionality |
-| Project management | bind, join, create, list_active, sync_files, sync_docs, docs_list, docs_get, docs_update, rebuild_state, tidy_docs | Core functionality |
-| Backlog management | add, list, update, dispatch, dispatch_all | Core functionality |
-| Model management | list, check_routing, auto_discover, recommend | Core functionality |
-| Workflow | advance_phase, handoff_create | Core functionality |
-| QA gate | submit, approve, reject | Core functionality |
-| Tests | create_unit, create_e2e | Core functionality |
-| Pipeline | verify_start, check, guide | Core functionality |
-| Delegation | task_delegate, issue_debug, feature_design | Core functionality |
-| Knowledge | quiz | Core functionality |
-| Logs & diagnostics | logs_query, system_diagnose, config_show_routing | Core functionality |
-| ADR | adr_log | Core functionality |
+| Session lifecycle | register, unregister, start_work, clear_work, log, status, list | Core functionality — sessions are ephemeral executions |
+| Project management | bind, join, leave, create, list_active, sync_files, sync_docs, docs_list, docs_get, docs_update, rebuild_state, tidy_docs | Core functionality — projects are organizational units |
+| Backlog management | add, list, update, dispatch, dispatch_all | Core functionality — tasks are work items |
+| Model management | list, check_routing, auto_discover, recommend | Core functionality — models are execution engines |
+| Workflow | advance_phase, handoff_create | Core functionality — phases are process steps |
+| QA gate | submit, approve, reject | Core functionality — QA is quality control |
+| Tests | create_unit, create_e2e | Core functionality — tests are verification |
+| Pipeline | verify_start, check, guide | Core functionality — pipeline is automation |
+| Delegation | task_delegate, issue_debug, feature_design | Core functionality — subagents are parallel workers |
+| Knowledge | quiz | Core functionality — knowledge is learning |
+| Logs & diagnostics | logs_query, system_diagnose, config_show_routing | Core functionality — logs are history |
+| ADR | adr_log | Core functionality — ADR is documentation |
+
+**Why nothing is redundant:** The new system is an ADDITIONAL layer (workers) on top of the existing session/project/backlog model. Workers are UI personas; sessions are still the execution mechanism.
 
 ### What CHANGES (new tables, new API, UI wiring)
 
 | Change | What | Why |
 |--------|------|-----|
-| New table: `agents` | Persistent agent personas | UI needs to show agents with roles, sprites, models |
+| New table: `workers` | Persistent worker personas | UI needs to show workers with roles, sprites, models |
 | New table: `rooms` | Workspace groupings | UI needs to show rooms with purposes, task types |
 | New table: `vault_docs` | Document storage | UI needs to browse, edit, inject documents |
 | New table: `pm_chat` | Chat persistence | UI needs persistent PM chat |
-| Extend `sessions` | Add agent_id, context_used | Link sessions to agents, track context |
-| Extend `backlog_tasks` | Add agent_id | Assign tasks to agents |
+| Extend `sessions` | Add worker_id, context_used | Link sessions to workers, track context |
+| Extend `backlog_tasks` | Add worker_id | Assign tasks to workers |
 | New API endpoints | 18 endpoints for UI | Connect UI to backend |
 | Delete classic dashboard | Remove index.html | Software House is the single frontend |
 | Wire Software House | Replace mock data with real API | UI connects to backend |
@@ -104,7 +137,7 @@ All existing tools remain unchanged. They operate on the existing data model:
 
 ```sql
 -- New tables
-CREATE TABLE agents (
+CREATE TABLE workers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   role TEXT,
@@ -155,9 +188,9 @@ CREATE TABLE pm_chat (
 );
 
 -- Extended tables
-ALTER TABLE sessions ADD COLUMN agent_id TEXT;
+ALTER TABLE sessions ADD COLUMN worker_id TEXT;
 ALTER TABLE sessions ADD COLUMN context_used TEXT;
-ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
+ALTER TABLE backlog_tasks ADD COLUMN worker_id TEXT;
 ```
 
 ### API Endpoints (18 new)
@@ -165,10 +198,10 @@ ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/software-house/bootstrap` | GET | Full project state (replaces mock JSON) |
-| `/api/software-house/agents` | GET | List agents |
-| `/api/software-house/agents/hire` | POST | Create agent |
-| `/api/software-house/agents/:id` | PATCH | Edit agent |
-| `/api/software-house/agents/:id` | DELETE | Fire agent |
+| `/api/software-house/workers` | GET | List workers |
+| `/api/software-house/workers/hire` | POST | Create worker |
+| `/api/software-house/workers/:id` | PATCH | Edit worker |
+| `/api/software-house/workers/:id` | DELETE | Fire worker |
 | `/api/software-house/rooms` | GET | List rooms |
 | `/api/software-house/rooms` | POST | Add room |
 | `/api/software-house/rooms/:id` | PATCH | Edit room |
@@ -205,7 +238,7 @@ ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
           "x": 0, "y": 0, "w": 0, "h": 0
         }
       ],
-      "agents": [
+      "workers": [
         {
           "id": "pm",
           "name": "Project Manager",
@@ -226,7 +259,7 @@ ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
           "id": "t1",
           "title": "API Gateway",
           "desc": "API Gateway with rate limiting.",
-          "agent": "alex",
+          "worker": "alex",
           "phase": "in-progress",
           "pri": "P0",
           "type": "dev"
@@ -255,56 +288,51 @@ ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
 
 ### 1. Registration Flow
 ```
-Agent persona (agents table)
+Worker persona (workers table)
   → genorch_session_register (creates session)
   → genorch_project_bind (loads project docs)
   → genorch_session_start_work (begins work)
 ```
-
-**UI shows:** Agent desk with status "working", task assigned, progress bar.
+**UI shows:** Worker desk with status "working", task assigned, progress bar.
 
 ### 2. Project Management
 ```
 genorch_project_create (creates project)
   → Add rooms (rooms table)
-  → Add agents (agents table)
+  → Add workers (workers table)
   → Manage vault (vault_docs table)
 ```
-
-**UI shows:** Project switcher, rooms with agents, vault tree.
+**UI shows:** Project switcher, rooms with workers, vault tree.
 
 ### 3. Task Management
 ```
 genorch_backlog_add (creates task)
-  → Assign to agent (backlog_tasks.agent_id)
+  → Assign to worker (backlog_tasks.worker_id)
   → Move through phases (backlog_tasks.phase)
   → Dispatch to session (genorch_backlog_dispatch)
 ```
-
-**UI shows:** Kanban board with tasks, drag to move phases, assign agents.
+**UI shows:** Kanban board with tasks, drag to move phases, assign workers.
 
 ### 4. Context Injection
 ```
 Vault documents (vault_docs table)
   → before_prompt_build hook
   → Inject per task, per project
-  → Agent receives proper context
+  → Worker receives proper context
 ```
-
 **UI shows:** Vault tree, inject button, documents linked to tasks.
 
 ### 5. Session Management
 ```
 Sessions (sessions table)
-  → Track agent_id, progress, context_used
+  → Track worker_id, progress, context_used
   → Map status to visual states:
     - idle → sleep
     - running → working
     - done → success
     - failed → error
 ```
-
-**UI shows:** Agent desks with visual states, progress bars, context usage.
+**UI shows:** Worker desks with visual states, progress bars, context usage.
 
 ### 6. Logging Work
 ```
@@ -312,7 +340,6 @@ genorch_session_log (logs completed session)
   → genorch_adr_log (generates ADR)
   → Store in vault_docs
 ```
-
 **UI shows:** Completed tasks in kanban, ADRs in vault.
 
 ### 7. Q&A Gate
@@ -322,17 +349,15 @@ genorch_qa_submit (submits for review)
   → Iterate if rejected
   → Advance to next phase if approved
 ```
-
 **UI shows:** QA badge on task cards, approve/reject buttons.
 
 ### 8. Model Selection
 ```
 genorch_models_recommend (recommends model)
   → Route based on task type
-  → Assign to agent (agents.model)
+  → Assign to worker (workers.model)
 ```
-
-**UI shows:** Agent model display, routing config in settings.
+**UI shows:** Worker model display, routing config in settings.
 
 ### 9. Subagent Spawning
 ```
@@ -340,8 +365,7 @@ genorch_task_delegate (delegates task)
   → Spawns subagent session
   → Tracks in live_agents
 ```
-
-**UI shows:** Agent status changes, subagent appears in agents list.
+**UI shows:** Worker status changes, subagent appears in workers list.
 
 ### 10. Workflow Enforcement
 ```
@@ -350,7 +374,6 @@ genorch_workflow_advance_phase (advances phase)
   → Blocks work→log until QA approves
   → Blocks log→finish until handoff created
 ```
-
 **UI shows:** Workflow phase indicator, QA status on tasks.
 
 ---
@@ -362,12 +385,12 @@ genorch_workflow_advance_phase (advances phase)
 
 | Task | File | Change |
 |------|------|--------|
-| Create `agents` table | `src/db.ts` | V4 migration |
+| Create `workers` table | `src/db.ts` | V4 migration |
 | Create `rooms` table | `src/db.ts` | V4 migration |
 | Create `vault_docs` table | `src/db.ts` | V4 migration |
 | Create `pm_chat` table | `src/db.ts` | V4 migration |
-| Extend `sessions` | `src/db.ts` | Add agent_id, context_used |
-| Extend `backlog_tasks` | `src/db.ts` | Add agent_id |
+| Extend `sessions` | `src/db.ts` | Add worker_id, context_used |
+| Extend `backlog_tasks` | `src/db.ts` | Add worker_id |
 
 ### Phase 2: Bootstrap API
 **Goal:** Backend serves full project state.
@@ -375,17 +398,17 @@ genorch_workflow_advance_phase (advances phase)
 | Task | File | Change |
 |------|------|--------|
 | Create bootstrap endpoint | `src/dashboard-handler.ts` | `GET /api/software-house/bootstrap` |
-| Query agents, rooms, tasks, vault | `src/dashboard-handler.ts` | Join across tables |
+| Query workers, rooms, tasks, vault | `src/dashboard-handler.ts` | Join across tables |
 | Match mock JSON shape exactly | `src/dashboard-handler.ts` | Field-by-field mapping |
 
-### Phase 3: Agent CRUD
-**Goal:** Hire, edit, fire agents via UI.
+### Phase 3: Worker CRUD
+**Goal:** Hire, edit, fire workers via UI.
 
 | Task | File | Change |
 |------|------|--------|
-| Create hire endpoint | `src/dashboard-handler.ts` | `POST /api/software-house/agents/hire` |
-| Create edit endpoint | `src/dashboard-handler.ts` | `PATCH /api/software-house/agents/:id` |
-| Create fire endpoint | `src/dashboard-handler.ts` | `DELETE /api/software-house/agents/:id` |
+| Create hire endpoint | `src/dashboard-handler.ts` | `POST /api/software-house/workers/hire` |
+| Create edit endpoint | `src/dashboard-handler.ts` | `PATCH /api/software-house/workers/:id` |
+| Create fire endpoint | `src/dashboard-handler.ts` | `DELETE /api/software-house/workers/:id` |
 | Wire UI buttons | `dashboard/software-house.html` | Replace mock functions |
 
 ### Phase 4: Room CRUD
@@ -481,7 +504,7 @@ genorch_workflow_advance_phase (advances phase)
 | Risk | Mitigation |
 |------|------------|
 | Bootstrap API shape mismatch | Match mock JSON field-by-field, test with UI |
-| Session-agent linking breaks | Test registration flow end-to-end |
+| Session-worker linking breaks | Test registration flow end-to-end |
 | Vault injection fails | Test `before_prompt_build` hook |
 | Kanban phase/status desync | Sync columns in move endpoint |
 | Classic dashboard removal breaks operator access | Software House includes all operator features |

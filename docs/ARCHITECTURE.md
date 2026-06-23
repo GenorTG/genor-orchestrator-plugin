@@ -1,7 +1,7 @@
 # Architecture: Software House × Orchestrator Merger
 
 > **Last Updated:** 2026-06-23
-> **Purpose:** The orchestrator plugin manages AI agent sessions for software projects. The Software House UI is the single frontend. Every backend function must make sense in the new system.
+> **Purpose:** The orchestrator plugin manages AI worker sessions for software projects. The Software House UI is the single frontend. Every backend function must make sense in the new system.
 
 ---
 
@@ -31,20 +31,37 @@ Two separate systems exist today:
 
 ### Core Concept: Workers in Projects
 
-The UI shows **workers** (agents with roles, models, sprites) doing **tasks** (backlog items with phases) in **projects** (with rooms, vault, chat).
+The UI shows **workers** (employees with roles, models, sprites) doing **tasks** (backlog items with phases) in **projects** (with rooms, vault, chat).
 
 | UI Concept | Backend Table | Purpose |
 |------------|---------------|---------|
-| Agent persona | `agents` | Persistent identity (name, role, sprite, model, prompt, room) |
+| Worker persona | `workers` | Persistent identity (name, role, sprite, model, prompt, room) |
 | Room | `rooms` | Workspace grouping (purpose, task types) |
-| Task | `backlog_tasks` | Work item (phase, agent assignment, priority) |
+| Task | `backlog_tasks` | Work item (phase, worker assignment, priority) |
 | Vault | `vault_docs` | Document storage (path, content) |
 | PM Chat | `pm_chat` | Communication (messages, timestamps) |
-| Session | `sessions` | Ephemeral execution (agent + task + status + context) |
+| Session | `sessions` | Ephemeral execution (worker + task + status + context) |
 
-### Key Insight: Agents Are Personas, Sessions Are Ephemeral
+### Key Insight: Workers Are Personas, Sessions Are Ephemeral
 
-An agent is a persistent persona. It can have multiple sessions over time, each working on different tasks. The agent persona is persistent, but sessions are ephemeral.
+A worker is a persistent persona. It can have multiple sessions over time, each working on different tasks. The worker persona is persistent, but sessions are ephemeral.
+
+---
+
+## Naming: "Workers" (Not "Agents")
+
+**Problem:** The term "agents" conflicts with OpenClaw's built-in agent system.
+
+**Solution:** Rename to "workers" throughout the codebase.
+
+| Old Name | New Name |
+|----------|----------|
+| `agents` table | `workers` table |
+| `agent_id` column | `worker_id` column |
+| `Agent persona` | `Worker persona` |
+| `Agent CRUD` | `Worker CRUD` |
+| `Agent desk` | `Worker desk` |
+| `Agent sprites` | `Worker sprites` |
 
 ---
 
@@ -53,7 +70,7 @@ An agent is a persistent persona. It can have multiple sessions over time, each 
 ### New Tables
 
 ```sql
-CREATE TABLE agents (
+CREATE TABLE workers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   role TEXT,
@@ -107,9 +124,9 @@ CREATE TABLE pm_chat (
 ### Extended Tables
 
 ```sql
-ALTER TABLE sessions ADD COLUMN agent_id TEXT;
+ALTER TABLE sessions ADD COLUMN worker_id TEXT;
 ALTER TABLE sessions ADD COLUMN context_used TEXT;
-ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
+ALTER TABLE backlog_tasks ADD COLUMN worker_id TEXT;
 ```
 
 ---
@@ -122,14 +139,14 @@ ALTER TABLE backlog_tasks ADD COLUMN agent_id TEXT;
 
 Returns full project state matching mock JSON shape exactly.
 
-### Agent CRUD
+### Worker CRUD
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/software-house/agents` | GET | List agents |
-| `/api/software-house/agents/hire` | POST | Create agent |
-| `/api/software-house/agents/:id` | PATCH | Edit agent |
-| `/api/software-house/agents/:id` | DELETE | Fire agent |
+| `/api/software-house/workers` | GET | List workers |
+| `/api/software-house/workers/hire` | POST | Create worker |
+| `/api/software-house/workers/:id` | PATCH | Edit worker |
+| `/api/software-house/workers/:id` | DELETE | Fire worker |
 
 ### Room CRUD
 
@@ -170,51 +187,51 @@ Returns full project state matching mock JSON shape exactly.
 
 ### Registration Flow
 ```
-Agent persona (agents table)
+Worker persona (workers table)
   → genorch_session_register (creates session)
   → genorch_project_bind (loads project docs)
   → genorch_session_start_work (begins work)
 ```
-**UI shows:** Agent desk with status "working", task assigned, progress bar.
+**UI shows:** Worker desk with status "working", task assigned, progress bar.
 
 ### Project Management
 ```
 genorch_project_create (creates project)
   → Add rooms (rooms table)
-  → Add agents (agents table)
+  → Add workers (workers table)
   → Manage vault (vault_docs table)
 ```
-**UI shows:** Project switcher, rooms with agents, vault tree.
+**UI shows:** Project switcher, rooms with workers, vault tree.
 
 ### Task Management
 ```
 genorch_backlog_add (creates task)
-  → Assign to agent (backlog_tasks.agent_id)
+  → Assign to worker (backlog_tasks.worker_id)
   → Move through phases (backlog_tasks.phase)
   → Dispatch to session (genorch_backlog_dispatch)
 ```
-**UI shows:** Kanban board with tasks, drag to move phases, assign agents.
+**UI shows:** Kanban board with tasks, drag to move phases, assign workers.
 
 ### Context Injection
 ```
 Vault documents (vault_docs table)
   → before_prompt_build hook
   → Inject per task, per project
-  → Agent receives proper context
+  → Worker receives proper context
 ```
 **UI shows:** Vault tree, inject button, documents linked to tasks.
 
 ### Session Management
 ```
 Sessions (sessions table)
-  → Track agent_id, progress, context_used
+  → Track worker_id, progress, context_used
   → Map status to visual states:
     - idle → sleep
     - running → working
     - done → success
     - failed → error
 ```
-**UI shows:** Agent desks with visual states, progress bars, context usage.
+**UI shows:** Worker desks with visual states, progress bars, context usage.
 
 ### Logging Work
 ```
@@ -237,9 +254,9 @@ genorch_qa_submit (submits for review)
 ```
 genorch_models_recommend (recommends model)
   → Route based on task type
-  → Assign to agent (agents.model)
+  → Assign to worker (workers.model)
 ```
-**UI shows:** Agent model display, routing config in settings.
+**UI shows:** Worker model display, routing config in settings.
 
 ### Subagent Spawning
 ```
@@ -247,7 +264,7 @@ genorch_task_delegate (delegates task)
   → Spawns subagent session
   → Tracks in live_agents
 ```
-**UI shows:** Agent status changes, subagent appears in agents list.
+**UI shows:** Worker status changes, subagent appears in workers list.
 
 ### Workflow Enforcement
 ```
@@ -266,7 +283,7 @@ genorch_workflow_advance_phase (advances phase)
 |-------|------|-----------|
 | 1 | Database schema | 4 new tables + 2 extended |
 | 2 | Bootstrap API | Serve full project state |
-| 3 | Agent CRUD | Hire, edit, fire via UI |
+| 3 | Worker CRUD | Hire, edit, fire via UI |
 | 4 | Room CRUD | Add, edit, delete rooms |
 | 5 | Kanban integration | Real task management |
 | 6 | PM chat & quick actions | Persistent chat |
