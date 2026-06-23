@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Genor Orchestrator — Software House (UI Proposal)</title>
+<title>Genor Orchestrator — Software House</title>
 <style>
 :root {
   --bg:#0a0e14; --bg-floor:#11161d; --bg-desk:#1a1f2b; --bg-panel:#131820;
@@ -333,12 +333,12 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 
 .toast{position:fixed;top:64px;right:16px;background:var(--green);color:#000;padding:10px 16px;border-radius:var(--radius);font-size:12px;font-weight:700;z-index:400;display:none}
 
-.proposal-banner{height:36px;background:linear-gradient(90deg,rgba(167,139,250,.15),rgba(94,156,255,.1));border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;font-size:12px;color:var(--text-dim);flex-shrink:0;z-index:25}
-.proposal-banner strong{color:var(--purple);font-weight:700}
-.proposal-banner a{color:var(--accent);text-decoration:none;font-weight:600}
-.proposal-banner a:hover{text-decoration:underline}
-.proposal-banner .proposal-pill{font-size:10px;padding:2px 8px;border-radius:10px;background:var(--purple);color:#fff;font-weight:700}
-.shell-proposal{height:calc(100% - var(--header-h) - 36px)}
+.status-bar{height:36px;background:linear-gradient(90deg,rgba(167,139,250,.15),rgba(94,156,255,.1));border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;font-size:12px;color:var(--text-dim);flex-shrink:0;z-index:25}
+.status-bar strong{color:var(--purple);font-weight:700}
+.status-bar a{color:var(--accent);text-decoration:none;font-weight:600}
+.status-bar a:hover{text-decoration:underline}
+.status-bar .status-pill{font-size:10px;padding:2px 8px;border-radius:10px;background:var(--accent);color:#fff;font-weight:700}
+.shell{height:calc(100% - var(--header-h) - 36px)}
 </style>
 </head>
 <body>
@@ -350,7 +350,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
     <span class="proj-name" id="projectName">GenorBoard v2</span>
     <span class="proj-id" id="projectId">genor-orchestrator-plugin</span>
   </div>
-  <span class="badge">UI PROPOSAL</span>
+  <span class="badge">LIVE</span>
   <div class="sep"></div>
   <div class="hdr-right">
     <div class="font-ctrl" title="Rozmiar czcionki">
@@ -359,18 +359,17 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       <button onclick="changeFontScale(1)" aria-label="Większa czcionka">A+</button>
     </div>
     <div class="pulse"></div><span style="font-size:11px;color:var(--green)">Online</span>
-    <button class="btn" style="font-size:11px" onclick="location.href='/orchestrator/'">← Klasyczny dashboard</button>
+    <button class="btn" style="font-size:11px" onclick="location.href='/orchestrator/'">🏠 Dashboard</button>
     <button class="btn primary" onclick="orchPlan()">📋 Plan</button>
   </div>
 </header>
 
-<div class="proposal-banner">
-  <span class="proposal-pill">PREVIEW</span>
-  <span><strong>Software House UI</strong> — propozycja nowego interfejsu (frontend-only, dane z mock JSON). Obecny dashboard bez zmian.</span>
-  <a href="/orchestrator/" style="margin-left:auto">← Wróć do GenoBoard</a>
+<div class="status-bar">
+  <span class="status-pill">ACTIVE</span>
+  <span><strong>Software House</strong> — aktywny dashboard</span>
 </div>
 
-<div class="shell shell-proposal">
+<div class="shell">
   <nav class="sidebar">
     <button class="nav-btn active" id="navOffice" onclick="setMainView('office',this)">🏢</button>
     <button class="nav-btn" id="navKanban" onclick="setMainView('kanban',this)">📊</button>
@@ -479,7 +478,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
           <div class="path" id="vaultDocPath">/STATE.md</div>
         </div>
         <div class="vault-actions">
-          <button class="btn" style="font-size:11px" onclick="toast('Sync z orchestratorem — mockup')">🔄 Sync</button>
+          <button class="btn" style="font-size:11px" onclick="saveLayoutToAPI()">🔄 Sync</button>
           <button class="btn" style="font-size:11px" onclick="setMainView('office')">← Biuro</button>
         </div>
       </div>
@@ -493,7 +492,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       <h2 style="color:var(--text-bright)">⚙️ Ustawienia</h2>
       <button class="btn" style="margin-left:auto" onclick="setMainView('office',document.getElementById('navOffice'))">← Wróć do biura</button>
     </div>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:20px">Mockup — konfiguracja projektu, domyślne modele, pokoje.</p>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:20px">Konfiguracja projektu, domyślne modele, pokoje.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:640px">
       <div style="padding:14px;background:var(--bg-panel);border:1px solid var(--border);border-radius:10px">
         <strong style="font-size:11px;color:var(--text-bright)">Edycja pokoi</strong>
@@ -655,7 +654,7 @@ const MIN_ROOM_H = DESK_H + ROOM_PAD_Y + 56;
 
 function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
-async function loadMockData() {
+async function loadData() {
   try {
     const res = await fetch(BOOTSTRAP_URL + '?project=' + currentProjectId);
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1660,7 +1659,7 @@ function applyFontScale() {
   const scale = FONT_SCALES[fontScaleIdx];
   document.documentElement.style.setProperty('--fs-scale', scale);
   document.getElementById('fontScaleLabel').textContent = Math.round(scale * 100) + '%';
-  try { localStorage.setItem('mockup-fs-scale', fontScaleIdx); } catch (_) {}
+  try { localStorage.setItem('sh-fs-scale', fontScaleIdx); } catch (_) {}
 }
 function changeFontScale(delta) {
   fontScaleIdx = Math.max(0, Math.min(FONT_SCALES.length - 1, fontScaleIdx + delta));
@@ -1888,7 +1887,7 @@ async function loadChatHistory() {
 
 // INIT
 try {
-  const saved = localStorage.getItem('mockup-fs-scale');
+  const saved = localStorage.getItem('sh-fs-scale');
   if (saved !== null) fontScaleIdx = Math.max(0, Math.min(FONT_SCALES.length - 1, parseInt(saved, 10)));
 } catch (_) {}
 applyFontScale();
@@ -1899,7 +1898,7 @@ document.addEventListener('click', e => {
 });
 window.addEventListener('resize', () => { if (pmBubbleOpen) positionPmBubble(); });
 initProjectSelect();
-loadMockData().then(() => loadChatHistory());
+loadData().then(() => loadChatHistory());
 applyTransform();
 </script>
 </body>
