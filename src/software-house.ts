@@ -594,8 +594,22 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
       await handleBacklogGet(req, res);
       return true;
     }
-    if (normalizedPathname === "/api/software-house/backlog/move" && method === "POST") {
-      await handleBacklogMove(req, res);
+    // Backlog assign
+    if (normalizedPathname === "/api/software-house/backlog/assign" && method === "POST") {
+      const db = getDb();
+      const body = await parseBody(req);
+      const { taskId, workerId } = body;
+      
+      if (!taskId || !workerId) {
+        json(res, { error: "taskId and workerId required" }, 400);
+        return true;
+      }
+      
+      db.prepare("UPDATE backlog_tasks SET worker_id = ? WHERE id = ?").run(workerId, taskId);
+      db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(workerId);
+      db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)").run(workerId, taskId, JSON.stringify({ assignedAt: new Date().toISOString() }));
+      
+      json(res, { ok: true, taskId, workerId });
       return true;
     }
 
