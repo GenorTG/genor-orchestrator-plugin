@@ -1374,6 +1374,7 @@ function renderTaskPanel(id) {
     <div class="task-desc">${t.desc}</div>
     ${ag ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openAgentPanel('${ag.id}')">👤 ${ag.name}</button>` : ''}
     ${targetRoom ? `<button class="btn" style="width:100%;margin-top:8px" onclick="openRoomPanel('${targetRoom.id}')">🏢 Pokój: ${targetRoom.name}</button>` : ''}`;
+    ${ag ? `<button class="btn primary" style="width:100%;margin-top:12px" onclick="startTaskExecution('${t.id}', '${ag.id}')">▶️ Rozpocznij zadanie</button>` : `<button class="btn" style="width:100%;margin-top:12px" onclick="assignAndStartTask('${t.id}')">👤 Przypisz i rozpocznij</button>`}
 
   document.getElementById('detailFoot').innerHTML = `
     ${t.phase !== 'done' ? `<button class="btn primary" onclick="moveTask('${t.id}')">→ Następna faza</button>` : '<button class="btn" onclick="closeDetailPanel()">Zamknij</button>'}`;
@@ -1401,6 +1402,55 @@ function moveTask(taskId) {
       toast(`✅ Task przesunięty do: ${nextPhase}`);
     } else {
       toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
+}
+
+function startTaskExecution(taskId, workerId) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t) return;
+  
+  toast(`🤖 Rozpoczynam zadanie: ${t.title}`);
+  
+  // Call worker_start tool
+  fetch(`/orchestrator/api/software-house/worker/start`, {
+    method: POST,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workerId, taskId: parseInt(taskId) })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      toast(`✅ Zadanie wykonane: ${t.title}`);
+      // Refresh tasks
+      loadData();
+    } else {
+      toast(`❌ Błąd: ${data.error || 'Unknown error'}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
+}
+
+function assignAndStartTask(taskId) {
+  // Find first available worker
+  const availableWorker = agents.find(a => !a.isOrchestrator && a.status !== 'error');
+  if (!availableWorker) {
+    toast('❌ Brak dostępnych programistów');
+    return;
+  }
+  
+  // First assign the task
+  fetch(`/orchestrator/api/software-house/backlog/assign?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId, workerId: availableWorker.id })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      // Then start execution
+      startTaskExecution(taskId, availableWorker.id);
+    } else {
+      toast(`❌ Błąd przypisania: ${data.error}`);
     }
   }).catch(err => {
     toast(`❌ Błąd sieci: ${err.message}`);
