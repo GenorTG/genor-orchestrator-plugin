@@ -2,7 +2,7 @@
   "id": "genor-orchestrator-software-house",
   "name": "Genor Orchestrator Software House",
   "description": "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "configSchema": {
     "type": "object",
     "properties": {
