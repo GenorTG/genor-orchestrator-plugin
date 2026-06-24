@@ -2619,12 +2619,12 @@ const _staticToolNames: string[] = [
 ];
 let _toolCount = 0;
 
-const PLUGIN_ID = "genorch";
+const PLUGIN_ID = "genor-orchestrator-software-house";
 
 const _plugin: Record<string, any> = definePluginEntry({
   id: PLUGIN_ID,
-  name: "Genorch",
-  description: "Model routing, session tracking, project management, dashboard, hooks, and context injection. Plugin-driven: orchestrator drives the workflow, LLM focuses on thinking.",
+  name: "Genor Orchestrator Software House",
+  description: "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration. Requires OpenAI HTTP API endpoints enabled in OpenClaw config.",
   register(api) {
     const cfg = api.pluginConfig as Record<string, any> || {};
     const dataDir = getDataDir(cfg.orchestratorDataDir as string | undefined);
@@ -2644,6 +2644,85 @@ const _plugin: Record<string, any> = definePluginEntry({
         logger.info("boot", `Created dir: ${sub}`);
       }
     }
+
+    // ═══════════════════════════════════════════════════════════
+    //  OPENAI ENDPOINT DETECTION & GATEWAY TOKEN ACCESS
+    // ═══════════════════════════════════════════════════════════
+    // Check if OpenAI HTTP API endpoint is enabled
+    // Plugin requires this for worker session execution
+    let gatewayToken: string | null = null;
+    let openaiEndpointEnabled = false;
+
+    // Try to detect if OpenAI endpoint is enabled (non-blocking)
+    const gatewayUrl = "http://localhost:18789";
+    fetch(`${gatewayUrl}/v1/models`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then((healthResponse) => {
+        if (healthResponse.ok) {
+          openaiEndpointEnabled = true;
+          logger.info("boot", "✅ OpenAI HTTP API endpoint detected");
+        } else {
+          logger.warn("boot", "⚠️  OpenAI HTTP API endpoint not responding");
+        }
+      })
+      .catch(() => {
+        logger.warn("boot", "⚠️  Could not detect OpenAI HTTP API endpoint");
+      });
+
+    // Get gateway token from environment (never copy to files)
+    try {
+      if (process.env.OPENCLAW_GATEWAY_TOKEN) {
+        gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+        logger.info("boot", "✅ Gateway token loaded from environment");
+      } else if (process.env.OPENCLAW_GATEWAY_PASSWORD) {
+        gatewayToken = process.env.OPENCLAW_GATEWAY_PASSWORD;
+        logger.info("boot", "✅ Gateway password loaded from environment");
+      } else {
+        logger.warn("boot", "⚠️  Gateway token not found in environment");
+        logger.warn("boot", "   Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD");
+      }
+    } catch (e: any) {
+      logger.warn("boot", `Gateway token access error: ${e.message}`);
+    }
+
+    // Log warnings if requirements not met
+    if (!openaiEndpointEnabled) {
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "⚠️  SOFTWARE HOUSE PLUGIN REQUIRES OPENAI ENDPOINTS");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "Enable in openclaw.json:");
+      logger.error("boot", "");
+      logger.error("boot", '{');
+      logger.error("boot", '  "gateway": {');
+      logger.error("boot", '    "http": {');
+      logger.error("boot", '      "endpoints": {');
+      logger.error("boot", '        "chatCompletions": { "enabled": true }');
+      logger.error("boot", '      }');
+      logger.error("boot", '    }');
+      logger.error("boot", '  }');
+      logger.error("boot", '}');
+      logger.error("boot", "");
+      logger.error("boot", "Then restart OpenClaw gateway.");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+    }
+
+    if (!gatewayToken) {
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "⚠️  GATEWAY TOKEN NOT FOUND");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "Worker execution requires gateway token.");
+      logger.error("boot", "Set OPENCLAW_GATEWAY_TOKEN environment variable.");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+    }
+
+    // Store for later use by worker engine
+    (global as any).__SOFTWARE_HOUSE_CONFIG__ = {
+      gatewayToken,
+      openaiEndpointEnabled,
+      gatewayUrl: "http://localhost:18789",
+    };
 
     // ═══════════════════════════════════════════════════════════
     //  BOOT MODEL SYNC

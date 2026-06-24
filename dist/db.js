@@ -18,11 +18,13 @@ import { getDataDir } from "./shared.js";
 // ── VALID COLUMNS (SQL injection prevention for dynamic update functions) ──
 const SESSION_COLUMNS = new Set([
     "project", "agent", "model", "tags", "status", "task",
-    "start_ts", "end_ts", "duration", "session_key", "extra", "logged_at"
+    "start_ts", "end_ts", "duration", "session_key", "extra", "logged_at",
+    "worker_id", "context_used"
 ]);
 const BACKLOG_COLUMNS = new Set([
     "project", "title", "description", "priority", "status",
-    "labels", "depends_on", "assigned_to", "session_refs", "created_ts", "updated_ts"
+    "labels", "depends_on", "assigned_to", "session_refs", "created_ts", "updated_ts",
+    "worker_id"
 ]);
 // ── SINGLETON ──────────────────────────────────────────────────
 let _db = null;
@@ -198,6 +200,61 @@ CREATE TABLE IF NOT EXISTS verification_runs (
 CREATE INDEX IF NOT EXISTS idx_verification_project ON verification_runs(project);
 CREATE INDEX IF NOT EXISTS idx_verification_phase ON verification_runs(phase);
 
+-- Software House tables (v4)
+CREATE TABLE IF NOT EXISTS workers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT '',
+    sprite TEXT DEFAULT 'blue',
+    model TEXT DEFAULT '',
+    prompt TEXT DEFAULT '',
+    room TEXT DEFAULT '',
+    status TEXT DEFAULT 'sleep',
+    project TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS rooms (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    purpose TEXT DEFAULT '',
+    taskTypes TEXT DEFAULT '[]',
+    project TEXT DEFAULT '',
+    x INTEGER DEFAULT 0,
+    y INTEGER DEFAULT 0,
+    w INTEGER DEFAULT 0,
+    h INTEGER DEFAULT 0,
+    isCommand INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS vault_docs (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    content TEXT DEFAULT '',
+    project TEXT DEFAULT '',
+    folder TEXT DEFAULT '',
+    icon TEXT DEFAULT '📄',
+    title TEXT DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    status TEXT DEFAULT '',
+    links TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS pm_chat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message TEXT NOT NULL,
+    sender TEXT DEFAULT '',
+    project TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workers_project ON workers(project);
+CREATE INDEX IF NOT EXISTS idx_workers_room ON workers(room);
+CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
+CREATE INDEX IF NOT EXISTS idx_rooms_project ON rooms(project);
+CREATE INDEX IF NOT EXISTS idx_vault_project ON vault_docs(project);
+CREATE INDEX IF NOT EXISTS idx_vault_path ON vault_docs(path);
+CREATE INDEX IF NOT EXISTS idx_pm_chat_project ON pm_chat(project);
+
 `;
 /** Get current schema version from DB, or 0 if not yet tracked. */
 function getSchemaVersion() {
@@ -312,6 +369,96 @@ const MIGRATIONS = [
             catch { /* column may already exist — idempotent */ }
             const now = Math.floor(Date.now() / 1000);
             db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(3, "Add guidance column to verification_runs", now);
+        },
+    },
+    {
+        version: 4,
+        name: "Add Software House tables (workers, rooms, vault_docs, pm_chat)",
+        apply: () => {
+            const db = getDb();
+            // ── Workers table (persistent worker personas) ──
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS workers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          role TEXT DEFAULT '',
+          sprite TEXT DEFAULT 'blue',
+          model TEXT DEFAULT '',
+          prompt TEXT DEFAULT '',
+          room TEXT DEFAULT '',
+          status TEXT DEFAULT 'sleep',
+          project TEXT DEFAULT '',
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+            // ── Rooms table (workspace groupings) ──
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS rooms (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          purpose TEXT DEFAULT '',
+          taskTypes TEXT DEFAULT '[]',
+          project TEXT DEFAULT '',
+          x INTEGER DEFAULT 0,
+          y INTEGER DEFAULT 0,
+          w INTEGER DEFAULT 0,
+          h INTEGER DEFAULT 0,
+          isCommand INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+            // ── Vault docs table (document storage) ──
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS vault_docs (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          content TEXT DEFAULT '',
+          project TEXT DEFAULT '',
+          folder TEXT DEFAULT '',
+          icon TEXT DEFAULT '📄',
+          title TEXT DEFAULT '',
+          tags TEXT DEFAULT '[]',
+          status TEXT DEFAULT '',
+          links TEXT DEFAULT '[]',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+            // ── PM Chat table (persistent chat messages) ──
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS pm_chat (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message TEXT NOT NULL,
+          sender TEXT DEFAULT '',
+          project TEXT DEFAULT '',
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+            // ── Extend sessions table with worker_id and context_used ──
+            try {
+                db.exec("ALTER TABLE sessions ADD COLUMN worker_id TEXT DEFAULT ''");
+            }
+            catch { /* column may already exist */ }
+            try {
+                db.exec("ALTER TABLE sessions ADD COLUMN context_used TEXT DEFAULT ''");
+            }
+            catch { /* column may already exist */ }
+            // ── Extend backlog_tasks table with worker_id ──
+            try {
+                db.exec("ALTER TABLE backlog_tasks ADD COLUMN worker_id TEXT DEFAULT ''");
+            }
+            catch { /* column may already exist */ }
+            // ── Indexes for new tables ──
+            db.exec("CREATE INDEX IF NOT EXISTS idx_workers_project ON workers(project)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_workers_room ON workers(room)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_rooms_project ON rooms(project)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_vault_project ON vault_docs(project)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_vault_path ON vault_docs(path)");
+            db.exec("CREATE INDEX IF NOT EXISTS idx_pm_chat_project ON pm_chat(project)");
+            // ── Record this migration ──
+            const now = Math.floor(Date.now() / 1000);
+            db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(4, "Add Software House tables (workers, rooms, vault_docs, pm_chat)", now);
         },
     },
 ];

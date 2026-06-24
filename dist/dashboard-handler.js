@@ -13,12 +13,12 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { getDataDir } from "./shared.js";
 import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, countSessions, listBacklogTasks, getBacklogTask, updateBacklogTask, deleteBacklogTask, listModels, getModel, updateModel, getLiveAgents, getLiveSessions, addPendingRegistration, getLogs, addLog } from "./db.js";
+import { handleSoftwareHouseRoute } from "./software-house.js";
 // ── RESOLVE PLUGIN ROOT ──────────────────────────────────────
 // Match the resolution in src/index.ts so dashboard relative paths work
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
-const HTML_PATH = path.join(PLUGIN_ROOT, "dashboard", "index.html");
 // ── MIME TYPES ────────────────────────────────────────────────
 const MIME = {
     ".html": "text/html;charset=utf-8",
@@ -1051,9 +1051,10 @@ export function createDashboardHandler(api) {
                         return true;
                     }
                 }
-                // Dashboard main page
+                // Dashboard main page — redirect to Software House
                 if (pathname === "/" || pathname === "/index.html") {
-                    sendFile(res, HTML_PATH);
+                    res.writeHead(302, { Location: "/orchestrator/software-house" });
+                    res.end();
                     return true;
                 }
                 // Other static HTML files in dashboard dir
@@ -1066,6 +1067,9 @@ export function createDashboardHandler(api) {
                 }
             }
             // ── API ROUTES ──
+            // Software House routes (must be checked first)
+            if (await handleSoftwareHouseRoute(req, res))
+                return true;
             if (method === "GET") {
                 switch (pathname) {
                     case "/api/status":

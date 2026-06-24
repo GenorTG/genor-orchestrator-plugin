@@ -1,8 +1,8 @@
 {
-  "id": "genorch",
-  "name": "Genor's Orchestrator",
-  "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
-  "version": "0.9.4",
+  "id": "genor-orchestrator-software-house",
+  "name": "Genor Orchestrator Software House",
+  "description": "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration",
+  "version": "1.0.0",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -25,6 +25,18 @@
       "maintenanceIntervalMs": {
         "type": "number",
         "description": "Background maintenance interval in ms. (default: 1800000 = 30min)"
+      },
+      "maxConcurrentWorkers": {
+        "type": "number",
+        "description": "Maximum concurrent worker sessions (default: 3)"
+      },
+      "taskTimeout": {
+        "type": "number",
+        "description": "Task timeout in milliseconds (default: 1800000 = 30min)"
+      },
+      "recoveryInterval": {
+        "type": "number",
+        "description": "Recovery check interval in milliseconds (default: 60000 = 1min)"
       }
     }
   },
@@ -80,7 +92,13 @@
       "genorch_session_unregister",
       "genorch_verify_pipeline_check",
       "genorch_verify_pipeline_guide",
-      "genorch_verify_pipeline_start"
+      "genorch_verify_pipeline_start",
+      "genorch_worker_assign",
+      "genorch_worker_status",
+      "genorch_worker_message",
+      "genorch_worker_sessions",
+      "genorch_worker_health",
+      "genorch_worker_recover"
     ]
   }
 }
