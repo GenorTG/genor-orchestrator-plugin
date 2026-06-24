@@ -126,7 +126,7 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
     },
   };
 
-  json(res, response);
+  json(res, { ok: true, ...response });
 }
 
 // ── WORKERS ──────────────────────────────────────────────────
