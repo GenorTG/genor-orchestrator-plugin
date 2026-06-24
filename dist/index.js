@@ -3,6 +3,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { WORKER_TOOLS } from "./worker-tools.js";
 import * as os from "node:os";
 import { execSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
@@ -6069,6 +6070,19 @@ Focus specifically on: ${params.topic}` : "";
         // Count actual registered tools from metadata
         const toolCount = _collectedToolMeta.length;
         logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${toolCount} tools, 5 slash commands`);
+        // ═══════════════════════════════════════════════════════════
+        //  WORKER TOOLS — Software House execution tools
+        // ═══════════════════════════════════════════════════════════
+        // Register all worker tools
+        for (const tool of WORKER_TOOLS) {
+            api.registerTool({
+                name: tool.name,
+                label: tool.label,
+                description: tool.description,
+                parameters: tool.parameters,
+                execute: tool.execute,
+            });
+        }
     },
 });
 // ═══════════════════════════════════════════════════════════════
@@ -6113,4 +6127,3 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
 export function __setTestSessionKey(key) {
     sessionTracker.start(key, "test");
 }
-export default pluginExport;

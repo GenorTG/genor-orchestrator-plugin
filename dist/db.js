@@ -461,6 +461,13 @@ const MIGRATIONS = [
             db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(4, "Add Software House tables (workers, rooms, vault_docs, pm_chat)", now);
         },
     },
+    {
+        version: 5,
+        name: "Add worker sessions, messages, and task history",
+        apply: () => {
+            migrateV5();
+        },
+    },
 ];
 // ── INIT / MIGRATE ─────────────────────────────────────────────
 export function initDb(dataDir) {
@@ -1055,4 +1062,53 @@ export function listVerificationRuns(project, limit = 20) {
     sql += " ORDER BY created_ts DESC LIMIT ?";
     params.push(limit);
     return getDb().prepare(sql).all(...params);
+}
+// ═══════════════════════════════════════════════════════════════
+//  WORKER SESSIONS & MESSAGES TABLES (V5 Migration)
+// ═══════════════════════════════════════════════════════════════
+export function migrateV5() {
+    const db = getDb();
+    // Worker sessions: tracks which session belongs to which worker
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_sessions (
+      worker_id TEXT PRIMARY KEY,
+      session_key TEXT,
+      last_active DATETIME,
+      status TEXT DEFAULT 'idle',
+      current_task_id INTEGER,
+      FOREIGN KEY (worker_id) REFERENCES workers(id),
+      FOREIGN KEY (current_task_id) REFERENCES backlog_tasks(id)
+    )
+  `);
+    // Worker messages: inter-worker communication
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_worker TEXT NOT NULL,
+      to_worker TEXT NOT NULL,
+      type TEXT NOT NULL,
+      content TEXT,
+      task_id INTEGER,
+      context TEXT,
+      read_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (from_worker) REFERENCES workers(id),
+      FOREIGN KEY (to_worker) REFERENCES workers(id),
+      FOREIGN KEY (task_id) REFERENCES backlog_tasks(id)
+    )
+  `);
+    // Worker task history: audit trail of all work done
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_task_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      worker_id TEXT NOT NULL,
+      task_id INTEGER,
+      action TEXT NOT NULL,
+      details TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (worker_id) REFERENCES workers(id),
+      FOREIGN KEY (task_id) REFERENCES backlog_tasks(id)
+    )
+  `);
+    console.log("V5 migration complete: worker_sessions, worker_messages, worker_task_history");
 }
