@@ -1288,6 +1288,7 @@ function renderAgentPanel(id) {
       ${agentTasks.map(t=>`<div class="kanban-card" onclick="openTaskPanel('${t.id}')">${t.pri} ${t.title}</div>`).join('')}
     </div>` : ''}
     ${!isOrch ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openWorkerMessageModal('${a.id}')">💬 Wyślij wiadomość</button>` : }
+    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:8px" onclick="checkWorkerHealth('${a.id}')">🔍 Sprawdź zdrowie</button>` : }
     ${isOrch ? `<p style="margin-top:12px;font-size:11px;color:var(--purple)">🧠 Project Manager — <b>Thinking</b> = planuje sprint.</p>` : ''}`;
 
   document.getElementById('detailFoot').innerHTML = `
@@ -1767,6 +1768,29 @@ function sendWorkerMessage() {
       fromWorker: senderId,
       toWorker: workerMessageTarget,
       type,
+}
+
+// WORKER HEALTH & RECOVERY
+function checkWorkerHealth(workerId) {
+  fetch(`/orchestrator/api/software-house/worker/health/${workerId}`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.error) {
+        toast(`❌ Błąd: ${data.error}`);
+        return;
+      }
+      
+      const worker = data.worker;
+      const healthy = data.healthy;
+      const stalled = data.stalledTasks;
+      const lastActive = data.minutesSinceActive;
+      
+      let statusMsg = healthy ? '✅ Zdrowy' : '⚠️ Problem';
+      let details = [];
+      if (stalled > 0) details.push(`${stalled} zablokowanych tasków`);
+      if (lastActive !== null) details.push(`Ostatnia aktywność: ${lastActive} min temu`);
+      
+      toast(`${statusMsg}: ${worker.name}${details.length ? 
       content
     })
   }).then(res => res.json()).then(data => {
@@ -2037,3 +2061,49 @@ applyTransform();
 </script>
 </body>
 </html>
+
+// WORKER HEALTH & RECOVERY
+function checkWorkerHealth(workerId) {
+  fetch(`/orchestrator/api/software-house/worker/health/${workerId}`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.error) {
+        toast(`❌ Błąd: ${data.error}`);
+        return;
+      }
+      
+      const worker = data.worker;
+      const healthy = data.healthy;
+      const stalled = data.stalledTasks;
+      const lastActive = data.minutesSinceActive;
+      
+      let statusMsg = healthy ? '✅ Zdrowy' : '⚠️ Problem';
+      let details = [];
+      if (stalled > 0) details.push(`${stalled} zablokowanych tasków`);
+      if (lastActive !== null) details.push(`Ostatnia aktywność: ${lastActive} min temu`);
+      
+      toast(`${statusMsg}: ${worker.name}${details.length ? ' — ' + details.join(', ') : ''}`);
+      
+      if (!healthy) {
+        if (confirm(`Worker ${worker.name} ma problemy. Przywrócić?`)) {
+          recoverWorker(workerId);
+        }
+      }
+    })
+    .catch(err => toast(`❌ Błąd sieci: ${err.message}`));
+}
+
+function recoverWorker(workerId) {
+  fetch(`/orchestrator/api/software-house/worker/recover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workerId })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      toast(`✅ Worker przywrócony: ${data.tasksRequeued} tasków przekolejkowanych`);
+      loadData();
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => toast(`❌ Błąd sieci: ${err.message}`));
+}
