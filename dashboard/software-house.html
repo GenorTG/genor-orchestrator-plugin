@@ -1287,8 +1287,8 @@ function renderAgentPanel(id) {
     ${agentTasks.length ? `<div class="detail-section"><h4>Taski (${agentTasks.length})</h4>
       ${agentTasks.map(t=>`<div class="kanban-card" onclick="openTaskPanel('${t.id}')">${t.pri} ${t.title}</div>`).join('')}
     </div>` : ''}
-    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openWorkerMessageModal('${a.id}')">💬 Wyślij wiadomość</button>` : }
-    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:8px" onclick="checkWorkerHealth('${a.id}')">🔍 Sprawdź zdrowie</button>` : }
+    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openWorkerMessageModal('${a.id}')">💬 Wyślij wiadomość</button>` : ''}
+    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:8px" onclick="checkWorkerHealth('${a.id}')">🔍 Sprawdź zdrowie</button>` : ''}
     ${isOrch ? `<p style="margin-top:12px;font-size:11px;color:var(--purple)">🧠 Project Manager — <b>Thinking</b> = planuje sprint.</p>` : ''}`;
 
   document.getElementById('detailFoot').innerHTML = `
@@ -1375,8 +1375,8 @@ function renderTaskPanel(id) {
     </div>
     <div class="task-desc">${t.desc}</div>
     ${ag ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openAgentPanel('${ag.id}')">👤 ${ag.name}</button>` : ''}
-    ${targetRoom ? `<button class="btn" style="width:100%;margin-top:8px" onclick="openRoomPanel('${targetRoom.id}')">🏢 Pokój: ${targetRoom.name}</button>` : ''}`;
-    ${ag ? `<button class="btn primary" style="width:100%;margin-top:12px" onclick="startTaskExecution('${t.id}', '${ag.id}')">▶️ Rozpocznij zadanie</button>` : `<button class="btn" style="width:100%;margin-top:12px" onclick="assignAndStartTask('${t.id}')">👤 Przypisz i rozpocznij</button>`}
+    ${targetRoom ? `<button class="btn" style="width:100%;margin-top:8px" onclick="openRoomPanel('${targetRoom.id}')">🏢 Pokój: ${targetRoom.name}</button>` : ''}
+    ${ag ? `<button class="btn primary" style="width:100%;margin-top:12px" onclick="startTaskExecution('${t.id}', '${ag.id}')">▶️ Rozpocznij zadanie</button>` : `<button class="btn" style="width:100%;margin-top:12px" onclick="assignAndStartTask('${t.id}')">👤 Przypisz i rozpocznij</button>`}`;
 
   document.getElementById('detailFoot').innerHTML = `
     ${t.phase !== 'done' ? `<button class="btn primary" onclick="moveTask('${t.id}')">→ Następna faza</button>` : '<button class="btn" onclick="closeDetailPanel()">Zamknij</button>'}`;
@@ -1395,7 +1395,7 @@ function moveTask(taskId) {
   fetch(`/orchestrator/api/software-house/backlog/move?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskId: t.id, phase: nextPhase })
+    body: JSON.stringify({ id: t.id, phase: nextPhase })
   }).then(res => res.json()).then(data => {
     if (data.ok) {
       t.phase = nextPhase;
@@ -1418,7 +1418,7 @@ function startTaskExecution(taskId, workerId) {
   
   // Call worker_start tool
   fetch(`/orchestrator/api/software-house/worker/start`, {
-    method: POST,
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workerId, taskId: parseInt(taskId) })
   }).then(res => res.json()).then(data => {
@@ -1685,20 +1685,35 @@ function sendChat() {
   document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   input.value = '';
   
-  // Send to real API
+  // Send to real API, then fetch updated chat history (includes PM response)
   fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: text, sender: 'user' })
   }).then(res => res.json()).then(data => {
     if (data.ok) {
-      // Generate local response based on keywords
-      const l = text.toLowerCase();
-      if (l.includes('status')) orchSay('status');
-      else if (l.includes('plan')) orchSay('plan');
-      else if (l.includes('zatrud') || l.includes('hire')) orchSay('hire');
-      else addBotMsg('Rozumiem. Mogę pokazać status, zaplanować sprint albo zatrudnić kogoś — napisz co potrzebujesz.');
+      // Fetch chat history to get PM response from backend
+      return fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
     } else {
+      addBotMsg('Coś poszło nie tak. Spróbuj ponownie.');
+    }
+  }).then(res => res?.json()).then(data => {
+    if (data?.ok && data.messages) {
+      const chatMsgs = document.getElementById('chatMsgs');
+      chatMsgs.innerHTML = '';
+      data.messages.forEach(msg => {
+        if (msg.sender === 'user') {
+          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        } else {
+          chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        }
+      });
+      chatMsgs.scrollTop = chatMsgs.scrollHeight;
+    }
+  }).catch(err => {
+    addBotMsg('Błąd połączenia: ' + err.message);
+  });
+}
 
 // WORKER MESSAGING
 let workerMessageTarget = null;
@@ -1768,6 +1783,19 @@ function sendWorkerMessage() {
       fromWorker: senderId,
       toWorker: workerMessageTarget,
       type,
+      content,
+      project: currentProjectId
+    })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      toast(`✅ Wiadomość wysłana do ${agents.find(a => a.id === workerMessageTarget)?.name}`);
+      closeWorkerMessageModal();
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
 }
 
 // WORKER HEALTH & RECOVERY
@@ -1790,27 +1818,18 @@ function checkWorkerHealth(workerId) {
       if (stalled > 0) details.push(`${stalled} zablokowanych tasków`);
       if (lastActive !== null) details.push(`Ostatnia aktywność: ${lastActive} min temu`);
       
-      toast(`${statusMsg}: ${worker.name}${details.length ? 
-      content
+      toast(`${statusMsg}: ${worker.name}${details.length ? ' — ' + details.join(', ') : ''}`);
+      if (!healthy) {
+        if (confirm(`Worker ${worker.name} ma problemy. Przywrócić?`)) {
+          recoverWorker(workerId);
+        }
+      }
     })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
-      toast(`✅ Wiadomość wysłana do ${agents.find(a => a.id === workerMessageTarget)?.name}`);
-      closeWorkerMessageModal();
-    } else {
-      toast(`❌ Błąd: ${data.error}`);
-    }
-  }).catch(err => {
+  .catch(err => {
     toast(`❌ Błąd sieci: ${err.message}`);
   });
 }
-      addBotMsg(`❌ Błąd: ${data.error}`);
-    }
-  }).catch(err => {
-    addBotMsg(`❌ Błąd sieci: ${err.message}`);
-  });
-}
-function orchPlan() { sendChat._fake = true; document.getElementById('chatInput').value = 'Stwórz plan sprintu'; sendChat(); }
+function orchPlan() { document.getElementById('chatInput').value = 'Stwórz plan sprintu'; sendChat(); }
 
 // FONT SCALE
 function applyFontScale() {
@@ -1920,19 +1939,44 @@ function sendPmBubble() {
   el.innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   input.value = '';
   el.scrollTop = el.scrollHeight;
-  addBotMsg(text);
-  setTimeout(() => {
-    const l = text.toLowerCase();
-    let reply;
-    if (l.includes('status')) reply = orchSay._reply('status');
-    else if (l.includes('plan')) reply = orchSay._reply('plan');
-    else if (l.includes('zatrud') || l.includes('hire')) { openHireModal(); reply = 'Otwieram formularz zatrudnienia 👇'; }
-    else if (l.includes('vault') || l.includes('kontekst') || l.includes('dokument')) { setMainView('vault', document.getElementById('navVault')); reply = 'Otwieram vault z kontekstem projektu 📚'; }
-    else reply = 'Rozumiem. Mogę pokazać <b>status</b>, stworzyć <b>plan</b>, otworzyć <b>vault</b> albo <b>zatrudnić</b> programistę.';
-    el.innerHTML += `<div class="msg bot">${reply}<div class="time">teraz</div></div>`;
-    el.scrollTop = el.scrollHeight;
-    positionPmBubble();
-  }, 500);
+  
+  // Also send to sidebar chat
+  document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
+  
+  // Send to real API, then fetch updated chat history (includes PM response)
+  fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text, sender: 'user' })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      // Fetch chat history to get PM response from backend
+      return fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
+    }
+  }).then(res => res?.json()).then(data => {
+    if (data?.ok && data.messages && data.messages.length) {
+      // Get the last PM response
+      const lastPmMsg = [...data.messages].reverse().find(m => m.sender === 'pm');
+      if (lastPmMsg) {
+        el.innerHTML += `<div class="msg bot">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        el.scrollTop = el.scrollHeight;
+        positionPmBubble();
+        // Also update sidebar chat
+        const chatMsgs = document.getElementById('chatMsgs');
+        chatMsgs.innerHTML = '';
+        data.messages.forEach(msg => {
+          if (msg.sender === 'user') {
+            chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          } else {
+            chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          }
+        });
+        chatMsgs.scrollTop = chatMsgs.scrollHeight;
+      }
+    }
+  }).catch(err => {
+    console.error('PM bubble error:', err);
+  });
 }
 
 // VAULT
@@ -2061,49 +2105,3 @@ applyTransform();
 </script>
 </body>
 </html>
-
-// WORKER HEALTH & RECOVERY
-function checkWorkerHealth(workerId) {
-  fetch(`/orchestrator/api/software-house/worker/health/${workerId}`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.error) {
-        toast(`❌ Błąd: ${data.error}`);
-        return;
-      }
-      
-      const worker = data.worker;
-      const healthy = data.healthy;
-      const stalled = data.stalledTasks;
-      const lastActive = data.minutesSinceActive;
-      
-      let statusMsg = healthy ? '✅ Zdrowy' : '⚠️ Problem';
-      let details = [];
-      if (stalled > 0) details.push(`${stalled} zablokowanych tasków`);
-      if (lastActive !== null) details.push(`Ostatnia aktywność: ${lastActive} min temu`);
-      
-      toast(`${statusMsg}: ${worker.name}${details.length ? ' — ' + details.join(', ') : ''}`);
-      
-      if (!healthy) {
-        if (confirm(`Worker ${worker.name} ma problemy. Przywrócić?`)) {
-          recoverWorker(workerId);
-        }
-      }
-    })
-    .catch(err => toast(`❌ Błąd sieci: ${err.message}`));
-}
-
-function recoverWorker(workerId) {
-  fetch(`/orchestrator/api/software-house/worker/recover`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workerId })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
-      toast(`✅ Worker przywrócony: ${data.tasksRequeued} tasków przekolejkowanych`);
-      loadData();
-    } else {
-      toast(`❌ Błąd: ${data.error}`);
-    }
-  }).catch(err => toast(`❌ Błąd sieci: ${err.message}`));
-}

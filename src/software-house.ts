@@ -348,6 +348,31 @@ export async function handleBacklogGet(req: IncomingMessage, res: ServerResponse
 }
 
 /**
+ * POST /api/software-house/backlog
+ * Create a new task.
+ */
+export async function handleBacklogCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
+  const body = await parseBody(req);
+  const { title, description, priority, labels, project } = body;
+
+  if (!title) {
+    json(res, { error: "title required" }, 400);
+    return;
+  }
+
+  const proj = project || "genor-orchestrator-plugin";
+  const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+  db.prepare(`
+    INSERT INTO backlog_tasks (id, project, title, description, priority, status, labels, created_ts, updated_ts)
+    VALUES (?, ?, ?, ?, ?, 'todo', ?, unixepoch(), unixepoch())
+  `).run(id, proj, title, description || '', priority || 'p2', JSON.stringify(labels || []));
+
+  json(res, { ok: true, id });
+}
+
+/**
  * POST /api/software-house/backlog/move
  * Move a task to a different phase.
  */
@@ -395,7 +420,7 @@ export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse)
 
 /**
  * POST /api/software-house/pm/chat
- * Send a message.
+ * Send a message. Generates a PM response based on keywords.
  */
 export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const db = getDb();
@@ -407,12 +432,78 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  const result = db.prepare(`
+  const proj = project || "genor-orchestrator-plugin";
+
+  // Store user message
+  db.prepare(`
     INSERT INTO pm_chat (message, sender, project)
     VALUES (?, ?, ?)
-  `).run(message, sender || "pm", project || "genor-orchestrator-plugin");
+  `).run(message, sender || "user", proj);
 
-  json(res, { ok: true, id: result.lastInsertRowid });
+  // Generate PM response based on keywords
+  const lower = message.toLowerCase();
+  let pmResponse = '';
+
+  // Get project state for context
+  const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(proj) as any[];
+  const tasks = db.prepare("SELECT * FROM backlog_tasks WHERE project = ?").all(proj) as any[];
+  const rooms = db.prepare("SELECT * FROM rooms WHERE project = ?").all(proj) as any[];
+
+  const workingCount = workers.filter(w => w.status === 'working').length;
+  const sleepCount = workers.filter(w => w.status === 'idle' || w.status === 'sleep').length;
+  const errorCount = workers.filter(w => w.status === 'error').length;
+  const activeTasks = tasks.filter(t => t.status !== 'done').length;
+
+  if (lower.includes('status') || lower.includes('raport')) {
+    pmResponse = `📊 <b>Status projektu ${proj}</b><br>` +
+      `• ${workers.length} workerów (${workingCount} pracuje, ${sleepCount} śpi, ${errorCount} błędów)<br>` +
+      `• ${activeTasks} aktywnych tasków<br>` +
+      workers.map(w => `• ${w.name}: ${w.status}${w.task ? ' — ' + w.task : ''}`).join('<br>');
+  } else if (lower.includes('plan') || lower.includes('sprint')) {
+    const backlog = tasks.filter(t => t.status === 'backlog').length;
+    const inProgress = tasks.filter(t => t.status === 'in-progress').length;
+    const review = tasks.filter(t => t.status === 'review').length;
+    pmResponse = `📋 <b>Plan sprintu</b><br>` +
+      `• Backlog: ${backlog} tasków<br>` +
+      `• W toku: ${inProgress}<br>` +
+      `• Review: ${review}<br>` +
+      `• Zalecam priorytetyzację blokujących tasków.`;
+  } else if (lower.includes('zatrud') || lower.includes('hire') || lower.includes('nowy')) {
+    pmResponse = `👋 Otwieram formularz zatrudnienia. Kliknij <b>+ Zatrudnij</b> przy pokoju.`;
+  } else if (lower.includes('błąd') || lower.includes('error') || lower.includes('problem')) {
+    const errorWorkers = workers.filter(w => w.status === 'error');
+    if (errorWorkers.length) {
+      pmResponse = `🚧 <b>Blokery (${errorWorkers.length})</b><br>` +
+        errorWorkers.map(w => `• ${w.name}: ${w.task || 'błąd agenta'}`).join('<br>') +
+        '<br>Przywróć workery lub przydziel nowe zadania.';
+    } else {
+      pmResponse = '✅ Brak błędów — zespół działa płynnie.';
+    }
+  } else if (lower.includes('task') || lower.includes('zadani')) {
+    const active = tasks.filter(t => t.status !== 'done');
+    pmResponse = `📋 <b>Zadania (${active.length})</b><br>` +
+      active.slice(0, 8).map(t => `• ${t.priority} ${t.title} (${t.status})`).join('<br>') +
+      (active.length > 8 ? '<br>…' : '');
+  } else if (lower.includes('help') || lower.includes('pomoc')) {
+    pmResponse = `💡 Mogę pomóc z:<br>` +
+      `• <b>status</b> — raport zespołu<br>` +
+      `• <b>plan</b> — plan sprintu<br>` +
+      `• <b>zatrudnij</b> — formularz hiringu<br>` +
+      `• <b>błąd</b> — lista blokerów<br>` +
+      `• <b>taski</b> — lista zadań`;
+  } else {
+    pmResponse = `Rozumiem. Mogę pokazać <b>status</b>, stworzyć <b>plan</b>, sprawdzić <b>błędy</b> albo <b>zatrudnić</b> kogoś.`;
+  }
+
+  // Store PM response
+  if (pmResponse) {
+    db.prepare(`
+      INSERT INTO pm_chat (message, sender, project)
+      VALUES (?, ?, ?)
+    `).run(pmResponse, 'pm', proj);
+  }
+
+  json(res, { ok: true });
 }
 
 // ── VAULT ────────────────────────────────────────────────────
@@ -524,6 +615,136 @@ export async function handleVaultInject(req: IncomingMessage, res: ServerRespons
   json(res, { ok: true, path });
 }
 
+// ── WORKER OPERATIONS ────────────────────────────────────────
+
+/**
+ * POST /api/software-house/worker/start
+ * Start a worker on a task.
+ */
+export async function handleWorkerStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
+  const body = await parseBody(req);
+  const { workerId, taskId } = body;
+
+  if (!workerId || !taskId) {
+    json(res, { error: "workerId and taskId required" }, 400);
+    return;
+  }
+
+  // Update worker status
+  db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(workerId);
+  
+  // Update task
+  db.prepare("UPDATE backlog_tasks SET worker_id = ?, status = 'in-progress', updated_ts = ? WHERE id = ?")
+    .run(workerId, Math.floor(Date.now() / 1000), taskId);
+
+  // Log to history
+  db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'started', ?)")
+    .run(workerId, taskId, JSON.stringify({ startedAt: new Date().toISOString() }));
+
+  json(res, { ok: true, workerId, taskId });
+}
+
+/**
+ * POST /api/software-house/worker/message
+ * Send message between workers.
+ */
+export async function handleWorkerMessage(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
+  const body = await parseBody(req);
+  const { fromWorker, toWorker, type, content, project } = body;
+
+  if (!fromWorker || !toWorker || !content) {
+    json(res, { error: "fromWorker, toWorker, and content required" }, 400);
+    return;
+  }
+
+  const proj = project || "genor-orchestrator-plugin";
+
+  db.prepare(`
+    INSERT INTO worker_messages (from_worker, to_worker, type, content)
+    VALUES (?, ?, ?, ?)
+  `).run(fromWorker, toWorker, type || 'chat', content);
+
+  json(res, { ok: true });
+}
+
+/**
+ * GET /api/software-house/worker/health/:id
+ * Check worker health.
+ */
+export async function handleWorkerHealth(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const parts = url.pathname.split('/');
+  const workerId = parts[parts.length - 1];
+
+  if (!workerId) {
+    json(res, { error: "worker id required" }, 400);
+    return;
+  }
+
+  const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(workerId) as any;
+  if (!worker) {
+    json(res, { error: "worker not found" }, 404);
+    return;
+  }
+
+  // Check for stalled tasks
+  const stalledTasks = db.prepare(
+    "SELECT COUNT(*) as cnt FROM backlog_tasks WHERE worker_id = ? AND status = 'in-progress'"
+  ).get(workerId) as any;
+
+  // Check last activity
+  const lastHistory = db.prepare(
+    "SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY id DESC LIMIT 1"
+  ).get(workerId) as any;
+
+  let minutesSinceActive = null;
+  if (lastHistory?.details) {
+    try {
+      const details = JSON.parse(lastHistory.details);
+      const lastTime = new Date(details.startedAt || details.assignedAt);
+      minutesSinceActive = Math.floor((Date.now() - lastTime.getTime()) / 60000);
+    } catch (_) {}
+  }
+
+  const healthy = worker.status !== 'error' && (stalledTasks?.cnt || 0) < 3;
+
+  json(res, {
+    ok: true,
+    worker,
+    healthy,
+    stalledTasks: stalledTasks?.cnt || 0,
+    minutesSinceActive,
+  });
+}
+
+/**
+ * POST /api/software-house/worker/recover
+ * Recover a stalled worker.
+ */
+export async function handleWorkerRecover(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const db = getDb();
+  const body = await parseBody(req);
+  const { workerId } = body;
+
+  if (!workerId) {
+    json(res, { error: "workerId required" }, 400);
+    return;
+  }
+
+  // Reset worker status
+  db.prepare("UPDATE workers SET status = 'idle' WHERE id = ?").run(workerId);
+
+  // Requeue stalled tasks
+  const result = db.prepare(
+    "UPDATE backlog_tasks SET worker_id = NULL, status = 'backlog' WHERE worker_id = ? AND status = 'in-progress'"
+  ).run(workerId);
+
+  json(res, { ok: true, tasksRequeued: result.changes });
+}
+
 // ── ROUTER ───────────────────────────────────────────────────
 
 /**
@@ -590,6 +811,10 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
     }
 
     // Backlog
+    if (normalizedPathname === "/api/software-house/backlog" && method === "POST") {
+      await handleBacklogCreate(req, res);
+      return true;
+    }
     if (normalizedPathname === "/api/software-house/backlog" && method === "GET") {
       await handleBacklogGet(req, res);
       return true;
@@ -638,6 +863,24 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
     }
     if (normalizedPathname === "/api/software-house/vault/inject" && method === "POST") {
       await handleVaultInject(req, res);
+      return true;
+    }
+
+    // Worker operations
+    if (normalizedPathname === "/api/software-house/worker/start" && method === "POST") {
+      await handleWorkerStart(req, res);
+      return true;
+    }
+    if (normalizedPathname === "/api/software-house/worker/message" && method === "POST") {
+      await handleWorkerMessage(req, res);
+      return true;
+    }
+    if (normalizedPathname.match(/^\/api\/software-house\/worker\/health\/[^/]+$/) && method === "GET") {
+      await handleWorkerHealth(req, res);
+      return true;
+    }
+    if (normalizedPathname === "/api/software-house/worker/recover" && method === "POST") {
+      await handleWorkerRecover(req, res);
       return true;
     }
 

@@ -2,7 +2,7 @@
   "id": "genor-orchestrator-software-house",
   "name": "Genor Orchestrator Software House",
   "description": "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -98,7 +98,19 @@
       "genorch_worker_message",
       "genorch_worker_sessions",
       "genorch_worker_health",
-      "genorch_worker_recover"
+      "genorch_worker_recover",
+      "genorch_project_bind",
+      "genorch_worker_start",
+      "genorch_worker_messages",
+      "genorch_worker_hire",
+      "genorch_worker_edit",
+      "genorch_worker_fire",
+      "genorch_room_create",
+      "genorch_room_edit",
+      "genorch_room_delete",
+      "genorch_task_create",
+      "genorch_task_move",
+      "genorch_task_assign"
     ]
   }
 }

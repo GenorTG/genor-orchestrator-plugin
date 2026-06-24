@@ -2422,6 +2422,16 @@ const _staticToolNames = [
     "genorch_verify_pipeline_check",
     "genorch_verify_pipeline_guide",
     "genorch_verify_pipeline_start",
+    "genorch_worker_hire",
+    "genorch_worker_edit",
+    "genorch_worker_fire",
+    "genorch_room_create",
+    "genorch_room_edit",
+    "genorch_room_delete",
+    "genorch_task_create",
+    "genorch_task_move",
+    "genorch_task_assign",
+    "genorch_worker_message",
 ];
 let _toolCount = 0;
 const PLUGIN_ID = "genor-orchestrator-software-house";
@@ -3500,7 +3510,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 sessionTracker.trackAction(`log: ${params.task}`);
                 queueLiveAgents("tool_log_session", sessionTracker);
                 // Mark completion logged so clearContext/unregister know work is documented
-                const terminal = ["done", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
+                const terminal = ["done", "complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
                 if (terminal)
                     sessionTracker.markLoggedCompletion();
                 // Write state event for this session
@@ -4069,7 +4079,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                 if (!bound)
                     return txt({ ok: false, error: "No project binding to release." });
                 // ═══ ENFORCE TASK COMPLETION LOGGING ═══
-                if (!sessionTracker.loggedTaskCompletion) {
+                if (!sessionTracker.loggedTaskCompletion && !params.force) {
                     return txt({
                         ok: false,
                         error: `❌ Task not logged. Session is bound to project "${bound}" but hasn't logged completion. ` +
@@ -6049,6 +6059,215 @@ Focus specifically on: ${params.topic}` : "";
                 }
             },
         });
+        // ═══════════════════════════════════════════════════════════
+        //  SOFTWARE HOUSE MANAGEMENT TOOLS
+        // ═══════════════════════════════════════════════════════════
+        api.registerTool({
+            name: "genorch_worker_hire",
+            label: "Hire Worker",
+            description: "Create a new worker.",
+            parameters: Type.Object({
+                name: Type.String({ description: "Worker name." }),
+                role: Type.String({ description: "Worker role (e.g. developer, designer)." }),
+                sprite: Type.Optional(Type.String({ description: "Sprite color/style (default: blue)." })),
+                model: Type.Optional(Type.String({ description: "AI model to use for this worker." })),
+                room: Type.Optional(Type.String({ description: "Room ID to place the worker in." })),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                const id = `w${Date.now()}`;
+                const proj = params.project || "genor-orchestrator-plugin";
+                db.prepare(`
+          INSERT INTO workers (id, name, role, sprite, model, prompt, room, project)
+          VALUES (?, ?, ?, ?, ?, '', ?, ?)
+        `).run(id, params.name, params.role || "", params.sprite || "blue", params.model || "", params.room || "", proj);
+                return txt({ ok: true, worker: { id, name: params.name } });
+            },
+        });
+        api.registerTool({
+            name: "genorch_worker_edit",
+            label: "Edit Worker",
+            description: "Edit worker details.",
+            parameters: Type.Object({
+                worker_id: Type.String({ description: "Worker ID." }),
+                name: Type.Optional(Type.String({ description: "New name." })),
+                role: Type.Optional(Type.String({ description: "New role." })),
+                sprite: Type.Optional(Type.String({ description: "New sprite color/style." })),
+                model: Type.Optional(Type.String({ description: "New AI model." })),
+                room: Type.Optional(Type.String({ description: "New room ID." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                const updates = [];
+                const values = [];
+                for (const key of ["name", "role", "sprite", "model", "room"]) {
+                    if (params[key] !== undefined) {
+                        updates.push(`${key} = ?`);
+                        values.push(params[key]);
+                    }
+                }
+                if (updates.length === 0)
+                    return txt({ ok: false, error: "no fields to update" });
+                values.push(params.worker_id);
+                db.prepare(`UPDATE workers SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_worker_fire",
+            label: "Fire Worker",
+            description: "Remove a worker.",
+            parameters: Type.Object({
+                worker_id: Type.String({ description: "Worker ID." }),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                // Delete related records first (foreign key constraints)
+                db.prepare("DELETE FROM worker_messages WHERE from_worker = ? OR to_worker = ?").run(params.worker_id, params.worker_id);
+                db.prepare("DELETE FROM worker_sessions WHERE worker_id = ?").run(params.worker_id);
+                db.prepare("DELETE FROM worker_task_history WHERE worker_id = ?").run(params.worker_id);
+                db.prepare("DELETE FROM backlog_tasks WHERE worker_id = ?").run(params.worker_id);
+                db.prepare("DELETE FROM workers WHERE id = ?").run(params.worker_id);
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_room_create",
+            label: "Create Room",
+            description: "Create a new room.",
+            parameters: Type.Object({
+                name: Type.String({ description: "Room name." }),
+                purpose: Type.Optional(Type.String({ description: "Room purpose/description." })),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                const id = `room_${Date.now().toString(36)}`;
+                const proj = params.project || "genor-orchestrator-plugin";
+                db.prepare(`
+          INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
+          VALUES (?, ?, ?, '[]', ?)
+        `).run(id, params.name, params.purpose || "", proj);
+                return txt({ ok: true, room: { id, name: params.name } });
+            },
+        });
+        api.registerTool({
+            name: "genorch_room_edit",
+            label: "Edit Room",
+            description: "Edit room details.",
+            parameters: Type.Object({
+                room_id: Type.String({ description: "Room ID." }),
+                name: Type.Optional(Type.String({ description: "New name." })),
+                purpose: Type.Optional(Type.String({ description: "New purpose/description." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                const updates = [];
+                const values = [];
+                for (const key of ["name", "purpose"]) {
+                    if (params[key] !== undefined) {
+                        updates.push(`${key} = ?`);
+                        values.push(params[key]);
+                    }
+                }
+                if (updates.length === 0)
+                    return txt({ ok: false, error: "no fields to update" });
+                values.push(params.room_id);
+                db.prepare(`UPDATE rooms SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_room_delete",
+            label: "Delete Room",
+            description: "Remove a room.",
+            parameters: Type.Object({
+                room_id: Type.String({ description: "Room ID." }),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                db.prepare("DELETE FROM rooms WHERE id = ?").run(params.room_id);
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_task_create",
+            label: "Create Task",
+            description: "Create a backlog task (replaces HTTP-only POST /backlog).",
+            parameters: Type.Object({
+                title: Type.String({ description: "Task title." }),
+                description: Type.Optional(Type.String({ description: "Task description." })),
+                priority: Type.Optional(Type.String({ description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." })),
+                labels: Type.Optional(Type.Array(Type.String(), { description: "Labels/tags." })),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                const proj = params.project || "genor-orchestrator-plugin";
+                const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+                db.prepare(`
+          INSERT INTO backlog_tasks (id, project, title, description, priority, status, labels, created_ts, updated_ts)
+          VALUES (?, ?, ?, ?, ?, 'todo', ?, unixepoch(), unixepoch())
+        `).run(id, proj, params.title, params.description || "", params.priority || "p2", JSON.stringify(params.labels || []));
+                return txt({ ok: true, id });
+            },
+        });
+        api.registerTool({
+            name: "genorch_task_move",
+            label: "Move Task",
+            description: "Move task to a different phase.",
+            parameters: Type.Object({
+                task_id: Type.String({ description: "Task ID." }),
+                phase: Type.Enum({ todo: "todo", in_progress: "in_progress", review: "review", done: "done" }, { description: "Target phase: todo, in_progress, review, done." }),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                db.prepare("UPDATE backlog_tasks SET status = ?, updated_ts = ? WHERE id = ?")
+                    .run(params.phase, Math.floor(Date.now() / 1000), params.task_id);
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_task_assign",
+            label: "Assign Task",
+            description: "Assign a task to a worker.",
+            parameters: Type.Object({
+                task_id: Type.String({ description: "Task ID." }),
+                worker_id: Type.String({ description: "Worker ID." }),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                db.prepare("UPDATE backlog_tasks SET worker_id = ?, updated_ts = ? WHERE id = ?")
+                    .run(params.worker_id, Math.floor(Date.now() / 1000), params.task_id);
+                db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(params.worker_id);
+                db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)")
+                    .run(params.worker_id, params.task_id, JSON.stringify({ assignedAt: new Date().toISOString() }));
+                return txt({ ok: true });
+            },
+        });
+        api.registerTool({
+            name: "genorch_worker_message",
+            label: "Worker Message",
+            description: "Send message between workers.",
+            parameters: Type.Object({
+                from_worker_id: Type.String({ description: "Sender worker ID." }),
+                to_worker_id: Type.String({ description: "Recipient worker ID." }),
+                type: Type.Optional(Type.String({ description: "Message type (default: chat)." })),
+                content: Type.String({ description: "Message content." }),
+                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+            }),
+            async execute(_id, params) {
+                const db = getDb();
+                db.prepare(`
+          INSERT INTO worker_messages (from_worker, to_worker, type, content)
+          VALUES (?, ?, ?, ?)
+        `).run(params.from_worker_id, params.to_worker_id, params.type || "chat", params.content);
+                return txt({ ok: true });
+            },
+        });
         // ── Dashboard HTTP handler — serve dashboard through gateway ──
         // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
         try {
@@ -6127,3 +6346,7 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
 export function __setTestSessionKey(key) {
     sessionTracker.start(key, "test");
 }
+// ═══════════════════════════════════════════════════════════════
+// DEFAULT EXPORT — required by OpenClaw plugin loader
+// ═══════════════════════════════════════════════════════════════
+export default pluginExport;
