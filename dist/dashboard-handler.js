@@ -7,16 +7,18 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { getDataDir } from "./shared.js";
+import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, countSessions, listBacklogTasks, getBacklogTask, updateBacklogTask, deleteBacklogTask, listModels, getModel, updateModel, getLiveAgents, getLiveSessions, addPendingRegistration, getLogs, addLog } from "./db.js";
+import { handleSoftwareHouseRoute } from "./software-house.js";
 // ── RESOLVE PLUGIN ROOT ──────────────────────────────────────
 // Match the resolution in src/index.ts so dashboard relative paths work
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
-const HTML_PATH = path.join(PLUGIN_ROOT, "dashboard", "index.html");
 // ── MIME TYPES ────────────────────────────────────────────────
 const MIME = {
     ".html": "text/html;charset=utf-8",
@@ -28,35 +30,46 @@ const MIME = {
     ".ico": "image/x-icon",
 };
 // ── FILE HELPERS ──────────────────────────────────────────────
-function readJSON(filePath) {
-    try {
-        if (fs.existsSync(filePath))
-            return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    }
-    catch { /* */ }
-    return null;
-}
 // ── API RESPONSE HELPERS ──────────────────────────────────────
 function sendJSON(res, data, code = 200) {
     res.writeHead(code, {
         "Content-Type": "application/json;charset=utf-8",
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
     });
     res.end(JSON.stringify(data));
 }
 function sendError(res, code, msg) {
-    sendJSON(res, { error: msg }, code);
+    sendJSON(res, { ok: false, error: msg }, code);
 }
-function sendFile(res, filePath) {
+function getGatewayToken() {
+    try {
+        const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+        if (fs.existsSync(cfgPath)) {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+            if (cfg?.gateway?.auth?.token)
+                return cfg.gateway.auth.token;
+        }
+    }
+    catch { /* fallback */ }
+    return process.env.OPENCLAW_GATEWAY_TOKEN || "";
+}
+function sendFile(res, filePath, extraVars) {
     if (!fs.existsSync(filePath)) {
         sendError(res, 404, "Not found");
         return;
     }
     const ext = path.extname(filePath);
     const ct = MIME[ext] || "application/octet-stream";
-    const content = fs.readFileSync(filePath);
+    let content = fs.readFileSync(filePath);
+    if (filePath.endsWith("index.html") && extraVars) {
+        let html = content.toString("utf-8");
+        for (const [key, val] of Object.entries(extraVars)) {
+            html = html.replaceAll(`__${key}__`, val);
+        }
+        content = Buffer.from(html, "utf-8");
+    }
     res.writeHead(200, { "Content-Type": ct, "Access-Control-Allow-Origin": "*" });
     res.end(content);
 }
@@ -123,24 +136,38 @@ function handleSSE(res) {
 }
 // ── API HANDLERS ──────────────────────────────────────────────
 function handleStatus(_req, res) {
-    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
+    const cfg = getAllGlobalConfig();
+    // Read plugin version from manifest
+    let pluginVersion = "?";
+    try {
+        const manifestPath = path.join(PLUGIN_ROOT, "openclaw.plugin.json");
+        if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+            pluginVersion = manifest.version || "?";
+        }
+    }
+    catch { /* */ }
+    // Count project configs
+    const allProjectConfigs = getAllProjectConfigs();
     sendJSON(res, {
+        ok: true,
+        version: pluginVersion,
         nightly_price_check: fs.existsSync(path.join(getDataDir(), "price_changes.log")) ? "Configured (2 AM)" : "Not configured",
         price_log_exists: fs.existsSync(path.join(getDataDir(), "price_changes.log")),
         data_dir: getDataDir(),
         free_only_mode: cfg?.free_only_mode || false,
         disabled_models: cfg?.disabled_models?.length || 0,
-        projects_configured: cfg?.projects ? Object.keys(cfg.projects).length : 0,
+        projects_configured: Object.keys(allProjectConfigs).length,
     });
 }
 function handleAll(_req, res) {
-    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-    const liveSessions = readJSON(path.join(getDataDir(), "live-sessions.json"));
-    const liveAgents = readJSON(path.join(getDataDir(), "live-agents.json"));
-    const modelsData = readJSON(path.join(getDataDir(), "models.json"));
+    const cfg = getAllGlobalConfig();
+    const liveSessions = getLiveSessions();
+    const liveAgentsData = getLiveAgents();
+    const modelsData = listModels(false);
     const sessions = liveSessions?.sessions || [];
-    const meta = liveSessions?._meta || {};
-    const agents = liveAgents?.agents || [];
+    const meta = liveSessions?.meta || {};
+    const agents = liveAgentsData || [];
     // Phase 5a: Enrich agents with health status
     const healthThresholds = cfg?.safeguards || {};
     const staleThreshold = healthThresholds.stuck_timeout_ms || 30 * 60 * 1000;
@@ -165,86 +192,69 @@ function handleAll(_req, res) {
         agent.last_active_at = lastActivity ? new Date(lastActivity).toISOString() : agent.timestamp || null;
     }
     const state = agents[0] || {};
-    // Normalize models: models.json has nested { version, schema, models: [...] }
-    // Frontend expects { total, active } at the top level
-    const models = modelsData || { models: [] };
-    const modelList = models.models || [];
+    // modelsData is already an array of model config objects
+    const modelList = modelsData || [];
     const activeModelCount = modelList.filter((m) => m.agent_ready !== false && m.status !== "removed").length;
     // Build projects list with active model info (Phase 3a)
-    const projDir = path.join(getDataDir(), "projects");
+    const allProjectsCfg = getAllProjectConfigs();
     const projectsList = [];
-    if (fs.existsSync(projDir)) {
-        for (const name of fs.readdirSync(projDir).sort()) {
-            if (name.startsWith("."))
-                continue;
-            const p = path.join(projDir, name);
-            if (!fs.statSync(p).isDirectory())
-                continue;
-            let projectSessions = [];
-            try {
-                projectSessions = JSON.parse(fs.readFileSync(path.join(p, "sessions.json"), "utf-8")).sessions || [];
+    for (const [name, pc] of Object.entries(allProjectsCfg)) {
+        const sessionCount = countSessions(name);
+        // Find active model from live agents
+        const matchingAgent = agents.find((a) => a.project === name || a.project === name);
+        const activeModel = matchingAgent?.model || null;
+        const activeModelProvider = matchingAgent?.model_provider || null;
+        // Find model details from inventory
+        let modelDetails = null;
+        if (activeModel) {
+            const found = modelList.find((m) => m.id === activeModel);
+            if (found) {
+                modelDetails = {
+                    name: found.name || found.id,
+                    provider: found.provider,
+                    tier: found.tier || 3,
+                    cost: found.cost || {},
+                };
             }
-            catch { }
-            const pc = cfg?.projects?.[name] || {};
-            // Find active model from live agents
-            const matchingAgent = agents.find((a) => a.project === name || a.project === name);
-            const activeModel = matchingAgent?.model || null;
-            const activeModelProvider = matchingAgent?.model_provider || null;
-            // Find model details from inventory
-            let modelDetails = null;
-            if (activeModel) {
-                const found = modelList.find((m) => m.id === activeModel);
-                if (found) {
-                    modelDetails = {
-                        name: found.name || found.id,
-                        provider: found.provider,
-                        tier: found.tier || 3,
-                        cost: found.cost || {},
-                    };
-                }
-            }
-            projectsList.push({
-                name, session_count: projectSessions.length,
-                created: projectSessions[0]?.logged_at || "N/A",
-                model_allowlist: pc.model_allowlist || [],
-                free_only: pc.free_only || false,
-                active_model: activeModel,
-                active_model_provider: activeModelProvider,
-                active_model_details: modelDetails,
-                model_routing: pc.model_routing || null,
-                routing_preset: pc.routing_preset || 'custom',
-                routing_single_provider: pc.routing_single_provider || null,
-            });
         }
+        projectsList.push({
+            name, session_count: sessionCount,
+            model_allowlist: pc.model_allowlist || [],
+            free_only: pc.free_only || false,
+            active_model: activeModel,
+            active_model_provider: activeModelProvider,
+            active_model_details: modelDetails,
+            model_routing: pc.model_routing || null,
+            routing_preset: pc.routing_preset || 'custom',
+            routing_single_provider: pc.routing_single_provider || null,
+        });
     }
     sendJSON(res, {
+        ok: true,
         sessions,
-        live_session_count: meta.sessionCount || 0,
+        live_session_count: meta.sessionCount || meta?.sessionCount || 0,
         live_connected: meta.connected || false,
         live_updated: meta.updatedAt || null,
-        live_agents: liveAgents || { agents: [], agent_count: 0, active_count: 0 },
+        live_agents: { agents, agent_count: agents.length, active_count: agents.filter((a) => a.project).length },
         state,
-        models: { ...models, total: modelList.length, active: activeModelCount },
+        models: { models: modelList, total: modelList.length, active: activeModelCount },
         projects: { projects: projectsList, count: projectsList.length },
         config: cfg,
     });
 }
 function handleModels(req, res, qs) {
-    const data = readJSON(path.join(getDataDir(), "models.json"));
-    if (!data)
-        return sendJSON(res, { models: [], total: 0 });
-    const models = data.models || [];
-    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
+    const cfg = getAllGlobalConfig();
     if (qs.id) {
-        const m = models.find((m) => m.id === qs.id);
+        const m = getModel(qs.id);
         if (!m)
             return sendError(res, 404, "Model not found");
         return sendJSON(res, m);
     }
-    if (qs.all) {
-        return sendJSON(res, { models, total: models.length });
-    }
     const project = qs.project;
+    const models = listModels(false, project);
+    if (qs.all) {
+        return sendJSON(res, { ok: true, models, total: models.length });
+    }
     let filtered = [...models];
     if (cfg?.free_only_mode) {
         filtered = filtered.filter((m) => m.cost?.type !== "subscription" && m.cost?.type !== "payg");
@@ -252,70 +262,64 @@ function handleModels(req, res, qs) {
     if (cfg?.disabled_models?.length) {
         filtered = filtered.filter((m) => !cfg.disabled_models.includes(m.id));
     }
-    if (project && cfg?.projects?.[project]?.model_allowlist?.length) {
-        const wl = cfg.projects[project].model_allowlist;
-        filtered = filtered.filter((m) => wl.includes(m.id));
-    }
     const active = filtered.filter((m) => m.agent_ready !== false && m.status !== "removed").length;
-    sendJSON(res, { models: filtered, total: filtered.length, active, project });
+    sendJSON(res, { ok: true, models: filtered, total: filtered.length, active, project });
+}
+async function handleModelUpdate(req, res) {
+    try {
+        const body = JSON.parse(await readBody(req));
+        const { id, ...updates } = body;
+        if (!id)
+            return sendError(res, 400, "Model ID required");
+        const model = getModel(id);
+        if (!model)
+            return sendError(res, 500, "Models data not found or model not found");
+        updateModel(id, updates);
+        addLog("info", "dashboard", `Updated model ${id}: tier=${updates.tier}, enabled=${updates.enabled}`);
+        sendJSON(res, { ok: true, model: getModel(id) });
+    }
+    catch (e) {
+        sendError(res, 400, e.message);
+    }
 }
 function handleLogs(req, res, qs) {
-    const logPath = path.join(getDataDir(), "logs", "orchestrator.jsonl");
-    if (!fs.existsSync(logPath))
-        return sendJSON(res, { entries: [], count: 0 });
-    const limit = parseInt(qs.limit || "50", 10);
-    const level = qs.level;
     try {
-        const lines = fs.readFileSync(logPath, "utf-8").split("\n").filter(Boolean);
-        const filtered = [];
-        for (const l of lines.reverse()) {
-            try {
-                const e = JSON.parse(l);
-                if (level && e.level !== level)
-                    continue;
-                filtered.push(e);
-                if (filtered.length >= limit)
-                    break;
-            }
-            catch { /* */ }
-        }
-        sendJSON(res, { entries: filtered, count: filtered.length });
+        const limit = parseInt(qs.limit || "50", 10);
+        const level = qs.level;
+        const entries = getLogs(limit, level);
+        sendJSON(res, { ok: true, entries, count: entries.length });
     }
     catch {
-        sendJSON(res, { entries: [], count: 0 });
+        sendJSON(res, { ok: true, entries: [], count: 0 });
     }
 }
 function handleLiveAgents(_req, res) {
-    const data = readJSON(path.join(getDataDir(), "live-agents.json"));
-    if (data)
-        return sendJSON(res, data);
-    sendJSON(res, { agents: [], agent_count: 0, active_count: 0 });
+    const agents = getLiveAgents();
+    sendJSON(res, { ok: true, agents, agent_count: agents.length, active_count: agents.filter((a) => a.project).length });
 }
 function handleConfigGET(_req, res) {
-    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-    sendJSON(res, cfg);
+    const cfg = getAllGlobalConfig();
+    // Add projects for backward compat with dashboard
+    const allProjectsCfg = getAllProjectConfigs();
+    sendJSON(res, { ok: true, ...cfg, projects: allProjectsCfg });
 }
 function handleConfigPOST(req, res) {
     return readBody(req).then((data) => {
-        const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-        for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models"]) {
+        for (const key of ["free_only_mode", "theme", "auto_refresh_seconds", "disabled_models", "safeguards", "default_model_routing"]) {
             if (data[key] !== undefined)
-                cfg[key] = data[key];
+                setGlobalConfig(key, data[key]);
         }
         if (data.projects && typeof data.projects === "object") {
-            cfg.projects = cfg.projects || {};
             for (const [pn, pc] of Object.entries(data.projects)) {
-                cfg.projects[pn] = cfg.projects[pn] || {};
+                const existing = getProjectConfig(pn) || {};
                 if (pc.model_allowlist)
-                    cfg.projects[pn].model_allowlist = pc.model_allowlist;
+                    existing.model_allowlist = pc.model_allowlist;
                 if (pc.free_only !== undefined)
-                    cfg.projects[pn].free_only = pc.free_only;
+                    existing.free_only = pc.free_only;
+                setProjectConfig(pn, existing);
             }
         }
-        if (data.safeguards && typeof data.safeguards === "object") {
-            cfg.safeguards = { ...(cfg.safeguards || {}), ...data.safeguards };
-        }
-        fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+        addLog("info", "dashboard", "Config updated via POST /api/config");
         sendJSON(res, { ok: true });
     });
 }
@@ -324,6 +328,7 @@ async function handleAutoPopulate(_req, res) {
         const dataDir = getDataDir();
         const scriptPath = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
         const out = execSync(`ORCHESTRATOR_DATA_DIR="${dataDir}" python3 "${scriptPath}" 2>&1`, { encoding: "utf-8", timeout: 30000 }).trim();
+        addLog("info", "dashboard", `Auto-populate complete (${out.length} chars output)`);
         sendJSON(res, { ok: true, output: out });
     }
     catch (err) {
@@ -353,18 +358,8 @@ async function handleProjectState(req, res) {
     }
     try {
         const pd = projectDir(name);
-        const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-        const projCfg = cfg.projects?.[name] || {};
-        const sessions = [];
-        // Load logged sessions
-        const sf = path.join(pd, "sessions.json");
-        if (fs.existsSync(sf)) {
-            try {
-                const sdata = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                sessions.push(...(sdata.sessions || []));
-            }
-            catch { }
-        }
+        const projCfg = getProjectConfig(name) || {};
+        const sessions = listSessions(name, 200);
         // List docs
         const docs = [];
         if (fs.existsSync(pd)) {
@@ -399,9 +394,13 @@ async function handleProjectState(req, res) {
                 return "";
             }
         };
+        // Merge global default_model_routing so per-project UI can show inheritance
+        const globalCfg = getAllGlobalConfig();
+        const mergedConfig = { ...projCfg, default_model_routing: globalCfg?.default_model_routing || {} };
         sendJSON(res, {
+            ok: true,
             name,
-            config: projCfg,
+            config: mergedConfig,
             sessions,
             session_count: sessions.length,
             docs,
@@ -441,7 +440,7 @@ async function handleProjectDoc(req, res) {
             return true;
         }
         const content = fs.readFileSync(fp, "utf-8");
-        sendJSON(res, { content, name, file: fn });
+        sendJSON(res, { ok: true, content, name, file: fn });
     }
     else if (method === "DELETE") {
         try {
@@ -475,6 +474,7 @@ async function handleProjectDocSave(req, res) {
         }
         const pd = projectDir(name);
         fs.writeFileSync(path.join(pd, file), content || "", "utf-8");
+        addLog("info", "dashboard", `Saved project doc ${name}/${file}`);
         sendJSON(res, { ok: true });
     }
     catch (err) {
@@ -514,21 +514,9 @@ async function handleCreateProject(req, res) {
             "No sessions logged yet.",
         ].join("\n");
         fs.writeFileSync(path.join(projDir, "STATE.md"), stateContent, "utf-8");
-        // Update dashboard config
-        const configPath = path.join(getDataDir(), "dashboard-config.json");
-        let cfg = {};
-        try {
-            if (fs.existsSync(configPath))
-                cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        }
-        catch { /* */ }
-        if (!cfg.projects)
-            cfg.projects = {};
-        cfg.projects[projectName] = {
-            location: loc,
-            workflow: { enabled: true },
-        };
-        fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+        // Update project config via DB
+        const pc = { location: loc, workflow: { enabled: true } };
+        setProjectConfig(projectName, pc);
         // Create spawn marker if requested
         let spawnInfo = null;
         if (params.spawn) {
@@ -554,36 +542,24 @@ async function handleCreateProject(req, res) {
             spawn: spawnInfo,
             message: `Project "${projectName}" created.`,
         });
+        addLog("info", "dashboard", `Created project ${projectName} (loc: ${loc || "none"})`);
     }
     catch (err) {
         sendJSON(res, { ok: false, error: err.message });
     }
 }
 function handleProjects(_req, res) {
-    const projDir = path.join(getDataDir(), "projects");
-    if (!fs.existsSync(projDir))
-        return sendJSON(res, { projects: [], count: 0 });
-    const projects = fs.readdirSync(projDir).filter((n) => {
-        if (n.startsWith("."))
-            return false;
-        const p = path.join(projDir, n);
-        return fs.statSync(p).isDirectory();
-    }).map((name) => {
-        const sf = path.join(projDir, name, "sessions.json");
-        let sessions = [];
-        try {
-            sessions = JSON.parse(fs.readFileSync(sf, "utf-8")).sessions || [];
-        }
-        catch { /* */ }
-        return { name, session_count: sessions.length, created: sessions[0]?.logged_at || "N/A" };
+    const allProjectsCfg = getAllProjectConfigs();
+    const projects = Object.entries(allProjectsCfg).map(([name, pc]) => {
+        const sessionCount = countSessions(name);
+        return {
+            name,
+            session_count: sessionCount,
+            model_allowlist: pc.model_allowlist || [],
+            free_only: pc.free_only || false,
+        };
     });
-    const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json"));
-    for (const p of projects) {
-        const pc = cfg?.projects?.[p.name] || {};
-        p.model_allowlist = pc.model_allowlist || [];
-        p.free_only = pc.free_only || false;
-    }
-    sendJSON(res, { projects, count: projects.length });
+    sendJSON(res, { ok: true, projects, count: projects.length });
 }
 function handlePrices(_req, res) {
     const logPath = path.join(getDataDir(), "price_changes.log");
@@ -596,37 +572,22 @@ function handlePrices(_req, res) {
     sendJSON(res, { entries, count: entries.length });
 }
 function handleGateway(req, res) {
-    const lf = path.join(getDataDir(), "live-sessions.json");
-    if (fs.existsSync(lf)) {
-        try {
-            const live = JSON.parse(fs.readFileSync(lf, "utf-8"));
-            return sendJSON(res, {
-                live: true,
-                session_count: live._meta?.sessionCount || 0,
-                sessions: live.sessions || [],
-                updated: live._meta?.updatedAt || null,
-            });
-        }
-        catch { /* */ }
-    }
-    sendJSON(res, { live: false, sessions: [], session_count: 0 });
+    const live = getLiveSessions();
+    return sendJSON(res, {
+        live: true,
+        session_count: live.meta?.sessionCount || 0,
+        sessions: live.sessions || [],
+        updated: live.meta?.updatedAt || null,
+    });
 }
 function handleSessions(req, res) {
-    // Return live gateway sessions (used by Gateway tab)
-    const lf = path.join(getDataDir(), "live-sessions.json");
-    if (fs.existsSync(lf)) {
-        try {
-            const live = JSON.parse(fs.readFileSync(lf, "utf-8"));
-            return sendJSON(res, {
-                sessions: live.sessions || [],
-                count: live.sessions?.length || 0,
-                session_count: live._meta?.sessionCount || 0,
-                updated: live._meta?.updatedAt || null,
-            });
-        }
-        catch { /* fall through */ }
-    }
-    sendJSON(res, { sessions: [], count: 0 });
+    const live = getLiveSessions();
+    return sendJSON(res, {
+        sessions: live.sessions || [],
+        count: live.sessions?.length || 0,
+        session_count: live.meta?.sessionCount || 0,
+        updated: live.meta?.updatedAt || null,
+    });
 }
 function handleSafeguardLog(_req, res) {
     const sl = path.join(getDataDir(), "safeguard-log.md");
@@ -698,17 +659,21 @@ function validateProjectSessions(dataDir, project) {
     let total = 0;
     const projectsChecked = [];
     const checkProject = (projName) => {
-        const sf = path.join(getDataDir(), "projects", projName, "sessions.json");
-        if (!fs.existsSync(sf))
+        const sessRows = listSessions(projName, 10000);
+        if (!sessRows.length)
             return;
-        let sessions = [];
-        try {
-            const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-            sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
-        }
-        catch {
-            return;
-        }
+        const sessions = sessRows.map(s => ({
+            id: s.id,
+            session_key: s.session_key,
+            project: s.project,
+            task: s.task,
+            status: s.status,
+            start_time: s.start_ts ? new Date(s.start_ts * 1000).toISOString() : null,
+            started_at: s.start_ts ? new Date(s.start_ts * 1000).toISOString() : null,
+            end_time: s.end_ts ? new Date(s.end_ts * 1000).toISOString() : null,
+            duration: s.duration,
+            logged_at: s.logged_at,
+        }));
         projectsChecked.push(projName);
         const seenIds = new Map();
         for (let i = 0; i < sessions.length; i++) {
@@ -791,22 +756,17 @@ async function handleSetProjectModel(req, res) {
             return;
         }
         // Validate model exists in inventory
-        const modelsData = readJSON(path.join(getDataDir(), "models.json"));
-        const models = (modelsData?.models || []);
-        const model = models.find((m) => m.id === model_id);
+        const model = getModel(model_id);
         if (!model) {
             sendJSON(res, { ok: false, error: `Model "${model_id}" not found in inventory` });
             return;
         }
         // Update project config
-        const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-        if (!cfg.projects)
-            cfg.projects = {};
-        if (!cfg.projects[project])
-            cfg.projects[project] = {};
-        cfg.projects[project].model_allowlist = [model_id];
-        cfg.projects[project].free_only = model.tier === "free" || model.tier === 0 ? true : false;
-        fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+        const pc = getProjectConfig(project) || {};
+        pc.model_allowlist = [model_id];
+        pc.free_only = model.tier === "free" || model.tier === 0 ? true : false;
+        setProjectConfig(project, pc);
+        addLog("info", "dashboard", `Set project model: ${project} -> ${model_id}`);
         sendJSON(res, {
             ok: true,
             model: model.id,
@@ -827,32 +787,28 @@ async function handleSetProjectRouting(req, res) {
             sendJSON(res, { ok: false, error: "Missing project" });
             return;
         }
-        const cfg = readJSON(path.join(getDataDir(), "dashboard-config.json")) || {};
-        if (!cfg.projects)
-            cfg.projects = {};
-        if (!cfg.projects[project])
-            cfg.projects[project] = {};
+        const pc = getProjectConfig(project) || {};
         if (routing !== undefined) {
-            cfg.projects[project].model_routing = routing;
+            pc.model_routing = routing;
         }
         if (preset !== undefined) {
-            cfg.projects[project].routing_preset = preset;
+            pc.routing_preset = preset;
         }
         if (free_only !== undefined) {
-            cfg.projects[project].free_only = free_only;
+            pc.free_only = free_only;
         }
         if (model_allowlist !== undefined) {
-            cfg.projects[project].model_allowlist = model_allowlist;
+            pc.model_allowlist = model_allowlist;
         }
         if (routing_single_provider !== undefined) {
-            cfg.projects[project].routing_single_provider = routing_single_provider;
+            pc.routing_single_provider = routing_single_provider;
         }
-        fs.writeFileSync(path.join(getDataDir(), "dashboard-config.json"), JSON.stringify(cfg, null, 2));
+        setProjectConfig(project, pc);
         sendJSON(res, {
             ok: true,
             message: `Routing updated for ${project}`,
-            preset: cfg.projects[project].routing_preset || null,
-            chains: Object.keys(cfg.projects[project].model_routing || {}).length,
+            preset: pc.routing_preset || null,
+            chains: Object.keys(pc.model_routing || {}).length,
         });
     }
     catch (e) {
@@ -866,12 +822,9 @@ function handleProjectBacklog(req, res) {
     const project = url.searchParams.get("project");
     if (!project)
         return sendJSON(res, { ok: false, error: "Missing project" });
-    const bp = path.join(getDataDir(), "projects", project, "BACKLOG.json");
-    if (!fs.existsSync(bp))
-        return sendJSON(res, { tasks: [] });
     try {
-        const data = JSON.parse(fs.readFileSync(bp, "utf-8"));
-        sendJSON(res, { tasks: data.tasks || [] });
+        const tasks = listBacklogTasks(project);
+        sendJSON(res, { tasks });
     }
     catch {
         sendJSON(res, { tasks: [] });
@@ -902,6 +855,8 @@ function stripBasePath(pathname) {
     return pathname;
 }
 export function createDashboardHandler(api) {
+    // Initialize DB on first use
+    initDb();
     return async (req, res) => {
         try {
             const method = req.method || "GET";
@@ -917,17 +872,21 @@ export function createDashboardHandler(api) {
                         sendJSON(_res, { ok: false, error: "Action name required" });
                         return true;
                     }
+                    // Map frontend action names to prompt templates
+                    const actionAlias = {
+                        'fix-docs': 'cleanup_docs',
+                    };
+                    const resolvedAction = actionAlias[action] || action;
                     const promptTemplates = {
-                        grill_with_docs: (p) => [
-                            `[Quick Action: Grill Me With Docs — from Orchestrator Dashboard]`,
-                            `You are a project documentation examiner.`,
-                            `1. Read ALL project documentation files.`,
-                            `2. Formulate 5-10 probing questions about the project's architecture, decisions, trade-offs.`,
-                            `3. Present ONE question at a time, wait for the user's answer, then give feedback.`,
-                            `4. After all questions, provide a summary of gaps and strengths.`,
-                            p.topic ? `Focus on: ${p.topic}` : "",
-                            `Be tough but fair.`,
-                        ].filter(Boolean).join("\n"),
+                        doctor: (p) => [
+                            `[Quick Action: Orchestrator Doctor — from Dashboard]`,
+                            `You are an orchestrator diagnostician. Run a full health check on the orchestrator system:`,
+                            `1. Check all sessions for stale/orphaned entries`,
+                            `2. Check model configuration and routing`,
+                            `3. Verify project context and state consistency`,
+                            `4. Fix any issues found (session mismatches, broken registrations, stale data, orphaned projects)`,
+                            `5. Report what was checked, what was found, and what was fixed.`,
+                        ].filter(Boolean).join('\n'),
                         cleanup_docs: (p) => [
                             `[Quick Action: Clean Up & Organize Docs — from Orchestrator Dashboard]`,
                             `You are a documentation specialist.`,
@@ -937,75 +896,132 @@ export function createDashboardHandler(api) {
                             `3. Update files and create new ones if important gaps found.`,
                             `4. Report summary of changes and why.`,
                         ].filter(Boolean).join("\n"),
-                        setup_unit_tests: (p) => [
-                            `[Quick Action: Set Up Unit Tests — from Orchestrator Dashboard]`,
-                            `You are a test infrastructure engineer.`,
-                            `Framework: ${p.framework || "vitest"}`,
-                            `1. Install and configure the test framework.`,
-                            `2. Create initial unit tests for critical modules.`,
-                            `3. Set up test scripts in package.json.`,
-                            `4. Run tests and fix failures.`,
-                            `5. Report what was set up, pass rate, recommendations.`,
-                        ].filter(Boolean).join("\n"),
-                        setup_e2e_tests: (p) => [
-                            `[Quick Action: Set Up E2E Tests — from Orchestrator Dashboard]`,
-                            `You are a test infrastructure engineer.`,
-                            `Framework: ${p.framework || "playwright"}`,
-                            `1. Install and configure E2E testing.`,
-                            `2. Create E2E test scenarios for critical user journeys.`,
-                            `3. Set up test scripts.`,
-                            `4. Run tests and fix issues.`,
-                            `5. Report results and recommendations.`,
-                        ].filter(Boolean).join("\n"),
-                        debug_issue: (p) => [
-                            `[Quick Action: Debug Issue — from Orchestrator Dashboard]`,
-                            `## Issue Description`,
-                            p.issue_description || "No description provided.",
-                            ``,
-                            `## Instructions`,
-                            `1. Understand the project and the issue.`,
-                            `2. Reproduce the issue.`,
-                            `3. Identify root cause.`,
-                            `4. Implement a fix.`,
-                            `5. Verify the fix.`,
-                            `6. Report findings.`,
-                        ].filter(Boolean).join("\n"),
-                        create_functionality: (p) => [
-                            `[Quick Action: Create New Functionality — from Orchestrator Dashboard]`,
-                            `## Requirements`,
-                            p.description || "No description provided.",
-                            ``,
-                            `## Instructions`,
-                            `1. Understand the project architecture.`,
-                            `2. Design a solution fitting existing patterns.`,
-                            `3. Implement following project standards.`,
-                            `4. Add tests.`,
-                            `5. Verify everything works.`,
-                            `6. Report what was built and decisions made.`,
-                        ].filter(Boolean).join("\n"),
                     };
-                    const templateFn = promptTemplates[action];
+                    const templateFn = promptTemplates[resolvedAction];
                     if (!templateFn) {
                         sendJSON(_res, { ok: false, error: `Unknown action: ${action}` });
                         return true;
                     }
                     const message = templateFn(params || {});
-                    const sessionKey = `agent:main:subagent:orch-dash-${crypto.randomUUID()}`;
-                    const result = await api.runtime.subagent.run({
-                        sessionKey,
-                        message,
-                        model: params?.model || undefined,
-                        lightContext: true,
+                    const gatewayToken = getGatewayToken();
+                    if (!gatewayToken) {
+                        sendJSON(_res, { ok: false, error: "Gateway token not found — cannot spawn session" }, 500);
+                        return true;
+                    }
+                    const safeActionKey = action.replace(/[^a-z0-9]/gi, '-').slice(0, 24);
+                    const sessionKey = `agent:main:project-session:qa-${safeActionKey}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+                    const gatewayPort = 18789;
+                    // ═══ Spawn agent session via OpenAI-compatible endpoint ═══
+                    const safeAction = action.replace(/[^a-z0-9_-]/gi, '_');
+                    const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${gatewayToken}`,
+                            "Content-Type": "application/json",
+                            "x-openclaw-session-key": sessionKey,
+                            ...(params?.model ? { "x-openclaw-model": params.model } : {}),
+                        },
+                        body: JSON.stringify({
+                            model: "openclaw/main",
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: `[Orchestrator Quick Action: ${safeAction} — from Dashboard]\n\n${message}\n\nAuto-register with the orchestrator project if applicable and report your findings back to the dashboard.`
+                                }
+                            ],
+                            max_tokens: 100,
+                        }),
                     });
+                    if (!response.ok) {
+                        const errText = await response.text().catch(() => "unknown error");
+                        api.logger.warn(`quick-action: Endpoint returned ${response.status}: ${errText.slice(0, 200)}`);
+                        sendJSON(_res, { ok: false, error: `Endpoint returned ${response.status}: ${errText.slice(0, 200)}` }, 500);
+                        return true;
+                    }
+                    const result = await response.json();
+                    api.logger.info(`quick-action: Spawned session for "${safeAction}": ${sessionKey.slice(0, 50)}`);
                     sendJSON(_res, {
                         ok: true,
-                        action,
-                        run_id: result.runId,
+                        action: safeAction,
                         session_key: sessionKey,
-                        message: `Quick action "${action}" spawned (runId: ${result.runId})`,
+                        message: `Quick action "${safeAction}" launched — session ${sessionKey.slice(0, 24)}…`,
                     });
                 }
                 catch (e) {
+                    api.logger.error(`quick-action: Error: ${e.message}`);
+                    sendJSON(_res, { ok: false, error: e.message }, 500);
+                }
+                return true;
+            }
+            async function handleSpawnProjectSession(_req, _res) {
+                try {
+                    const body = await readBody(_req);
+                    const { project, task, model, tags } = typeof body === "string" ? JSON.parse(body) : body;
+                    if (!project || !task) {
+                        sendJSON(_res, { ok: false, error: "Project and task are required" });
+                        return true;
+                    }
+                    const safeName = project.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
+                    const sessionKey = `agent:main:project-session:${safeName}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+                    const gatewayToken = getGatewayToken();
+                    if (!gatewayToken) {
+                        sendJSON(_res, { ok: false, error: "Gateway token not found — cannot spawn via OpenAI endpoint" }, 500);
+                        return true;
+                    }
+                    api.logger.info(`spawn: Creating session via OpenAI endpoint -> ${sessionKey.slice(0, 50)}`);
+                    // ═══ Write pending registration via DB ═══
+                    try {
+                        addPendingRegistration({
+                            session_key: sessionKey,
+                            project,
+                            tags: typeof tags === "string" ? tags.split(",").map((t) => t.trim()).filter(Boolean) : Array.isArray(tags) ? tags : [],
+                            created_at: new Date().toISOString()
+                        });
+                        api.logger.info(`spawn: Written pending registration in DB for ${sessionKey.slice(0, 50)}`);
+                    }
+                    catch (e) {
+                        api.logger.warn(`spawn: Could not write pending registration: ${e.message}`);
+                    }
+                    // ═══ Create session via OpenAI-compatible endpoint ═══
+                    // This call creates a new session with our custom key, sends the task,
+                    // and the AI starts processing. We limit max_tokens for a quick response.
+                    const gatewayPort = 18789;
+                    const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${gatewayToken}`,
+                            "Content-Type": "application/json",
+                            "x-openclaw-session-key": sessionKey,
+                            ...(model ? { "x-openclaw-model": model } : {}),
+                        },
+                        body: JSON.stringify({
+                            model: "openclaw/main",
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: `[Orchestrator: New Session for "${project}"]\n\nYou are a newly spawned session. Your task:\n\n${task}\n\nAuto-register with the orchestrator project "${project}" and begin working on the task above.`
+                                }
+                            ],
+                            max_tokens: 50,
+                        }),
+                    });
+                    if (!response.ok) {
+                        const errText = await response.text().catch(() => "unknown error");
+                        api.logger.warn(`spawn: OpenAI endpoint returned ${response.status}: ${errText.slice(0, 200)}`);
+                        sendJSON(_res, { ok: false, error: `Endpoint returned ${response.status}: ${errText.slice(0, 200)}` }, 500);
+                        return true;
+                    }
+                    const result = await response.json();
+                    api.logger.info(`spawn: Created session: ${sessionKey.slice(0, 50)} (${result?.choices?.[0]?.message?.content?.slice(0, 40) || "?"})`);
+                    sendJSON(_res, {
+                        ok: true,
+                        session_key: sessionKey,
+                        project,
+                        message: `Session created for "${project}": ${sessionKey}`,
+                    });
+                }
+                catch (e) {
+                    api.logger.error(`spawn: Error: ${e.message}`);
                     sendJSON(_res, { ok: false, error: e.message }, 500);
                 }
                 return true;
@@ -1014,7 +1030,7 @@ export function createDashboardHandler(api) {
             if (method === "OPTIONS") {
                 res.writeHead(200, {
                     "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+                    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type",
                 });
                 res.end();
@@ -1022,9 +1038,23 @@ export function createDashboardHandler(api) {
             }
             // ── STATIC FILES ──
             if (method === "GET") {
-                // Dashboard main page
+                // Software House Dashboard
+                if (pathname === "/software-house" || pathname === "/software-house/") {
+                    sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "software-house.html"));
+                    return true;
+                }
+                // Static assets for dashboard pages (sprites, images)
+                if (pathname.startsWith("/assets/") || pathname.startsWith("/data/")) {
+                    const assetFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
+                    if (fs.existsSync(assetFile) && fs.statSync(assetFile).isFile()) {
+                        sendFile(res, assetFile);
+                        return true;
+                    }
+                }
+                // Dashboard main page — redirect to Software House
                 if (pathname === "/" || pathname === "/index.html") {
-                    sendFile(res, HTML_PATH);
+                    res.writeHead(302, { Location: "/orchestrator/software-house" });
+                    res.end();
                     return true;
                 }
                 // Other static HTML files in dashboard dir
@@ -1037,6 +1067,9 @@ export function createDashboardHandler(api) {
                 }
             }
             // ── API ROUTES ──
+            // Software House routes (must be checked first)
+            if (await handleSoftwareHouseRoute(req, res))
+                return true;
             if (method === "GET") {
                 switch (pathname) {
                     case "/api/status":
@@ -1104,6 +1137,15 @@ export function createDashboardHandler(api) {
                     case "/api/set-project-model": return handleSetProjectModel(req, res).then(() => true);
                     case "/api/set-project-routing": return handleSetProjectRouting(req, res).then(() => true);
                     case "/api/quick-action": return handleQuickAction(req, res);
+                    case "/api/update-backlog-task": return handleUpdateBacklogTask(req, res);
+                    case "/api/update-project-workflow": return handleUpdateProjectWorkflow(req, res);
+                    case "/api/spawn-project-session": return handleSpawnProjectSession(req, res);
+                }
+            }
+            // ── PATCH API ──
+            if (method === "PATCH") {
+                switch (pathname) {
+                    case "/api/models": return handleModelUpdate(req, res);
                 }
             }
             // ── 404 ──
@@ -1115,4 +1157,89 @@ export function createDashboardHandler(api) {
             return true;
         }
     };
+}
+// ═══ Update Backlog Task ═══
+async function handleUpdateBacklogTask(req, res) {
+    try {
+        const body = await readBody(req);
+        const { project, id, status } = typeof body === "string" ? JSON.parse(body) : body;
+        if (!project) {
+            sendJSON(res, { ok: false, error: "Missing project" });
+            return true;
+        }
+        if (status === "cleanup_done") {
+            // Remove all done/complete/decomposed tasks by marking as done in DB
+            const tasks = listBacklogTasks(project);
+            for (const t of tasks) {
+                if (t.status === "done" || t.status === "complete" || (t.labels && t.labels.includes("decomposed"))) {
+                    deleteBacklogTask(t.id);
+                }
+            }
+            addLog("info", "dashboard", `Cleaned up completed tasks for ${project}`);
+            sendJSON(res, { ok: true, message: `Cleaned up completed tasks` });
+            return true;
+        }
+        if (status === "deleted") {
+            deleteBacklogTask(id);
+            addLog("info", "dashboard", `Deleted backlog task ${id}`);
+            sendJSON(res, { ok: true, message: `Task ${id} deleted` });
+            return true;
+        }
+        // Update specific task status
+        const task = getBacklogTask(id);
+        if (!task) {
+            sendJSON(res, { ok: false, error: `Task ${id} not found` });
+            return true;
+        }
+        updateBacklogTask(id, { status, updated_ts: Math.floor(Date.now() / 1000) });
+        addLog("info", "dashboard", `Backlog task ${id} -> ${status} (project: ${project})`);
+        sendJSON(res, { ok: true, message: `Task ${id} updated to ${status}` });
+        return true;
+    }
+    catch (e) {
+        sendJSON(res, { ok: false, error: e.message }, 500);
+        return true;
+    }
+}
+// ═══ Update Project Workflow ═══
+async function handleUpdateProjectWorkflow(req, res) {
+    try {
+        const body = await readBody(req);
+        const parsed = typeof body === "string" ? JSON.parse(body) : body;
+        const { project, workflow, free_only, model_routing } = parsed;
+        if (!project) {
+            sendJSON(res, { ok: false, error: "Missing project" });
+            return true;
+        }
+        const pc = getProjectConfig(project) || {};
+        if (workflow !== undefined) {
+            pc.workflow = { ...(pc.workflow || {}), ...workflow };
+        }
+        if (free_only !== undefined) {
+            pc.free_only = free_only;
+        }
+        if (model_routing !== undefined) {
+            if (!pc.model_routing)
+                pc.model_routing = {};
+            for (const [cat, models] of Object.entries(model_routing)) {
+                if (models === null) {
+                    delete pc.model_routing[cat];
+                }
+                else {
+                    pc.model_routing[cat] = models;
+                }
+            }
+            if (Object.keys(pc.model_routing).length === 0) {
+                delete pc.model_routing;
+            }
+        }
+        setProjectConfig(project, pc);
+        addLog("info", "dashboard", `Updated workflow config for ${project}`);
+        sendJSON(res, { ok: true, message: `Project ${project} updated` });
+        return true;
+    }
+    catch (e) {
+        sendJSON(res, { ok: false, error: e.message }, 500);
+        return true;
+    }
 }

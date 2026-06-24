@@ -22,7 +22,7 @@ The orchestrator should manage project lifecycle (analyze → plan → implement
 - `agent_end` auto-advances timed-out phases (defaults: 5/10/10/30/5/2 min)
 
 ### 1b. Backlog Management
-- 3 tools: `orchestrator_backlog_add`, `orchestrator_backlog_list`, `orchestrator_backlog_update`
+- 3 tools: `genorch_backlog_add`, `genorch_backlog_list`, `genorch_backlog_update`
 - Structured task schema: id, title, description, status, priority (p0-p3), labels, dependencies, assignment
 - BACKLOG.json stored per project in orchestrator-data
 

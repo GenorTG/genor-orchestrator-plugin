@@ -295,11 +295,12 @@ def main():
         entry = build_orchestrator_model(mid, info, existing)
         config_entries.append(entry)
     
-    # 2) Existing models NOT in config → keep as-is (don't drop manual data)
-    orphan_entries = [m for m in existing if m["id"] not in seen_config]
+    # 2) Existing models NOT in config → DROP them (gateway config is source of truth).
+    #    Manual ratings/tiers for models that ARE in config are preserved above.
+    pruned = [m for m in existing if m["id"] not in seen_config]
     
-    # Combine: config models first, then orphans
-    new_catalog = config_entries + orphan_entries
+    # Combine: only config-sourced models (orphans dropped — gateway is source of truth)
+    new_catalog = config_entries
     
     # ── Stats ──
     previously_existed = {m["id"] for m in existing}
@@ -310,11 +311,11 @@ def main():
     log(f"  Total in catalog:     {len(new_catalog)}", "ok")
     log(f"  From OpenClaw config: {len(seen_config)}", "ok")
     log(f"  New/discovered:       {len(newly)}", "warn")
-    log(f"  Orphans (preserved):  {len(orphan_entries)}", "info")
+    log(f"  Pruned (dropped):     {len(pruned)}", "info")
 
-    if orphan_entries and VERBOSE:
-        log("Models preserved from existing catalog (not in gateway config):", "info")
-        for m in orphan_entries:
+    if pruned and VERBOSE:
+        log("Models dropped (not in gateway config):", "info")
+        for m in pruned:
             log(f"  {m['id']}", "info")
 
     # ── Write ──

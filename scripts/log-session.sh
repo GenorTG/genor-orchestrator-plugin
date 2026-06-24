@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # log-session.sh — Log a session run with full state for cross-session resume
 # Usage: bash scripts/log-session.sh <project> <task> <model> <status> [notes] [agent] [duration] [qa_done] [checked]

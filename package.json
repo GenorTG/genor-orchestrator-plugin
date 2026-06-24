@@ -1,6 +1,6 @@
 {
-  "name": "genor-orchestrator-plugin",
-  "version": "0.7.1",
+  "name": "genor-orchestrator-software-house",
+  "version": "0.1.0-alpha",
   "type": "module",
   "private": true,
   "scripts": {
@@ -39,12 +39,12 @@
       "openclawVersion": ">=2026.5.17"
     }
   },
-  "description": "Model routing, session logging, project management, dashboard, hooks, context injection, backlog, and routing presets for OpenClaw",
+  "description": "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration",
   "keywords": [
     "openclaw",
     "plugin",
-    "orchestrator",
-    "routing",
-    "backlog"
+    "software-house",
+    "workers",
+    "orchestrator"
   ]
 }

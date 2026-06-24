@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # run-model-discovery.sh — Wrapper for auto-populate-models.py
 # Called by cron. Silently discovers models from OpenClaw config

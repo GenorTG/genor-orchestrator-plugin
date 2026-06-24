@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # log-decision.sh — Log an architecture decision to the project's ADR
 # Usage: bash scripts/log-decision.sh <project-path> <title> <context> <decision> [alternatives] [consequences]

@@ -1,7 +1,7 @@
 # 📋 AGENTS.md — Genor's Orchestrator Plugin
 
 ## 🧠 What It Does
-A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **28 tools** for model routing, session tracking, project context injection, a live dashboard, subagent management, backlog management, and automated project health — all without a separate process.
+A full-featured OpenClaw plugin that turns your gateway into a coordinated agent workspace. **40 tools** for model routing, session tracking, project context injection, a live dashboard (9 tabs), subagent management, backlog management, QA workflow, test infrastructure, session spawning via OpenAI endpoint, and automated project health — all without a separate process.
 
 ---
 
@@ -9,12 +9,12 @@ A full-featured OpenClaw plugin that turns your gateway into a coordinated agent
 
 | File | What It Does |
 |------|-------------|
-| `src/index.ts` | 🧩 Main plugin — 28 tools, 5 slash commands, 8 hooks, SessionTracker, MaintenanceService |
-| `src/dashboard-handler.ts` | 🖥️ HTTP handler serving the dashboard at `/orchestrator` |
-| `src/index.test.ts` | 🧪 Test suite (116 tests) |
-| `dashboard/index.html` | 🎨 Single-file SPA frontend (Tailwind, zero build) |
+| `src/index.ts` | 🧩 Main plugin — 40 tools, 8 hooks (via `api.on`), SessionTracker, MaintenanceService |
+| `src/dashboard-handler.ts` | 🖥️ HTTP handler serving the dashboard at `/orchestrator`, including `/api/spawn-project-session` endpoint |
+| `src/shared.ts` | 🔧 Shared types, utilities, constants |
+| `src/index.test.ts` | 🧪 Test suite (3 tests) |
+| `dashboard/index.html` | 🎨 Single-file SPA frontend (1428 lines, Tailwind, zero build) |
 | `openclaw.plugin.json` | 📄 Plugin manifest |
-| `scripts/auto-populate-models.py` | 🤖 Nightly model discovery script |
 
 ---
 
@@ -39,26 +39,44 @@ openclaw plugins enable genor-orchestrator
 
 | Metric | Value |
 |--------|-------|
-| **Version** | 0.7.0 |
-| **Tools** | 28 tools + 5 slash commands |
+| **Version** | 0.9.0 |
+| **Tools** | 40 tools (0 slash commands — all migrated to proper tools) |
 | **Hooks** | 8 lifecycle hooks |
 | **Models tracked** | 24 total, 11 agent-ready |
 | **Providers** | google, lmstudio, ollama, opencode-go, openrouter |
 | **Projects** | 2 active |
 | **Data dir** | `~/.openclaw/workspace/orchestrator-data/` |
+| **Dashboard** | 1428-line SPA with left sidebar nav (9 tabs) |
+| **Plugin location** | `~/.openclaw/extensions/genor-orchestrator/` (native extension) |
 
 ---
+
+## 🔬 v0.9.0 Features
+
+1. **🚀 OpenAI Endpoint Session Spawn** — Dashboard **➕ New Session** button POSTs directly to the gateway's `/v1/chat/completions` endpoint with `x-openclaw-session-key` header. No queue files, no cron, no hook bridging. Returns session key immediately.
+2. **🧹 Queue Approach Removed** — The old `pending-spawns.json` → `before_prompt_build` hook → `subagent.run()` pipeline is completely removed.
+3. **📋 Dashboard Spawn Button** — Click ➕ New Session, choose a project, describe the task, optionally pick a model, and get an instant session.
+4. **🔧 Simplified Architecture** — Gateway token read from `~/.openclaw/openclaw.json`, POST to `http://127.0.0.1:18789/v1/chat/completions` with custom session key. No trusted-operator, self-API, heartbeat, or cron approaches.
+
+## 🔬 v0.8.0 Features
+
+1. **🖥️ Dashboard Redesign** — 1428-line single-file SPA with 9-tab left sidebar nav. StateManager reactive state, lazy rendering, toast notifications, accessible ARIA roles. Replaced old top-tab-bar layout.
+2. **📋 Sessions Tab** — Per-project session tree with parent-child hierarchy, clickable detail pane, spawn sub-agent modal. Replaces old Chat Console (SSE/chat functionality removed — that's OpenClaw WebUI's job).
+3. **✅ QA Workflow** — 3 new tools: `qa_submit` (spawns independent QA review subagent), `qa_approve` (unblocks work→log transition), `qa_reject` (returns to work phase).
+4. **🤝 Handoff** — `generate_handoff` creates compact recovery docs for agent switching.
+5. **🔥 Deep-Dive** — `grill_with_docs` spawns subagent that quizzes you on project docs.
+6. **🧹 Doc Tools** — `fix_docs_drift` (stale version/tool counts), `regenerate_state` (from event log), `cleanup_docs` (spawns subagent to fix links/gaps).
+7. **🧪 Test Infrastructure** — `setup_unit_tests`, `setup_e2e_tests`, `debug_issue`, `create_functionality` — spawn subagents for targeted work.
+8. **🏭 PM2 Removed** — No PM2 bridge. Plugin runs as native OpenClaw extension.
 
 ## 🔬 v0.7.0 Features
 
 1. **🧠 Routing Presets** — 5 presets: Custom Chains, No Steering, Free Only, Single Provider, Custom Fallbacks Only. Dashboard preset selector with live descriptions.
-2. **📋 Backlog Tools** — 6 new tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog management.
+2. **📋 Backlog Tools** — 6 tools: `backlog_add`, `backlog_list`, `backlog_update`, `backlog_dispatch`, `backlog_dispatch_all`, `create_project`. Full project backlog management.
 3. **🔗 Routing Chains** — Per-task-type model preference lists with fallback chain. Dashboard-editable, persisted to config.
 4. **🧠 Enhanced Routing Brain** — `get_routing` returns model quality metadata (tier, speed, context). Task category auto-inferred. Blocked chain detection. Preset-aware hook resolution.
 5. **🖥️ Agent Cards** — Stop and Recover buttons on agent cards in home tab.
 6. **🛡️ Safeguards Tab** — Dashboard safeguards viewer with config, event log, and agent health.
-
----
 
 ## 🔬 v0.6.0 Features
 

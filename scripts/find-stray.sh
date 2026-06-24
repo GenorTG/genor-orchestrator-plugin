@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # find-stray.sh — Find stray/stale subagents that may be orphaned
 # Usage: bash scripts/find-stray.sh [--older-than MINUTES]

@@ -1,9 +1,10 @@
-node_modules/
+dist/openclaw.plugin.json
+dist/src/
 dist/*.test.*
-*.tmp
+.DS_Store
 .env
 .env.local
-.DS_Store
 *.log
+node_modules/
 reports/
-dist/src/
+*.tmp

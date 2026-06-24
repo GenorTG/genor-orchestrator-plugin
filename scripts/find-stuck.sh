@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # find-stuck.sh — Find potentially stuck subagents
 # Usage: bash scripts/find-stuck.sh [--timeout MINUTES]

@@ -1,3 +1,4 @@
+# ⛔ STALE — Superseded by in-plugin functionality. Kept for reference only.
 #!/usr/bin/env bash
 # cleanup-stale.sh — Clean up stale/orphaned subagents
 # Usage: bash scripts/cleanup-stale.sh [--dry-run] [--older-than MINUTES]

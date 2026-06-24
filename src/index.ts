@@ -3,6 +3,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { WORKER_TOOLS } from "./worker-tools.js";
 import * as os from "node:os";
 import { execSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
@@ -10,8 +11,9 @@ import { fileURLToPath } from "node:url";
 
 import { createDashboardHandler } from "./dashboard-handler.js";
 import { getDataDir } from "./shared.js";
-
-// ═══════════════════════════════════════════════════════════════
+import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, updateProjectConfig, listSessions, getAllSessions, addSession, updateSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, deleteBacklogTask, deleteBacklogTasksByStatus, listModels, getModel, upsertModel, updateModel, countModels, getLiveAgents, setLiveAgents, getLiveSessions, setLiveSessions, getPendingRegistrations, addPendingRegistration, removePendingRegistration, getControlResults, addControlResult, getLogs as getDbLogs, addLog, addStateEvent, getStateEvents,
+  addVerificationRun, getVerificationRun, updateVerificationRun, listVerificationRuns,
+  VerificationRun, getDb } from "./db.js";
 //  PLUGIN ROOT — all paths resolve from here (no skill dir dependency!)
 // ═══════════════════════════════════════════════════════════════
 const __filename = fileURLToPath(import.meta.url);
@@ -19,77 +21,35 @@ const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 
 // ═══════════════════════════════════════════════════════════════
-//  TABLE OF CONTENTS — for quick LLM & developer navigation
+//  TABLE OF CONTENTS (approximate line ranges — will drift)
 // ═══════════════════════════════════════════════════════════════
 //
-//  Lines  Section
-//  ────── ──────────────────────────────────────────────────────
-//  1-7    Imports
-//  10-14  TABLE OF CONTENTS (this block)
-//  16-18  TYPES — LogEntry, DashboardConfig, ModelEntry, ProjectBacklogTask
-//  19-53  Interfaces
-//  57-63  txt() — Tool result helper
-//  65-67  DATA DIRECTORY RESOLUTION
-//  68-89  getDataDir() / getDashboardDir()
-//  91-93  JSON FILE HELPERS
-//  95-109 readJSON() / writeJSON() / readFileContent()
-//  111-113 LOGGER — OrchestratorLogger class
-//  116-199 OrchestratorLogger methods
-//  200-202 SESSION TRACKER — SessionTracker class
-//  202-275 SessionTracker methods
-//  277-279 LIVE AGENTS FILE
-//  283-338 writeLiveAgents() — writes live-agents.json + state.json
-//  340-342 PROJECT HELPERS
-//  344-443 getProjectLocation / buildProjectToc / syncProjectToOrchestrator
-//  392-406 normalizeSessionsJson
-//  409-433 generateRecoveryDoc
-//  435-443 readRecentSessions
-//  445-447 BACKGROUND MAINTENANCE — MaintenanceService class
-//  449-504 MaintenanceService.start() / tick() / stop()
-//  506-508 MODEL / DASHBOARD HELPERS
-//  510-539 isPaid / parseSessionLog / parsePriceLog / projDir
-//  541-543 TOOL LOGIC (pure functions behind each tool)
-//  545-793 getStatus / getConfig / filterModelsForProject / getModels
-//  633-658 checkModels / autoPopulate / logSession / logDecision
-//  683-715 logSession() — Write session file + log
-//  718-736 logDecision() — Write ADR file
-//  738-746 getLogs — query orchestrator logs
-//  748-793 setContext / clearContextFn / syncProject / getProjectDocsFn
-//  795-797 PLUGIN ENTRY
-//  801-808 Constants: TOOL_NAMES (13 tools), PLUGIN_ID
-//  810-822 definePluginEntry({...}) + register() — init
-//  824-838 Cron scheduling (nightly auto-populate 3 AM)
-//  840-842   LOGGER init
-//  844-846   HOOKS (8 hooks)
-//  848-855   • session_start
-//  856-875   • session_end (auto-log + recovery doc)
-//  877-883   • subagent_spawned
-//  885-890   • subagent_ended
-//  892-925   • before_model_resolve (auto-routing)
-//  927-940   • before_prompt_build (context injection)
-//  942-946   • agent_end
-//  948-952   • gateway_stop
-//  954-956   TOOLS (12 registered via api.registerTool)
-//  957-969   • orchestrator_set_context
-//  970-978   • orchestrator_clear_context
-//  979-988   • orchestrator_get_status
-//  989-998   • orchestrator_get_config
-//  999-1014  • orchestrator_get_models
-//  1016-1026 • orchestrator_check_models
-//  1028-1036 • orchestrator_auto_populate
-//  1038-1058 • orchestrator_log_session
-//  1060-1075 • orchestrator_log_decision
-//  1077-1090 • orchestrator_get_logs
-//  1092-1104 • orchestrator_sync_project
-//  1106-1116 • orchestrator_get_project_docs
-//  1118-1121 BACKGROUND MAINTENANCE start
-//  1123-1129 SLASH COMMANDS: /genor, /genor-dashboard, /genor-status, /genor-help
-//  1131-1188 api.registerCommand({ name: "genor", ... })
-//  1190      logger.info — "Orchestrator ready"
-//  1192-1194 close register()
-//  1196-1198 EXPORT — defineToolPlugin + openclaw metadata
-//  1200-1230 toolPluginMetadataSymbol + configSchema
-//  1232     export default
+//  Lines   Section
+//  ─────── ─────────────────────────────────────────────────────
+//  1-15    Imports, definePluginEntry
+//  17-20    Package-level constants
+//  22-95    TABLE OF CONTENTS (this block)
+//  96-340   TYPES, INTERFACES, HELPERS (LogEntry, DashboardConfig,
+//           ModelEntry, ProjectBacklogTask, txt(), getDataDir(),
+//           readJSON/writeJSON, OrchestratorLogger, etc.)
+//  342-512  WorkflowTracker class
+//  514-2663 SessionTracker class
+//  2665-2780 Plugin entry: definePluginEntry(), init, cron, logger
+//  2782-3460 HOOKS (8 registered):
+//              • session_start    (line 2782)
+//              • session_end      (line 2800)
+//              • subagent_spawned (line 2979)
+//              • subagent_ended   (line 3000)
+//              • before_model_resolve  (line 3033)
+//              • before_prompt_build   (line 3212)
+//              • agent_end        (line 3358)
+//              • gateway_stop     (line 3411)
+//  3464-3477 Tool registration wrapper + metadata collector
+//  3479-6330 TOOLS (44 registered via api.registerTool)
+//              • genorch_session_register, genorch_session_start_work,
+//                genorch_project_bind, backlog tools, QA tools,
+//                verif pipeline tools, task delegate, etc.
+//  6331-6335 Export: __setTestSessionKey, default pluginExport
 //
 // ═══════════════════════════════════════════════════════════════
 
@@ -141,8 +101,6 @@ interface ModelEntry {
   id: string;
   provider: string;
   name: string;
-  tier: number;
-  speed_rating: number;
   status: string;
   agent_ready: boolean;
   capabilities?: Record<string, any>;
@@ -446,48 +404,155 @@ class WorkflowTracker {
   }
 }
 
+// ── PER-SESSION STATE ──
+// Each session gets its own state object to prevent cross-session pollution.
+// Scalar fields are exposed as getter/setter pairs on SessionTracker for
+// backward compatibility with the 250+ external references (e.g. sessionTracker.currentProject).
+
+interface SessionState {
+  currentProject: string | null;
+  currentTask: string | null;
+  currentModel: string | null;
+  currentModelProvider: string | null;
+  currentAgent: string;
+  sessionStartTimestamp: number;
+  sessionKey: string | null;
+  subagentDepth: number;
+  currentAction: string | null;
+  currentFile: string | null;
+  agentStatus: string;
+  touchedFiles: string[];
+  actionHistory: ActionEvent[];
+  tokenUsage: { input: number; output: number; total: number };
+  lastError: string | null;
+  lastActivityTimestamp: number;
+  errorCount: number;
+  loggedTaskCompletion: boolean;
+  qaStatus: "none" | "pending" | "approved" | "rejected";
+  qaFindings: Array<{ finding: string; timestamp: string }>;
+  qaApprovedAt: string | null;
+  qaRejectedAt: string | null;
+  qaRejectReason: string | null;
+  qaHistory: Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }>;
+  handoffGenerated: boolean;
+  handoffPath: string | null;
+  workflow: WorkflowTracker;
+}
+
+function newSessionState(): SessionState {
+  return {
+    currentProject: null,
+    currentTask: null,
+    currentModel: null,
+    currentModelProvider: null,
+    currentAgent: "Amy",
+    sessionStartTimestamp: Date.now(),
+    sessionKey: null,
+    subagentDepth: 0,
+    currentAction: null,
+    currentFile: null,
+    agentStatus: "idle",
+    touchedFiles: [],
+    actionHistory: [],
+    tokenUsage: { input: 0, output: 0, total: 0 },
+    lastError: null,
+    lastActivityTimestamp: Date.now(),
+    errorCount: 0,
+    loggedTaskCompletion: false,
+    qaStatus: "none",
+    qaFindings: [],
+    qaApprovedAt: null,
+    qaRejectedAt: null,
+    qaRejectReason: null,
+    qaHistory: [],
+    handoffGenerated: false,
+    handoffPath: null,
+    workflow: new WorkflowTracker(),
+  };
+}
+
 class SessionTracker {
-  currentProject: string | null = null;
-  currentTask: string | null = null;
-  currentModel: string | null = null;
-  currentModelProvider: string | null = null;
-  currentModelTier: number = 0;
-  currentAgent: string = "Amy";
-  sessionStartTimestamp: number = Date.now();
-  sessionKey: string | null = null;
-  subagentDepth: number = 0;
-  currentAction: string | null = null;
-  currentFile: string | null = null;
-  agentStatus: string = "idle";
-  touchedFiles: string[] = [];
-  actionHistory: ActionEvent[] = [];
-  tokenUsage: { input: number; output: number; total: number } = { input: 0, output: 0, total: 0 };
-  lastError: string | null = null;
-  lastActivityTimestamp: number = Date.now();
-  errorCount: number = 0;
-  loggedTaskCompletion: boolean = false;
-  // ── QA GATE TRACKING ────────────────────────────────────────
-  // When workflow.include_qa is enabled, advancing from work→log
-  // requires QA approval. The gate is enforced in orchestrator_advance_phase.
-  qaStatus: "none" | "pending" | "approved" | "rejected" = "none";
-  qaFindings: Array<{ finding: string; timestamp: string }> = [];
-  qaApprovedAt: string | null = null;
-  // ── HANDOFF DOC TRACKING ─────────────────────────────────────
-  // Required before finishing a task. Generated by orchestrator_generate_handoff.
-  handoffGenerated: boolean = false;
-  handoffPath: string | null = null;
-  workflow: WorkflowTracker = new WorkflowTracker();
+  // Per-session state map — keyed by sessionKey
+  private _states: Map<string, SessionState> = new Map();
+  // Fallback for operations before a session key is assigned
+  private _fallback: SessionState = newSessionState();
+  // Active session key — stored separately to avoid circular getter/setter dependency
+  private _activeSessionKey: string | null = null;
+
+  /** Resolve per-session state for the current active session key. */
+  private get _s(): SessionState {
+    if (this._activeSessionKey !== null && this._states.has(this._activeSessionKey)) {
+      return this._states.get(this._activeSessionKey)!;
+    }
+    return this._fallback;
+  }
+
+  // ── Per-session scalar field delegates ──
+  get currentProject(): string | null { return this._s.currentProject; }
+  set currentProject(v: string | null) { this._s.currentProject = v; }
+  get currentTask(): string | null { return this._s.currentTask; }
+  set currentTask(v: string | null) { this._s.currentTask = v; }
+  get currentModel(): string | null { return this._s.currentModel; }
+  set currentModel(v: string | null) { this._s.currentModel = v; }
+  get currentModelProvider(): string | null { return this._s.currentModelProvider; }
+  set currentModelProvider(v: string | null) { this._s.currentModelProvider = v; }
+  get currentAgent(): string { return this._s.currentAgent; }
+  set currentAgent(v: string) { this._s.currentAgent = v; }
+  get sessionStartTimestamp(): number { return this._s.sessionStartTimestamp; }
+  set sessionStartTimestamp(v: number) { this._s.sessionStartTimestamp = v; }
+  get sessionKey(): string | null { return this._activeSessionKey; }
+  set sessionKey(v: string | null) { this._activeSessionKey = v; this._fallback.sessionKey = v; }
+  get subagentDepth(): number { return this._s.subagentDepth; }
+  set subagentDepth(v: number) { this._s.subagentDepth = v; }
+  get currentAction(): string | null { return this._s.currentAction; }
+  set currentAction(v: string | null) { this._s.currentAction = v; }
+  get currentFile(): string | null { return this._s.currentFile; }
+  set currentFile(v: string | null) { this._s.currentFile = v; }
+  get agentStatus(): string { return this._s.agentStatus; }
+  set agentStatus(v: string) { this._s.agentStatus = v; }
+  get touchedFiles(): string[] { return this._s.touchedFiles; }
+  set touchedFiles(v: string[]) { this._s.touchedFiles = v; }
+  get actionHistory(): ActionEvent[] { return this._s.actionHistory; }
+  set actionHistory(v: ActionEvent[]) { this._s.actionHistory = v; }
+  get tokenUsage(): { input: number; output: number; total: number } { return this._s.tokenUsage; }
+  set tokenUsage(v: { input: number; output: number; total: number }) { this._s.tokenUsage = v; }
+  get lastError(): string | null { return this._s.lastError; }
+  set lastError(v: string | null) { this._s.lastError = v; }
+  get lastActivityTimestamp(): number { return this._s.lastActivityTimestamp; }
+  set lastActivityTimestamp(v: number) { this._s.lastActivityTimestamp = v; }
+  get errorCount(): number { return this._s.errorCount; }
+  set errorCount(v: number) { this._s.errorCount = v; }
+  get loggedTaskCompletion(): boolean { return this._s.loggedTaskCompletion; }
+  set loggedTaskCompletion(v: boolean) { this._s.loggedTaskCompletion = v; }
+  get qaStatus(): "none" | "pending" | "approved" | "rejected" { return this._s.qaStatus; }
+  set qaStatus(v: "none" | "pending" | "approved" | "rejected") { this._s.qaStatus = v; }
+  get qaFindings(): Array<{ finding: string; timestamp: string }> { return this._s.qaFindings; }
+  set qaFindings(v: Array<{ finding: string; timestamp: string }>) { this._s.qaFindings = v; }
+  get qaApprovedAt(): string | null { return this._s.qaApprovedAt; }
+  set qaApprovedAt(v: string | null) { this._s.qaApprovedAt = v; }
+  get qaRejectedAt(): string | null { return this._s.qaRejectedAt; }
+  set qaRejectedAt(v: string | null) { this._s.qaRejectedAt = v; }
+  get qaRejectReason(): string | null { return this._s.qaRejectReason; }
+  set qaRejectReason(v: string | null) { this._s.qaRejectReason = v; }
+  get qaHistory(): Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }> { return this._s.qaHistory; }
+  set qaHistory(v: Array<{ event: "submit" | "approve" | "reject"; timestamp: string; detail: string; reviewSessionKey?: string | null }>) { this._s.qaHistory = v; }
+  get handoffGenerated(): boolean { return this._s.handoffGenerated; }
+  set handoffGenerated(v: boolean) { this._s.handoffGenerated = v; }
+  get handoffPath(): string | null { return this._s.handoffPath; }
+  set handoffPath(v: string | null) { this._s.handoffPath = v; }
+  get workflow(): WorkflowTracker { return this._s.workflow; }
+  set workflow(v: WorkflowTracker) { this._s.workflow = v; }
   // Per-session project contexts — keyed by sessionKey.
   // A session only gets project context injected if it explicitly
-  // registered via orchestrator_set_context. This prevents project
+  // registered via genorch_session_start_work. This prevents project
   // context from bleeding between unrelated sessions.
-  private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; modelTier: number; timestamp: number; workflowConfig?: any }> = new Map();
+  private sessionContexts: Map<string, { project: string; task: string | null; model: string | null; modelProvider: string | null; timestamp: number; workflowConfig?: any }> = new Map();
   // Subagent session registry — tracks which subagent keys belong to which parent
   // and what project/task they were spawned under. Used at session_end to log
   // the subagent with its real session key, not the parent's.
   private subagentRegistry: Map<string, { parentKey: string | null; project: string | null; task: string | null; startedAt: string }> = new Map();
   // Explicitly registered sessions — only these get orchestrator tracking.
-  // A session must call orchestrator_register before using any orchestrator
+  // A session must call genorch_session_register before using any orchestrator
   // features. This ensures no chat/logging session accidentally gets project
   // context injected into its prompts.
   private registeredSessions: Set<string> = new Set();
@@ -499,10 +564,9 @@ class SessionTracker {
   // A project must have at least one session to be considered "active".
   private projectActiveSessions: Map<string, Set<string>> = new Map();
 
-  trackModel(model: string, provider?: string, tier?: number): void {
+  trackModel(model: string, provider?: string): void {
     this.currentModel = model;
     if (provider) this.currentModelProvider = provider;
-    if (tier !== undefined) this.currentModelTier = tier;
   }
 
   trackAction(action: string, file?: string): void {
@@ -548,16 +612,27 @@ class SessionTracker {
   // ── QA GATE METHODS ──
   setQaStatus(status: "none" | "pending" | "approved" | "rejected"): void {
     this.qaStatus = status;
-    if (status === "approved") this.qaApprovedAt = new Date().toISOString();
+    if (status === "approved") {
+      this.qaApprovedAt = new Date().toISOString();
+      this.qaHistory.push({ event: "approve", timestamp: this.qaApprovedAt, detail: "QA approved" });
+    }
+    if (status === "rejected") {
+      this.qaRejectedAt = new Date().toISOString();
+    }
     if (status === "none") {
       this.qaFindings = [];
       this.qaApprovedAt = null;
+      this.qaRejectedAt = null;
+      this.qaRejectReason = null;
     }
   }
 
-  addQaFinding(finding: string): void {
+  addQaFinding(finding: string, reviewSessionKey?: string): void {
     this.qaFindings.push({ finding, timestamp: new Date().toISOString() });
+    this.qaHistory.push({ event: "submit", timestamp: new Date().toISOString(), detail: finding, reviewSessionKey });
     this.qaStatus = "pending";
+    this.qaRejectedAt = null;
+    this.qaRejectReason = null;
   }
 
   canAdvanceFromWork(): boolean {
@@ -568,7 +643,7 @@ class SessionTracker {
   }
 
   getQaSummary(): string {
-    if (this.qaStatus === "none" && this.workflow.includeQa) return "❓ QA required — submit findings with orchestrator_qa_submit";
+    if (this.qaStatus === "none" && this.workflow.includeQa) return "❓ QA required — submit findings with genorch_qa_submit";
     if (this.qaStatus === "pending") return "⏳ QA pending — waiting for approval";
     if (this.qaStatus === "approved") return `✅ QA approved (${this.qaApprovedAt || "unknown"})`;
     if (this.qaStatus === "rejected") return "❌ QA rejected — fix issues and resubmit";
@@ -587,43 +662,32 @@ class SessionTracker {
   }
 
   start(key: string, reason: string): void {
-    this.sessionKey = key;
-    this.sessionStartTimestamp = Date.now();
-    this.subagentDepth = 0;
-    this.currentAction = null;
-    this.currentFile = null;
-    this.touchedFiles = [];
-    this.actionHistory = [];
-    this.agentStatus = "working";
-    this.lastError = null;
-    this.errorCount = 0;
-    this.qaStatus = "none";
-    this.qaFindings = [];
-    this.qaApprovedAt = null;
-    this.handoffGenerated = false;
-    this.handoffPath = null;
-    this.lastActivityTimestamp = Date.now();
-    // Always reset project context on session start — never carry over
-    // stale project/task/model from a previous session.
-    this.currentProject = null;
-    this.currentTask = null;
-    this.currentModel = null;
-    this.currentModelProvider = null;
-    this.currentModelTier = 0;
-    this.tokenUsage = { input: 0, output: 0, total: 0 };
+    // Create a fresh per-session state for this session key
+    const state = newSessionState();
+    state.sessionKey = key;
+    state.agentStatus = "running";
+    state.lastActivityTimestamp = Date.now();
+    this._states.set(key, state);
+    this._activeSessionKey = key;
+    this._fallback.sessionKey = key;
   }
 
   end(): { project: string; task: string; duration: string; model: string } | null {
     if (!this.currentProject) return null;
     const ms = Date.now() - this.sessionStartTimestamp;
     const dur = ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}min`;
-    this.agentStatus = "complete";
-    return {
+    this.agentStatus = "done";
+    const result = {
       project: this.currentProject,
       task: this.currentTask || "auto-task",
       duration: dur,
       model: this.currentModel || "auto",
     };
+    // Clean up per-session state — no longer needed
+    if (this._activeSessionKey) this._states.delete(this._activeSessionKey);
+    this._activeSessionKey = null;
+    this._fallback = newSessionState();
+    return result;
   }
 
   private formatElapsed(ms: number): string {
@@ -642,7 +706,6 @@ class SessionTracker {
       task: this.currentTask,
       model: this.currentModel,
       model_provider: this.currentModelProvider,
-      model_tier: this.currentModelTier,
       subagent_depth: this.subagentDepth,
       action: this.currentAction,
       current_file: this.currentFile,
@@ -656,6 +719,9 @@ class SessionTracker {
       timestamp: new Date().toISOString(),
       session_key: this.sessionKey,
       workflow: this.workflow.toJSON(),
+      qa_status: this.qaStatus,
+      qa_history: this.qaHistory,
+      qa_findings_count: this.qaFindings.length,
       uptime_ms: elapsed,
       elapsed: this.formatElapsed(elapsed),
       session_started_at: new Date(this.sessionStartTimestamp).toISOString(),
@@ -674,7 +740,7 @@ class SessionTracker {
           `❌ Binding violation: This session is already locked to project "${boundProject}". ` +
           `Cannot set context to "${project}". To work on a different project, start a completely ` +
           `new session (not a subagent — a fresh session). If you're done with "${boundProject}", ` +
-          `call orchestrator_release_project first to unbind this session.`
+          `call genorch_project_leave first to unbind this session.`
         );
       }
     }
@@ -685,14 +751,14 @@ class SessionTracker {
     this.currentProject = project;
     this.currentTask = task;
     this.trackAction("Setting context");
-    this.agentStatus = "working";
+    this.agentStatus = "running";
     // Reset workflow tracker with project config
     this.workflow.reset(workflowConfig);
     // Store per-session so before_prompt_build can scope injection
     if (this.sessionKey) {
       this.sessionContexts.set(this.sessionKey, {
         project, task, model: this.currentModel, modelProvider: this.currentModelProvider,
-        modelTier: this.currentModelTier, timestamp: Date.now(), workflowConfig
+        timestamp: Date.now(), workflowConfig
       });
       // Bind session to project (if not already bound — first set_context creates the binding)
       if (!this.sessionProjectBinding.has(this.sessionKey)) {
@@ -713,7 +779,6 @@ class SessionTracker {
     this.currentTask = null;
     this.currentModel = null;
     this.currentModelProvider = null;
-    this.currentModelTier = 0;
     this.currentAction = null;
     this.currentFile = null;
     this.workflow.reset({ enabled: false });
@@ -728,10 +793,10 @@ class SessionTracker {
   }
 
   /** Get project context for a specific session key. */
-  getSessionContext(sessionKey: string): { project: string; task: string | null; model: string | null } | null {
+  getSessionContext(sessionKey: string): { project: string; task: string | null; model: string | null; workflowConfig?: any } | null {
     const ctx = this.sessionContexts.get(sessionKey);
     if (!ctx) return null;
-    return { project: ctx.project, task: ctx.task, model: ctx.model };
+    return { project: ctx.project, task: ctx.task, model: ctx.model, workflowConfig: ctx.workflowConfig };
   }
 
   /** Clean up session context for a given key. Call on session_end. */
@@ -840,11 +905,6 @@ class SessionTracker {
 
 const LIVE_AGENTS_FILE = "live-agents.json";
 
-function writeLiveAgents(reason: string, tracker: SessionTracker, logger?: OrchestratorLogger): void {
-  // Debounced: queues write to disk, coalesces rapid sequential calls
-  queueLiveAgents(reason, tracker);
-}
-
 // Debounce: coalesce rapid sequential writes into one disk write every 500ms
 let _liveAgentsTimer: ReturnType<typeof setTimeout> | null = null;
 let _pendingData: { agents: any[]; agent_count: number; active_count: number; last_updated: string; reason: string } | null = null;
@@ -852,20 +912,28 @@ let _pendingState: { project: string | null; task: string | null; model: string 
 
 function flushLiveAgents(): void {
   _liveAgentsTimer = null;
+  // Atomic swap: grab pending data and reset in one operation
+  const data = _pendingData;
+  const state = _pendingState;
+  _pendingData = null;
+  _pendingState = null;
+  if (!data && !state) return;
   try {
     const dataDir = getDataDir();
-    if (_pendingData) {
-      const d = _pendingData;
-      _pendingData = null;
-      writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), d);
+    if (data) {
+      writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), data);
+      try { setLiveAgents(data.agents || []); } catch { console.error("[orchestrator] flushLiveAgents: setLiveAgents failed"); }
     }
-    if (_pendingState) {
-      const s = _pendingState;
-      _pendingState = null;
-      writeJSON(path.join(dataDir, "state.json"), s);
+    if (state) {
+      writeJSON(path.join(dataDir, "state.json"), state);
+      try { setGlobalConfig("state", state); } catch { console.error("[orchestrator] flushLiveAgents: setGlobalConfig failed"); }
     }
   } catch (e: any) {
-    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgents: ${e.message}\n`, 'utf-8'); } catch {}
+    try { console.error("[orchestrator] flushLiveAgents:", e.message); } catch { /* final fallback */ }
+  }
+  // If more data was queued during flush, schedule another pass
+  if (_pendingData || _pendingState) {
+    _liveAgentsTimer = setTimeout(flushLiveAgents, 500);
   }
 }
 
@@ -873,7 +941,7 @@ function queueLiveAgents(reason: string, tracker: SessionTracker): void {
   // ═══ SCOPE: Only track registered sessions ═══
   // The plugin should be invisible to unregistered sessions.
   // No live agents data, no tracking, no context injection for sessions
-  // that haven't explicitly opted in via orchestrator_register.
+  // that haven't explicitly opted in via genorch_session_register.
   if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
 
   const main = tracker.toLiveState(reason);
@@ -886,11 +954,10 @@ function queueLiveAgents(reason: string, tracker: SessionTracker): void {
       task: tracker.currentTask,
       model: tracker.currentModel,
       model_provider: tracker.currentModelProvider,
-      model_tier: tracker.currentModelTier,
       subagent_depth: 0,
-      action: "working",
+      action: "running",
       current_file: null,
-      agent_status: "working",
+      agent_status: "running",
       touched_files: [],
       action_history: [],
       token_usage: { input: 0, output: 0, total: 0 },
@@ -930,22 +997,23 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
   // Only track registered sessions
   if (tracker.sessionKey && !tracker.isSessionRegistered(tracker.sessionKey)) return;
   if (_liveAgentsTimer) { clearTimeout(_liveAgentsTimer); _liveAgentsTimer = null; }
-  _pendingData = null;
-  _pendingState = null;
+  // Don't clear _pendingData/_pendingState — they may have pending writes from concurrent queueLiveAgents() calls
   try {
     const dataDir = getDataDir();
     const main = tracker.toLiveState(reason);
     const agents: any[] = [];
     if (main.project || main.agent) agents.push(main);
-    writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), {
+    const liveData = {
       agents,
       agent_count: agents.length,
       active_count: agents.filter(a => a.project).length,
       last_updated: new Date().toISOString(),
       reason,
-    });
+    };
+    writeJSON(path.join(dataDir, LIVE_AGENTS_FILE), liveData);
+    try { setLiveAgents(agents); } catch (e: any) { console.error("[orchestrator] flushLiveAgentsNow: setLiveAgents failed:", e.message); }
     if (tracker.currentProject) {
-      writeJSON(path.join(dataDir, "state.json"), {
+      const stateData = {
         project: tracker.currentProject,
         task: tracker.currentTask,
         model: tracker.currentModel,
@@ -953,21 +1021,22 @@ function flushLiveAgentsNow(reason: string, tracker: SessionTracker): void {
         timestamp: new Date().toISOString(),
         subagent_depth: tracker.subagentDepth,
         action: tracker.currentAction,
-      });
+      };
+      writeJSON(path.join(dataDir, "state.json"), stateData);
+      try { setGlobalConfig("state", stateData); } catch (e: any) { console.error("[orchestrator] flushLiveAgentsNow: state failed:", e.message); }
     }
   } catch (e: any) {
-    try { fs.appendFileSync('/tmp/live-agents-errors.log', `${new Date().toISOString()} flushLiveAgentsNow(${reason}): ${e.message}\n`, 'utf-8'); } catch {}
+    try { console.error("[orchestrator] flushLiveAgentsNow:", e.message); } catch { /* final fallback */ }
   }
 }
 
 const sessionTracker = new SessionTracker();
 
-/** Generate a stable default session key when hooks have not provided one yet.
- *  Used as fallback for orchestrator_register when session_start has not
- *  fired (e.g. sessions that existed before a gateway restart). */
-function agentDefaultSessionKey(): string {
-  if (sessionTracker.sessionKey) return sessionTracker.sessionKey;
-  return `agent:main:auto:${sessionTracker.currentAgent}:${sessionTracker.sessionStartTimestamp}`;
+/** Session key is the real OpenClaw gateway session ID, set by hooks.
+ *  We never generate synthetic keys — orchestrator uses the exact same
+ *  session ID that OpenClaw uses, ensuring 1:1 alignment. */
+function realSessionKey(): string | null {
+  return sessionTracker.sessionKey;
 }
 
 
@@ -976,8 +1045,10 @@ function agentDefaultSessionKey(): string {
 // ═══════════════════════════════════════════════════════════════
 
 function getProjectLocation(project: string, dataDir: string): string | null {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  return cfg.projects?.[project]?.location || null;
+  try {
+    const pc = getProjectConfig(project);
+    return pc?.location || null;
+  } catch { return null; }
 }
 
 function buildProjectToc(location: string): string[] {
@@ -1009,7 +1080,7 @@ function syncProjectToOrchestrator(project: string, dataDir: string, logger: Orc
   try {
     const pkg = readJSON(path.join(loc, "package.json"));
     if (pkg) context += `\n## Package\n- Name: ${pkg.name || "N/A"}\n- Version: ${pkg.version || "N/A"}\n`;
-  } catch { /* */ }
+  } catch (e: any) { logger.debug("sync", "Package.json read failed:", e.message); }
   const tocDisplay = toc.filter(f => !f.includes("node_modules") && !f.includes("/."));
   context += `\n## File Index (${tocDisplay.length} files)\n\n${tocDisplay.map(f => `- ${path.relative(loc, f)}`).join("\n")}\n`;
   fs.writeFileSync(path.join(pd, "CONTEXT.md"), context, "utf-8");
@@ -1023,42 +1094,20 @@ function syncProjectToOrchestrator(project: string, dataDir: string, logger: Orc
   logger.info("sync", `Synced ${project} from ${loc}: ${toc.length} files`);
 }
 
-function normalizeSessionsJson(project: string, dataDir: string): void {
-  const p = getProjDir(project, dataDir);
-  if (!p) return;
-  const sf = path.join(p, "sessions.json");
-  if (!fs.existsSync(sf)) return;
-  try {
-    const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-    let sessions: any[] = Array.isArray(raw) ? raw : (raw.sessions || []);
-    let changed = false;
-    sessions = sessions.map(s => {
-      const ns = { ...s };
-      const now = new Date().toISOString();
-      // Phase 4b: Per-entry schema version tracking
-      if (!ns.schema_version) { ns.schema_version = 2; changed = true; }
-      // Legacy: timestamp → date
-      if (ns.timestamp && !ns.date) { ns.date = ns.timestamp.split("T")[0]; changed = true; }
-      // Phase 3d: Ensure all timestamp fields
-      if (!ns.start_time) { ns.start_time = ns.timestamp || ns.logged_at || now; changed = true; }
-      if (!ns.started_at) { ns.started_at = ns.start_time; changed = true; }
-      if (!ns.ended_at && ns.end_time) { ns.ended_at = ns.end_time; changed = true; }
-      if (!ns.updated_at) { ns.updated_at = ns.logged_at || now; changed = true; }
-      if (!ns.logged_at) { ns.logged_at = now; changed = true; }
-      return ns;
-    });
-    if (changed) writeJSON(sf, { schema_version: 2, sessions });
-  } catch { /* */ }
-}
+
 
 function generateRecoveryDoc(project: string, dataDir: string, logger: OrchestratorLogger): void {
   const pd = getProjDir(project, dataDir);
   if (!pd) return; // Skip if project dir doesn't exist (archived/cleaned up)
   const loc = getProjectLocation(project, dataDir);
   const context = readFileContent(path.join(pd, "CONTEXT.md")) || "";
-  const blPath = path.join(pd, "BACKLOG.json");
-  let backlog: ProjectBacklogTask[] = [];
-  if (fs.existsSync(blPath)) { try { const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8")); backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []); } catch { /* */ } }
+  // Read backlog from DB (with JSON fallback for backward compat)
+  let backlog: any[] = [];
+  try { backlog = listBacklogTasks(project).map(t => ({ title: t.title, priority: t.priority, status: t.status, created: t.created_ts ? new Date(t.created_ts * 1000).toISOString() : "?" })); } catch (e: any) { logger.warn("context", "Backlog fetch failed:", e.message); }
+  if (backlog.length === 0) {
+    const blPath = path.join(pd, "BACKLOG.json");
+    if (fs.existsSync(blPath)) { try { const parsed = JSON.parse(fs.readFileSync(blPath, "utf-8")); backlog = Array.isArray(parsed) ? parsed : (parsed.tasks || []); } catch (e: any) { logger.warn("context", "JSON backlog fallback failed:", e.message); } }
+  }
 
   const openTasks = backlog.filter(t => t.status === "todo" || t.status === "in_progress");
   const sessions = readRecentSessions(project, dataDir, 10);
@@ -1079,51 +1128,56 @@ function generateRecoveryDoc(project: string, dataDir: string, logger: Orchestra
 }
 
 function readRecentSessions(project: string, dataDir: string, n: number): any[] {
-  const p = getProjDir(project, dataDir);
-  if (!p) return [];
-  const sf = path.join(p, "sessions.json");
-  if (!fs.existsSync(sf)) return [];
   try {
-    const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-    const sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
-    return sessions.slice(-n);
+    const sessions = listSessions(project, n);
+    return sessions.map(s => ({
+      date: s.logged_at?.split("T")[0] || "",
+      task: s.task,
+      model: s.model,
+      agent: s.agent,
+      status: s.status,
+      duration: s.duration,
+      id: s.id,
+      session_key: s.session_key,
+    }));
   } catch { return []; }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  STATE EVENT LOG — append-only JSONL for project state
-//  Multiple sessions can write concurrently (no overwrites).
+//  STATE EVENT LOG — now stored in SQLite (state_events table).
+//  Keeps the same function signatures for backward compatibility.
 //  STATE.md is generated FROM this log, not LLM-written.
 // ═══════════════════════════════════════════════════════════════
 
-function stateEventLogPath(project: string, dataDir: string): string {
-  return path.join(projDir(project, dataDir), "state-events.jsonl");
-}
-
 function writeStateEvent(project: string, dataDir: string, event: Record<string, any>): void {
   try {
-    const p = stateEventLogPath(project, dataDir);
-    const dir = path.dirname(p);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const line = JSON.stringify({
+    addStateEvent(project, event.type || "event", {
       ...event,
       _ts: new Date().toISOString(),
       _id: crypto.randomUUID(),
-    }) + "\n";
-    // Append-only — safe for concurrent writers (atomic per write)
-    fs.appendFileSync(p, line, "utf-8");
-  } catch { /* best-effort */ }
+    });
+  } catch { /* best-effort — state log append */ }
 }
 
 function readStateEvents(project: string, dataDir: string): Record<string, any>[] {
   try {
-    const p = stateEventLogPath(project, dataDir);
-    if (!fs.existsSync(p)) return [];
-    const raw = fs.readFileSync(p, "utf-8");
-    return raw.split("\n").filter(Boolean).map(line => {
-      try { return JSON.parse(line); } catch { return null; }
-    }).filter(Boolean);
-  } catch { return []; }
+    // Prefer DB first, fall back to JSONL
+    const dbEvents = getStateEvents(project, 10000);
+    if (dbEvents.length > 0) {
+      return dbEvents.map((row: any) => {
+        let eventData: any = {};
+        if (typeof row.data === 'object') eventData = row.data;
+        else if (typeof row.data === 'string') { try { eventData = JSON.parse(row.data); } catch {} }
+        return {
+          ...eventData,
+          type: row.type,
+          _ts: row.ts ? new Date(row.ts * 1000).toISOString() : null,
+          _id: row.id,
+        };
+      });
+    }
+  } catch { /* fall through */ }
+  return [];
 }
 
 /**
@@ -1199,8 +1253,8 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
       if (!toolCount) {
         try {
           const content = fs.readFileSync(path.join(srcDir, "src", "index.ts"), "utf-8");
-          toolCount = countRegisteredTools(content);
-        } catch { /* */ }
+          toolCount = _toolCount;
+        } catch (e: any) { logger.debug("state", "Tool count read failed:", e.message); }
       }
       if (!testCount) {
         try {
@@ -1208,13 +1262,13 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
           if (fs.existsSync(tDir)) {
             testCount = fs.readdirSync(tDir).filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).length;
           }
-        } catch { /* */ }
+        } catch (e: any) { logger.debug("state", "Test count read failed:", e.message); }
       }
       if (!version || version === "0.0.1") {
         try {
           const pkg = JSON.parse(fs.readFileSync(path.join(srcDir, "package.json"), "utf-8"));
           if (pkg.version) version = pkg.version;
-        } catch { /* */ }
+        } catch (e: any) { logger.debug("state", "Version read failed:", e.message); }
       }
     }
 
@@ -1224,7 +1278,7 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
     const lines: string[] = [];
     lines.push(`# STATE: ${project} — v${version}`);
     lines.push("");
-    lines.push("> _Auto-generated from state-events.jsonl — edit events, not STATE.md._");
+    lines.push("> _Auto-generated from state event log — edit events, not STATE.md._");
     lines.push("");
 
     lines.push("## Overview");
@@ -1275,7 +1329,7 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
       let idx = 1;
       for (const s of recentSessions.reverse()) {
         const taskShort = (s.task || "").substring(0, 40);
-        const statusEmoji = s.status === "complete" ? "✅" : s.status === "blocked" ? "🔴" : s.status === "failed" ? "❌" : "🟡";
+        const statusEmoji = s.status === "done" ? "✅" : s.status === "blocked" ? "🔴" : s.status === "failed" ? "❌" : "🟡";
         lines.push(`| ${idx++} | ${taskShort} | ${statusEmoji} ${s.status || ""} | ${s.model ? s.model.substring(0, 20) : "-"} | ${s.duration || "-"} |`);
       }
     } else {
@@ -1302,6 +1356,155 @@ function generateStateFromEvents(project: string, dataDir: string, logger: Orche
  * Snapshot current project state into the event log.
  * Reads actual source, writes diff events, regenerates STATE.md.
  */
+/** Read a project document from the project directory (or empty string if missing). */
+function readProjectDoc(dataDir: string, projectName: string, fileName: string): string {
+  if (!projectName) return "";
+  const safeName = projectName.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safeName) return "";
+  const fp = path.join(dataDir, "projects", safeName, fileName);
+  if (!fs.existsSync(fp)) return "";
+  try {
+    return fs.readFileSync(fp, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/** Extract the first N lines of a markdown doc (skipping blank lines and headers-only). */
+function truncateDoc(content: string, maxLines: number, maxChars: number): string {
+  if (!content) return "";
+  const lines = content.split("\n");
+  const out: string[] = [];
+  let total = 0;
+  for (const line of lines) {
+    if (out.length >= maxLines) break;
+    if (line.length + total > maxChars) break;
+    out.push(line);
+    total += line.length;
+  }
+  return out.join("\n");
+}
+
+/** Build a project context block from project docs (plan, style, features, architecture). */
+function buildProjectDocContext(dataDir: string, projectName: string): string {
+  if (!projectName) return "";
+
+  const plan = readProjectDoc(dataDir, projectName, "PROJECT_PLAN.md");
+  const style = readProjectDoc(dataDir, projectName, "STYLE_GUIDE.md");
+  const features = readProjectDoc(dataDir, projectName, "FEATURES.md");
+  const architecture = readProjectDoc(dataDir, projectName, "ARCHITECTURE.md");
+  const bugs = readProjectDoc(dataDir, projectName, "BUGS.md");
+
+  if (!plan && !style && !features && !architecture) return "";
+
+  const sections: string[] = [];
+  sections.push("━━━ PROJECT RULES & CONTEXT (auto-injected) ━━━");
+  sections.push("Follow these rules automatically. They are project-specific and take priority over general behavior.");
+  sections.push("");
+
+  if (plan) {
+    sections.push("📋 PROJECT PLAN:");
+    sections.push(truncateDoc(plan, 25, 1500));
+    sections.push("");
+  }
+
+  if (style) {
+    sections.push("🎨 CODE & STYLE RULES (must follow):");
+    sections.push(truncateDoc(style, 20, 1500));
+    sections.push("");
+  }
+
+  if (architecture) {
+    sections.push("🏛️ ARCHITECTURE & DESIGN DECISIONS:");
+    sections.push(truncateDoc(architecture, 25, 1500));
+    sections.push("");
+  }
+
+  if (features) {
+    // Find in-progress section
+    const lines = features.split("\n");
+    let inProgressStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (/in[\s_-]?progress/i.test(lines[i]) || /🚧/.test(lines[i])) {
+        inProgressStart = i;
+        break;
+      }
+    }
+    if (inProgressStart >= 0) {
+      const inProgress = lines.slice(inProgressStart, inProgressStart + 15).join("\n").trim();
+      if (inProgress) {
+        sections.push("🚧 ACTIVE FEATURES (in progress):");
+        sections.push(inProgress);
+        sections.push("");
+      }
+    } else {
+      sections.push("📋 FEATURE INVENTORY:");
+      sections.push(truncateDoc(features, 15, 1000));
+      sections.push("");
+    }
+  }
+
+  if (bugs) {
+    // Find open bugs
+    const lines = bugs.split("\n");
+    let openStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (/open\s*bugs|🪼/i.test(lines[i])) {
+        openStart = i;
+        break;
+      }
+    }
+    if (openStart >= 0) {
+      const openBugs = lines.slice(openStart, openStart + 15).join("\n").trim();
+      if (openBugs && !openBugs.startsWith("## 🪼")) {
+        sections.push("🐛 OPEN BUGS (verify these aren't reintroduced):");
+        sections.push(openBugs);
+        sections.push("");
+      }
+    }
+  }
+
+  sections.push("━━━ END PROJECT CONTEXT ━━━");
+  return sections.join("\n");
+}
+
+// ── Project Document Templates ─────────────────────────────────
+const PROJECT_TEMPLATES_DIR = path.join(PLUGIN_ROOT, "scripts", "project-templates");
+const PROJECT_DOCS = [
+  "PROJECT_PLAN.md",
+  "FEATURES.md",
+  "BUGS.md",
+  "CHANGELOG.md",
+  "STYLE_GUIDE.md",
+  "ARCHITECTURE.md",
+];
+
+/** Initialize a new project directory with template documents. */
+function initProjectDocs(projectDir: string, projectName: string, description?: string, location?: string): void {
+  const date = new Date().toISOString().split("T")[0];
+  const replacements: Record<string, string> = {
+    "{{project_name}}": projectName,
+    "{{date}}": date,
+    "{{description}}": description || "",
+    "{{location}}": location || "",
+    "{{language}}": "TypeScript",
+  };
+
+  for (const fn of PROJECT_DOCS) {
+    const templatePath = path.join(PROJECT_TEMPLATES_DIR, fn);
+    if (!fs.existsSync(templatePath)) {
+      continue; // template file missing — skip
+    }
+    let content = fs.readFileSync(templatePath, "utf-8");
+    // Apply template substitutions
+    for (const [key, val] of Object.entries(replacements)) {
+      content = content.replaceAll(key, val);
+    }
+    const outPath = path.join(projectDir, fn);
+    fs.writeFileSync(outPath, content, "utf-8");
+  }
+}
+
 function snapshotState(project: string, dataDir: string, logger: OrchestratorLogger): void {
   if (!project) return;
   try {
@@ -1317,7 +1520,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
       const content = fs.readFileSync(srcPath, "utf-8");
       // Only count actual registerTool calls in the register(api) section
       // (not comment references like "// Each entry matches an api.registerTool")
-      toolCount = countRegisteredTools(content);
+      toolCount = _toolCount;
     }
 
     const testDir = path.join(srcDir, "tests");
@@ -1330,7 +1533,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
         version = pkg.version || "";
-      } catch { /* */ }
+      } catch (e: any) { logger.debug("state", "Snapshot version read failed:", e.message); }
     }
 
     // Write snapshot events only if changed vs latest in log
@@ -1359,7 +1562,7 @@ function snapshotState(project: string, dataDir: string, logger: OrchestratorLog
 
     // Regenerate STATE.md
     generateStateFromEvents(project, dataDir, logger);
-  } catch { /* best-effort */ }
+  } catch (e: any) { logger.warn("state", "State regeneration failed:", e.message); }
 }
 
 /**
@@ -1370,7 +1573,7 @@ function tryFixDocsDrift(project: string | null, dataDir: string, logger: Orches
   try {
     writeStateEvent(project, dataDir, { type: "doc_synced", auto: true });
     snapshotState(project, dataDir, logger);
-  } catch { /* best-effort */ }
+  } catch (e: any) { logger.warn("state", "Doc sync failed:", e.message); }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1411,36 +1614,37 @@ function processSetContext(dataDir: string, params: Record<string, any>, logger:
   const task = params.task as string;
   if (!project) throw new Error("Missing project");
   sessionTracker.setContext(project, task || "");
-  writeLiveAgents("control_set_context", sessionTracker, logger);
+  queueLiveAgents("control_set_context", sessionTracker);
   return { project, task, ok: true };
 }
 
 function processClearContext(dataDir: string, _params: Record<string, any>, logger: OrchestratorLogger): any {
   const prev = sessionTracker.currentProject;
   sessionTracker.clearContext();
-  writeLiveAgents("control_clear_context", sessionTracker, logger);
+  queueLiveAgents("control_clear_context", sessionTracker);
   return { previous_project: prev, ok: true };
 }
 
 function processUpdateRouting(dataDir: string, params: Record<string, any>, logger: OrchestratorLogger): any {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {
-    free_only_mode: false, disabled_models: [], projects: {}
-  };
-  if (typeof params.free_only_mode === "boolean") cfg.free_only_mode = params.free_only_mode;
-  if (Array.isArray(params.disabled_models)) cfg.disabled_models = params.disabled_models;
+  if (typeof params.free_only_mode === "boolean") {
+    setGlobalConfig("free_only_mode", params.free_only_mode);
+  }
+  if (Array.isArray(params.disabled_models)) {
+    setGlobalConfig("disabled_models", params.disabled_models);
+  }
   if (typeof params.project === "string" && params.project_allowlist) {
-    cfg.projects = cfg.projects || {};
-    cfg.projects[params.project] = cfg.projects[params.project] || {};
-    cfg.projects[params.project].model_allowlist = params.project_allowlist;
+    const pc: any = getProjectConfig(params.project) || {};
+    pc.model_allowlist = params.project_allowlist;
+    setProjectConfig(params.project, pc);
   }
   if (typeof params.project === "string" && typeof params.project_free_only === "boolean") {
-    cfg.projects = cfg.projects || {};
-    cfg.projects[params.project] = cfg.projects[params.project] || {};
-    cfg.projects[params.project].free_only = params.project_free_only;
+    const pc: any = getProjectConfig(params.project) || {};
+    pc.free_only = params.project_free_only;
+    setProjectConfig(params.project, pc);
   }
-  writeJSON(path.join(dataDir, "dashboard-config.json"), cfg);
-  logger.info("control", `Routing updated: free_only=${cfg.free_only_mode}`);
-  return { ok: true, config: cfg };
+  const globalCfg = getAllGlobalConfig();
+  logger.info("control", `Routing updated: free_only=${globalCfg.free_only_mode}`);
+  return { ok: true, config: { ...globalCfg, projects: getAllProjectConfigs() } };
 }
 
 function processControlAction(dataDir: string, action: ControlAction, logger: OrchestratorLogger): void {
@@ -1517,16 +1721,13 @@ class MaintenanceService {
       );
       for (const p of projects) {
         try {
-          normalizeSessionsJson(p, this.dataDir);
+
           generateRecoveryDoc(p, this.dataDir, this.logger);
           if (getProjectLocation(p, this.dataDir)) {
             syncProjectToOrchestrator(p, this.dataDir, this.logger);
           }
           // Auto-generate state from event log on every tick
-          const stateLogPath = path.join(projDir(p, this.dataDir), "state-events.jsonl");
-          if (fs.existsSync(stateLogPath)) {
-            generateStateFromEvents(p, this.dataDir, this.logger);
-          }
+          generateStateFromEvents(p, this.dataDir, this.logger);
         } catch (err: any) {
           this.logger.warn("maintenance", `Error processing ${p}: ${err.message}`);
         }
@@ -1569,7 +1770,7 @@ class MaintenanceService {
         } catch (err: any) {
           this.logger.warn("control", `Error processing ${f}: ${err.message}`);
           // Remove malformed actions to avoid re-processing
-          try { fs.unlinkSync(fp); } catch { /* */ }
+          try { fs.unlinkSync(fp); } catch { /* non-critical - action file may already be gone */ }
         }
       }
     } catch (err: any) {
@@ -1579,9 +1780,7 @@ class MaintenanceService {
 
   detectStaleAgents(): void {
     try {
-      const laPath = path.join(this.dataDir, "live-agents.json");
-      if (!fs.existsSync(laPath)) return;
-      const cfg: DashboardConfig = readJSON(path.join(this.dataDir, "dashboard-config.json")) || {};
+      const cfg = getAllGlobalConfig();
       const safeguards = cfg.safeguards || {};
       if (safeguards.enabled === false) return;
 
@@ -1590,8 +1789,10 @@ class MaintenanceService {
       const maxErrors = safeguards.max_errors_before_escalation || 3;
       const now = Date.now();
 
-      const live = JSON.parse(fs.readFileSync(laPath, "utf-8"));
-      const agents = live.agents || [];
+        let agents: any[] = [];
+      try {
+        agents = getLiveAgents();
+      } catch (e: any) { this.logger.debug("maintenance", "Failed to fetch live agents:", e.message); }
       let recoveryNeeded = false;
 
       for (const a of agents) {
@@ -1638,7 +1839,8 @@ class MaintenanceService {
         }
 
         // Check 2: Agent hasn't updated in too long despite having project context
-        if (status !== "idle" && status !== "complete" && status !== "shutdown" && elapsedSinceUpdate > stuckTimeout) {
+        // Skip actively-working statuses (prompting/running = AI is building a response)
+        if (status !== "idle" && status !== "done" && status !== "running" && elapsedSinceUpdate > stuckTimeout) {
           this.logger.warn("safeguard", `Agent ${agentName} stuck (no update ${Math.round(elapsedSinceUpdate/60000)}m, status: ${status})`);
           this.safeguardLog.push(`[${new Date().toISOString()}] STUCK: ${agentName} no update ${Math.round(elapsedSinceUpdate/60000)}m (${status})`);
         }
@@ -1684,26 +1886,7 @@ function isPaid(m: ModelEntry): boolean {
   return ["subscription", "payg", "pay_per_token"].includes(m.cost?.type || "");
 }
 
-function parseSessionLog(dd: string): any {
-  const c = readFileContent(path.join(dd, "session_log.md"));
-  if (!c) return { sessions: [], count: 0, projects: [] };
-  const sessions: any[] = [];
-  for (const l of c.split("\n")) {
-    const t = l.trim();
-    if (t.startsWith("|") && !t.startsWith("|---") && !t.startsWith("| Date")) {
-      const p = t.split("|").slice(1, -1).map(x => x.trim());
-      if (p.length >= 5) sessions.push({ date: p[0], project: p[1], task: p[2], model: p[3], agent: p[4] || "shell", status: p[5] || "", duration: p[6] || "", qa_done: p[7]?.includes("✓") || false, checked: p[8]?.includes("✓") || false, notes: p[9] || "" });
-    }
-  }
-  return { sessions, count: sessions.length, projects: [...new Set(sessions.map(s => s.project))] };
-}
 
-function parsePriceLog(dd: string): any {
-  const c = readFileContent(path.join(dd, "price_changes.log"));
-  if (!c) return { entries: [], count: 0 };
-  const entries = c.split("\n").filter(l => l.trim() && !l.startsWith("#")).map(l => ({ text: l.trim() }));
-  return { entries, count: entries.length };
-}
 
 function projDir(name: string, dd: string): string {
   const p = path.join(dd, "projects", name);
@@ -1764,13 +1947,15 @@ function validateSessions(dataDir: string, project?: string): {
   const checkProject = (projName: string) => {
     const pd = getProjDir(projName, dataDir);
     if (!pd) return;
-    const sf = path.join(pd, "sessions.json");
-    if (!fs.existsSync(sf)) return;
     let sessions: any[] = [];
     try {
-      const raw = JSON.parse(fs.readFileSync(sf, "utf-8"));
-      sessions = Array.isArray(raw) ? raw : (raw.sessions || []);
+      sessions = listSessions(projName).map(s => ({
+        ...s,
+        start_time: s.start_ts ? new Date(s.start_ts).toISOString() : s.logged_at,
+        session_key: s.session_key,
+      }));
     } catch { return; }
+    if (!sessions.length) return;
 
     projectsChecked.push(projName);
     const seenIds = new Map<string, number>();
@@ -1876,18 +2061,22 @@ function getBacklogPath(project: string, dataDir: string): string {
   return path.join(projDir(project, dataDir), "BACKLOG.json");
 }
 
-function readBacklog(project: string, dataDir: string): BacklogTask[] {
+function readBacklog(project: string, dataDir: string): any[] {
+  try {
+    return listBacklogTasks(project) as any[];
+  } catch { return []; }
+}
+
+function readBacklogJson(project: string, dataDir: string): any[] {
   const bp = getBacklogPath(project, dataDir);
   if (!fs.existsSync(bp)) return [];
   try {
     const raw = JSON.parse(fs.readFileSync(bp, "utf-8"));
     return Array.isArray(raw) ? raw : (raw.tasks || []);
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-function writeBacklog(project: string, dataDir: string, tasks: BacklogTask[]): void {
+function writeBacklog(project: string, dataDir: string, tasks: any[]): void {
   writeJSON(getBacklogPath(project, dataDir), { tasks });
 }
 
@@ -1898,23 +2087,43 @@ function backlogAdd(project: string, dataDir: string, opts: {
   labels?: string[];
   depends_on?: string[];
 }): { ok: boolean; id?: string; error?: string } {
-  const tasks = readBacklog(project, dataDir);
   const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const task: BacklogTask = {
-    id,
-    title: opts.title,
-    description: opts.description || "",
-    status: "todo",
-    priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2") as any,
-    created: new Date().toISOString(),
-    updated: new Date().toISOString(),
-    assigned_to: null,
-    depends_on: opts.depends_on || [],
-    labels: opts.labels || [],
-    session_key: null,
-  };
-  tasks.push(task);
-  writeBacklog(project, dataDir, tasks);
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    // Insert into DB
+    addBacklogTask({
+      id,
+      project,
+      title: opts.title,
+      description: opts.description || "",
+      priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2"),
+      status: "todo",
+      labels: JSON.stringify(opts.labels || []),
+      depends_on: JSON.stringify(opts.depends_on || []),
+      assigned_to: "",
+      session_refs: "[]",
+      created_ts: now,
+      updated_ts: now,
+    });
+    // Also write to JSON for backward compat (read from file to preserve existing tasks)
+    const tasks = readBacklogJson(project, dataDir);
+    tasks.push({
+      id,
+      title: opts.title,
+      description: opts.description || "",
+      status: "todo",
+      priority: (["p0","p1","p2","p3"].includes(opts.priority || "") ? opts.priority! : "p2"),
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      assigned_to: null,
+      depends_on: opts.depends_on || [],
+      labels: opts.labels || [],
+      session_key: null,
+    });
+    writeBacklog(project, dataDir, tasks);
+  } catch (e: any) {
+    return { ok: false, error: String(e) };
+  }
   return { ok: true, id };
 }
 
@@ -1922,11 +2131,18 @@ function backlogList(project: string, dataDir: string, opts?: {
   status?: string;
   priority?: string;
   label?: string;
-}): { ok: boolean; tasks: BacklogTask[] } {
+}): { ok: boolean; tasks: any[] } {
   let tasks = readBacklog(project, dataDir);
-  if (opts?.status) tasks = tasks.filter(t => t.status === opts.status);
-  if (opts?.priority) tasks = tasks.filter(t => t.priority === opts.priority);
-  if (opts?.label) tasks = tasks.filter(t => (t.labels || []).includes(opts.label!));
+  // Parse JSON string fields from DB rows for backward compat
+  tasks = tasks.map((t: any) => ({
+    ...t,
+    labels: typeof t.labels === "string" ? JSON.parse(t.labels) : (t.labels || []),
+    depends_on: typeof t.depends_on === "string" ? JSON.parse(t.depends_on) : (t.depends_on || []),
+    session_refs: typeof t.session_refs === "string" ? JSON.parse(t.session_refs) : (t.session_refs || []),
+  }));
+  if (opts?.status) tasks = tasks.filter((t: any) => t.status === opts.status);
+  if (opts?.priority) tasks = tasks.filter((t: any) => t.priority === opts.priority);
+  if (opts?.label) tasks = tasks.filter((t: any) => (t.labels || []).includes(opts.label!));
   return { ok: true, tasks };
 }
 
@@ -1938,18 +2154,30 @@ function backlogUpdate(project: string, dataDir: string, opts: {
   labels?: string[];
   session_key?: string;
 }): { ok: boolean; error?: string } {
-  const tasks = readBacklog(project, dataDir);
-  const idx = tasks.findIndex(t => t.id === opts.id);
-  if (idx === -1) return { ok: false, error: `Task ${opts.id} not found. Use orchestrator_backlog_list to see available tasks.` };
-  const task = tasks[idx];
-  if (opts.status && ["todo","in_progress","done","blocked"].includes(opts.status)) task.status = opts.status as any;
-  if (opts.priority && ["p0","p1","p2","p3"].includes(opts.priority)) task.priority = opts.priority as any;
-  if (opts.assigned_to !== undefined) task.assigned_to = opts.assigned_to || null;
-  if (opts.labels !== undefined) task.labels = opts.labels;
-  if (opts.session_key !== undefined) task.session_key = opts.session_key || null;
-  task.updated = new Date().toISOString();
-  tasks[idx] = task;
-  writeBacklog(project, dataDir, tasks);
+  try {
+    const task = getBacklogTask(opts.id);
+    if (!task) return { ok: false, error: `Task ${opts.id} not found. Use genorch_backlog_list to see available tasks.` };
+    const updates: any = {};
+    if (opts.status && ["todo","in_progress","done","blocked"].includes(opts.status)) updates.status = opts.status;
+    if (opts.priority && ["p0","p1","p2","p3"].includes(opts.priority)) updates.priority = opts.priority;
+    if (opts.assigned_to !== undefined) updates.assigned_to = opts.assigned_to || "";
+    if (opts.labels !== undefined) updates.labels = JSON.stringify(opts.labels);
+    if (opts.session_key !== undefined) updates.session_refs = JSON.stringify(opts.session_key ? [opts.session_key] : []);
+    updateBacklogTask(opts.id, updates);
+    // Also update JSON for backward compat
+    const tasks = readBacklogJson(project, dataDir);
+    const idx = tasks.findIndex((t: any) => t.id === opts.id);
+    if (idx >= 0) {
+      if (opts.status) tasks[idx].status = opts.status;
+      if (opts.priority) tasks[idx].priority = opts.priority;
+      if (opts.labels !== undefined) tasks[idx].labels = opts.labels;
+      if (opts.assigned_to !== undefined) tasks[idx].assigned_to = opts.assigned_to;
+      tasks[idx].updated = new Date().toISOString();
+      writeBacklog(project, dataDir, tasks);
+    }
+  } catch (e: any) {
+    return { ok: false, error: String(e) };
+  }
   return { ok: true };
 }
 
@@ -1958,24 +2186,16 @@ function backlogUpdate(project: string, dataDir: string, opts: {
 // ═══════════════════════════════════════════════════════════════
 
 function getStatus(dataDir: string, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const md = readJSON(path.join(dataDir, "models.json"));
-  const models: ModelEntry[] = md?.models || [];
-  const pd = path.join(dataDir, "projects");
-  const projects: string[] = [];
-  if (fs.existsSync(pd)) {
-    for (const e of fs.readdirSync(pd)) {
-      if (e.startsWith(".")) continue; // Skip hidden dirs (.archived)
-      if (fs.statSync(path.join(pd, e)).isDirectory()) projects.push(e);
-    }
-  }
+  const cfg = getAllGlobalConfig();
+  const models = listModels(false);
+  const allProjects = getAllProjectConfigs();
+  const projects = Object.keys(allProjects);
   logger.debug("status", "Status requested");
-  const sl = parseSessionLog(dataDir);
   return {
     total_models: models.length,
-    active_models: models.filter(m => m.status === "active").length,
-    agent_ready_models: models.filter(m => m.agent_ready).length,
-    sessions_logged: sl.count,
+    active_models: models.filter((m: any) => m.status === "active").length,
+    agent_ready_models: models.filter((m: any) => m.agent_ready).length,
+    sessions_logged: getAllSessions().length,
     projects,
     free_only_mode: cfg.free_only_mode || false,
     data_dir: dataDir,
@@ -1983,63 +2203,50 @@ function getStatus(dataDir: string, logger: OrchestratorLogger) {
 }
 
 function getConfig(dataDir: string, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json"));
-  if (!cfg) return { error: "No config found — run orchestrator_auto_populate first", data_dir: dataDir };
-  const models = readJSON(path.join(dataDir, "models.json"))?.models || [];
+  const cfg = getAllGlobalConfig();
+  const models = listModels(false);
+  const allProjects = getAllProjectConfigs();
   const pc: Record<string, number> = {};
   for (const m of models) { const p = m.provider || "unknown"; pc[p] = (pc[p] || 0) + 1; }
   logger.debug("config", "Config requested");
   return {
     free_only_mode: cfg.free_only_mode || false,
     disabled_models: cfg.disabled_models || [],
-    projects: Object.entries(cfg.projects || {}).map(([n, c]) => ({
+    projects: Object.entries(allProjects).map(([n, c]: [string, any]) => ({
       name: n,
       model_allowlist: c.model_allowlist || [],
       free_only: c.free_only || false,
-      whitelist_count: c.model_allowlist?.length || 0,
+      whitelist_count: (c.model_allowlist || []).length,
     })),
     total_models: models.length,
     providers: pc,
-    project_count: Object.keys(cfg.projects || {}).length,
+    project_count: Object.keys(allProjects).length,
   };
 }
 
-function filterModelsForProject(models: ModelEntry[], project: string | undefined, dataDir: string): ModelEntry[] {
-  if (!project) return [...models];
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  let f = [...models];
-  if (cfg.free_only_mode) f = f.filter(m => !isPaid(m));
-  const d = cfg.disabled_models || [];
-  if (d.length) f = f.filter(m => !d.includes(m.id));
-  const pc = cfg.projects?.[project];
-  if (pc) {
-    if (pc.model_allowlist?.length) f = f.filter(m => pc.model_allowlist!.includes(m.id));
-    if (pc.free_only) f = f.filter(m => !isPaid(m));
-  }
-  return f;
+function filterModelsForProject(project: string | undefined, dataDir: string): any[] {
+  return listModels(false, project);
 }
 
 function getModels(dataDir: string, opts: any, logger: OrchestratorLogger) {
-  const md = readJSON(path.join(dataDir, "models.json"));
-  let all: ModelEntry[] = md?.models || [];
-  let f = filterModelsForProject(all, opts.project, dataDir);
+  let all = listModels(false);
+  let f = filterModelsForProject(opts.project, dataDir);
   if (opts.status) {
     const ss = opts.status.split(",").map((s: string) => s.trim().toLowerCase());
-    f = f.filter(m => ss.includes((m.status || "").toLowerCase()));
+    f = f.filter((m: any) => ss.includes((m.status || "").toLowerCase()));
   }
-  if (opts.provider) f = f.filter(m => (m.provider || "").toLowerCase().includes(opts.provider.toLowerCase()));
+  if (opts.provider) f = f.filter((m: any) => (m.provider || "").toLowerCase().includes(opts.provider.toLowerCase()));
   if (opts.search) {
     const q = opts.search.toLowerCase();
-    f = f.filter(m => m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
+    f = f.filter((m: any) => m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q));
   }
-  if (opts.agent_ready !== undefined) f = f.filter(m => m.agent_ready === opts.agent_ready);
+  if (opts.agent_ready !== undefined) f = f.filter((m: any) => m.agent_ready === opts.agent_ready);
   logger.debug("models", `Listed ${f.length}/${all.length}`);
   return {
     total: all.length,
     filtered: f.length,
-    models: f.map(m => ({
-      id: m.id, provider: m.provider, name: m.name, tier: m.tier,
-      speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
+    models: f.map((m: any) => ({
+      id: m.id, provider: m.provider, name: m.name, status: m.status, agent_ready: m.agent_ready,
       cost_type: m.cost?.type || "unknown", context_window: m.context_window || 0,
       capabilities: m.capabilities || {}, notes: m.notes || "",
     })),
@@ -2047,27 +2254,25 @@ function getModels(dataDir: string, opts: any, logger: OrchestratorLogger) {
 }
 
 function checkModels(dataDir: string, project: string | undefined, logger: OrchestratorLogger) {
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const md = readJSON(path.join(dataDir, "models.json"));
-  let eligible: ModelEntry[] = md?.models || [];
+  const cfg = getAllGlobalConfig();
+  let eligible = listModels(false, project);
   const filters: string[] = [];
-  if (cfg.free_only_mode) { eligible = eligible.filter(m => !isPaid(m)); filters.push("global_free_only"); }
-  const d = cfg.disabled_models || [];
-  if (d.length) { eligible = eligible.filter(m => !d.includes(m.id)); filters.push("global_disabled"); }
-  const pc = project ? cfg.projects?.[project] : undefined;
+  if (cfg.free_only_mode) { eligible = eligible.filter((m: any) => !isPaid(m)); filters.push("global_free_only"); }
+  const d: string[] = (cfg.disabled_models as string[]) || [];
+  if (d.length) { eligible = eligible.filter((m: any) => !d.includes(m.id)); filters.push("global_disabled"); }
+  const pc = project ? getProjectConfig(project) : undefined;
   if (pc) {
-    if (pc.model_allowlist?.length) { eligible = eligible.filter(m => pc.model_allowlist!.includes(m.id)); filters.push("project_allowlist"); }
-    if (pc.free_only) { eligible = eligible.filter(m => !isPaid(m)); filters.push("project_free_only"); }
+    if (pc.model_allowlist?.length) { eligible = eligible.filter((m: any) => pc.model_allowlist!.includes(m.id)); filters.push("project_allowlist"); }
+    if (pc.free_only) { eligible = eligible.filter((m: any) => !isPaid(m)); filters.push("project_free_only"); }
   }
-  const all = md?.models?.length || 0;
+  const all = listModels(false).length;
   logger.logRouting(eligible[0]?.id || "none", project || null, eligible.length, all, filters);
   return {
     project: project || null, free_only_mode: cfg.free_only_mode || false,
     disabled_models: d, filters_applied: filters, total_available: all,
     eligible_count: eligible.length,
-    eligible_models: eligible.map(m => ({
-      id: m.id, provider: m.provider, name: m.name, tier: m.tier,
-      speed_rating: m.speed_rating, status: m.status, agent_ready: m.agent_ready,
+    eligible_models: eligible.map((m: any) => ({
+      id: m.id, provider: m.provider, name: m.name, status: m.status, agent_ready: m.agent_ready,
       cost_type: m.cost?.type || "unknown",
     })),
   };
@@ -2080,8 +2285,9 @@ function autoPopulate(dataDir: string, logger: OrchestratorLogger) {
   try {
     logger.debug("populate", "Running...");
     const r = execSync(`python3 "${script}" 2>&1`, { cwd: path.dirname(script), encoding: "utf-8", timeout: 120_000 });
-    const md = readJSON(path.join(dataDir, "models.json"));
-    const t = md?.models?.length || 0;
+    // After auto-populate, re-init DB to pick up newly written models.json
+    initDb(dataDir);
+    const t = countModels().total;
     logger.info("populate", `Done: ${t} models`);
     return { success: true, total_models: t, output: r.trim() };
   } catch (err: any) {
@@ -2093,53 +2299,6 @@ function autoPopulate(dataDir: string, logger: OrchestratorLogger) {
 function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
   const date = new Date().toISOString().split("T")[0];
   const sp = opts.project.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const st = opts.task.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
-  const slp = path.join(dataDir, "session_log.md");
-  if (!fs.existsSync(slp)) {
-    fs.writeFileSync(slp, "# Session Log\n\n| Date | Project | Task | Model | Agent | Status | Duration | QA | Checked | Notes |\n|------|---------|------|-------|-------|--------|----------|----|---------|-------|\n", "utf-8");
-  }
-  fs.appendFileSync(slp, `| ${date} | ${opts.project} | ${opts.task} | ${opts.model} | ${opts.agent} | ${opts.status} | ${opts.duration || ""} | ${opts.qa ? "true" : "false"} | ${opts.checked ? "true" : "false"} | ${opts.notes || ""} |\n`, "utf-8");
-
-  // Write rich session detail file
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const sessionDir = path.join(dataDir, "sessions");
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const logDir2 = path.join(dataDir, "logs");
-  fs.mkdirSync(logDir2, { recursive: true });
-  const df = path.join(sessionDir, `${ts}-${sp}-${st}.md`);
-  fs.writeFileSync(df, [
-    `# Session: ${opts.project} / ${opts.task}`,
-    ``,
-    `**Date:** ${date}`,
-    `**Agent:** ${opts.agent}`,
-    `**Model:** ${opts.model}`,
-    `**Status:** ${opts.status}`,
-    `**Goal:** ${opts.goal || opts.task || "N/A"}`,
-    `**Session Key:** ${opts.session_key || "N/A"}`,
-    `**Duration:** ${opts.duration || "N/A"}`,
-    `**QA:** ${opts.qa ? "true" : "false"} | **Checked:** ${opts.checked ? "true" : "false"}`,
-    ``,
-    `## Notes`,
-    ``,
-    `${opts.notes || "None"}`,
-    ``,
-    `---`,
-    `*Auto-logged by Genor's Orchestrator plugin v0.4.3*`,
-  ].join("\n"), "utf-8");
-
-  // Append to project sessions.json (per-project session log)
-  const pd = path.join(dataDir, "projects", sp);
-  fs.mkdirSync(pd, { recursive: true });
-  const psf = path.join(pd, "sessions.json");
-  let ps: any[] = [];
-  if (fs.existsSync(psf)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(psf, "utf-8"));
-      if (Array.isArray(raw)) ps = raw;
-      else if (raw?.sessions && Array.isArray(raw.sessions)) ps = raw.sessions;
-    } catch { /* */ }
-  }
-  // Build entry in new canonical schema v2
   const sessId = `sess_${(opts.id || (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/[^a-zA-Z0-9_]/g, "").slice(0, 14)}`;
   // GUARANTEE session_key — generate synthetic stable key if missing
   let sessionKey = opts.session_key || "";
@@ -2162,40 +2321,46 @@ function logSession(dataDir: string, opts: any, logger: OrchestratorLogger) {
   })();
   const tags = Array.isArray(opts.tags) ? opts.tags : extractTags(opts.task || "", opts.notes || "");
   const now = new Date().toISOString();
-  const newEntry = {
-    id: sessId,
-    session_key: sessionKey,
-    parent_session_key: parentSessionKey,
-    agent: agentNorm,
-    project: opts.project,
-    task: opts.task,
-    goal: opts.goal || opts.task || "",
-    original_prompt: opts.original_prompt || null,
-    model: opts.model,
-    status: opts.status,
-    // ═══ Timestamps (Phase 3d) ═══
-    start_time: opts.start_time || now,
-    started_at: opts.start_time || now,
-    end_time: opts.end_time || (opts.status === "running" ? null : now),
-    ended_at: opts.end_time || (opts.status === "running" ? null : now),
-    updated_at: now,
-    logged_at: now,
-    duration: opts.duration || "",
-    tags,
-    links: opts.links || { session_file: path.basename(df), recovery_doc: null, parent_recovery: null, synthetic_key: syntheticKey },
-    notes: opts.notes || "",
-    qa: opts.qa || false,
-    checked: opts.checked || false,
-  };
-  // Check for duplicate by (session_key, task, status) — avoid log noise
-  const isDup = ps.some(e => e.session_key && e.session_key === newEntry.session_key
-    && e.task === newEntry.task && e.status === newEntry.status);
-  if (!isDup) {
-    ps.push(newEntry);
-    writeJSON(psf, { schema_version: 2, sessions: ps });
+  // Log to DB (primary store)
+  try {
+    addSession({
+      id: sessId,
+      project: opts.project,
+      agent: agentNorm,
+      model: opts.model || "",
+      tags: JSON.stringify(tags),
+      status: opts.status || "logged",
+      task: opts.task || "",
+      start_ts: opts.start_time ? Math.floor(new Date(opts.start_time).getTime() / 1000) : Math.floor(Date.now() / 1000),
+      end_ts: opts.end_time ? Math.floor(new Date(opts.end_time).getTime() / 1000) : (opts.status === "running" ? null : Math.floor(Date.now() / 1000)),
+      duration: opts.duration || "",
+      session_key: sessionKey,
+      extra: JSON.stringify({
+        parent_session_key: parentSessionKey,
+        goal: opts.goal || "",
+        original_prompt: opts.original_prompt,
+        notes: opts.notes || "",
+        qa: opts.qa || false,
+        checked: opts.checked || false,
+        action_history: opts.action_history,
+        touched_files: opts.touched_files,
+        token_usage: opts.token_usage,
+        workflow: opts.workflow,
+        qa_status: opts.qa_status,
+        qa_history: opts.qa_history,
+        qa_findings: opts.qa_findings,
+        error_count: opts.error_count,
+        last_error: opts.last_error,
+        last_activity_at: opts.last_activity_at,
+        model_provider: opts.model_provider,
+      }),
+      logged_at: now,
+    });
+  } catch (e: any) {
+    logger.warn("logSession", `DB write failed: ${e.message}`);
   }
   logger.logSession(opts.project, opts.task, opts.model, opts.agent, opts.status);
-  return { success: true, date, project: opts.project, task: opts.task, session_file: path.basename(df), total_project_sessions: ps.length };
+  return { success: true, date, project: opts.project, task: opts.task };
 }
 
 function logDecision(dataDir: string, opts: any, logger: OrchestratorLogger) {
@@ -2231,36 +2396,33 @@ function getLogs(dataDir: string, opts: any, logger: OrchestratorLogger) {
 function requireRegistration(): string | null {
   const sk = sessionTracker.sessionKey;
   if (sk && sessionTracker.isSessionRegistered(sk)) return null;
-  return "This session is not registered with the orchestrator. Call orchestrator_register first to opt in to orchestrator tracking and project context injection.";
+  return "This session is not registered with the orchestrator. Call genorch_session_register first to opt in to orchestrator tracking and project context injection.";
+}
+
+function requireBinding(): string | null {
+  if (!sessionTracker.currentProject) return "No project bound. Call genorch_project_bind first to bind this session to a project and receive project context injection.";
+  return null;
 }
 
 function setContext(dataDir: string, project: string, task: string, logger: OrchestratorLogger, originalPrompt?: string) {
   projDir(project, dataDir);
 
-  // Read per-project workflow config from dashboard-config.json
-  const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-  const projCfg = cfg.projects?.[project] || {};
+  // Read per-project workflow config from DB
+  const projCfg = getProjectConfig(project) || {};
 
   sessionTracker.setContext(project, task, projCfg.workflow);
-  writeLiveAgents("context", sessionTracker);
+  queueLiveAgents("context", sessionTracker);
   const loc = getProjectLocation(project, dataDir);
   const toc = loc ? buildProjectToc(loc) : [];
 
   // Warn if this project has NO sessions logged yet (brand new / never worked on)
-  const pd = projDir(project, dataDir);
-  const psf = path.join(pd, "sessions.json");
-  let sessionCount = 0;
-  if (fs.existsSync(psf)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(psf, "utf-8"));
-      sessionCount = (Array.isArray(raw) ? raw : (raw.sessions || [])).length;
-    } catch { /* */ }
-  }
+  let sessionCount = countSessions(project);
   const isFresh = sessionCount === 0;
 
-  // Auto-log session only when a model is actually assigned (skip phantom 'pending' entries)
+  // Auto-log session only when task is specified AND model is assigned
+  // (binding-only calls with empty task skip logging)
   const sessionModel = sessionTracker.currentModel;
-  if (sessionModel && sessionModel !== "pending") {
+  if (task && sessionModel && sessionModel !== "pending") {
     const truncatedPrompt = originalPrompt ? String(originalPrompt).slice(0, 500) : null;
     logSession(dataDir, {
       project,
@@ -2291,12 +2453,12 @@ function setContext(dataDir: string, project: string, task: string, logger: Orch
 function clearContextFn(dataDir: string, logger: OrchestratorLogger) {
   // ═══ ENFORCE TASK COMPLETION LOGGING ═══
   // Before clearing context, require the session to have logged
-  // its completion via orchestrator_log_session.
+  // its completion via genorch_session_log.
   if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
     return {
       ok: false,
       error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-        `but hasn't logged completion. Call orchestrator_log_session with status="complete" (or "blocked"/"failed") ` +
+        `but hasn't logged completion. Call genorch_session_log with status="done" (or "blocked"/"failed") ` +
         `first to document what was done. This ensures no work falls through the cracks.`,
     };
   }
@@ -2305,7 +2467,7 @@ function clearContextFn(dataDir: string, logger: OrchestratorLogger) {
   sessionTracker.clearContext();
   if (prev) {
     logger.info("context", `Context cleared: ${prev}`);
-    writeLiveAgents("clear_context", sessionTracker);
+    queueLiveAgents("clear_context", sessionTracker);
   }
   return { ok: true, previous_project: prev };
 }
@@ -2316,7 +2478,7 @@ function syncProject(dataDir: string, project: string, logger: OrchestratorLogge
     return { error: `No valid location for ${project}`, project };
   }
   sessionTracker.trackAction(`syncing_project: ${project}`);
-  writeLiveAgents("sync_project", sessionTracker);
+  queueLiveAgents("sync_project", sessionTracker);
   syncProjectToOrchestrator(project, dataDir, logger);
   return { ok: true, project, location: loc };
 }
@@ -2340,107 +2502,151 @@ function getProjectDocsFn(dataDir: string, project: string, logger: Orchestrator
 
 let maintenanceSvc: MaintenanceService | null = null;
 
-const TOOL_NAMES = [
-  "orchestrator_set_context", "orchestrator_clear_context", "orchestrator_get_status",
-  "orchestrator_get_config", "orchestrator_get_models", "orchestrator_check_models",
-  "orchestrator_auto_populate", "orchestrator_log_session", "orchestrator_log_decision",
-  "orchestrator_get_logs", "orchestrator_sync_project", "orchestrator_get_project_docs",
-  "orchestrator_advance_phase", "orchestrator_get_routing",
-  "orchestrator_register", "orchestrator_unregister", "orchestrator_get_registered_sessions",
-  "orchestrator_release_project",
-  "orchestrator_list_active_projects",
-  "orchestrator_join_project",
-  "orchestrator_spawn_subagent",
-  "orchestrator_create_project",
-  "orchestrator_backlog_add",
-  "orchestrator_backlog_list",
-  "orchestrator_backlog_update",
-  "orchestrator_backlog_dispatch",
-  "orchestrator_backlog_dispatch_all",
-  "orchestrator_qa_submit",
-  "orchestrator_qa_approve",
-  "orchestrator_qa_reject",
-  "orchestrator_generate_handoff",
-] as const;
-
 // Proper tool metadata for agent session exposure (OpenClaw agent tool injection).
-// Each entry matches an api.registerTool({...}) call in register() below.
-// Parameters use OpenClaw's TypeBox schema compiled to JSON Schema.
-const TOOL_METADATA: Array<{ name: string; label: string; description: string; parameters: any }> = [
-  { name: "orchestrator_set_context", label: "Orchestrator Set Context", description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name (e.g., kfinance, kotw)." }, task: { type: "string", description: "Describe the task you are about to do." }, original_prompt: { type: "string", description: "OPTIONAL: The original user request that triggered this task." } }, required: ["project", "task"] } },
-  { name: "orchestrator_clear_context", label: "Orchestrator Clear Context", description: "Clear active project context. Disables auto-routing and auto-logging.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_register", label: "Orchestrator Register", description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_unregister", label: "Orchestrator Unregister", description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_status", label: "Status", description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_config", label: "Config", description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_get_models", label: "Models", description: "List models from the model inventory with optional filters (status, provider, search, project routing).", parameters: { type: "object", properties: { status: { type: "string", description: "Filter by status: active, discovered, offline, removed. Comma-separated." }, provider: { type: "string", description: "Filter by provider name (partial match)." }, search: { type: "string", description: "Search by model ID or name (partial match)." }, agent_ready: { type: "boolean", description: "Filter by agent_ready flag." }, project: { type: "string", description: "Apply project routing filters to results." } } } },
-  { name: "orchestrator_check_models", label: "Check Models (routing)", description: "Check which models are eligible for a project, applying all routing filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name for per-project routing rules. Omit for global-only check." } } } },
-  { name: "orchestrator_auto_populate", label: "Auto-Populate", description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_log_session", label: "Log Session", description: "Log a completed session to the per-project session log. Writes a structured session entry with full metadata.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, task: { type: "string", description: "Task description." }, model: { type: "string", description: "Model used." }, agent: { type: "string", description: "Agent name." }, status: { type: "string", description: "Session status." } }, required: ["project", "task", "model"] } },
-  { name: "orchestrator_log_decision", label: "Log Decision", description: "Log an architecture decision record (ADR) to the project.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Decision title." }, context: { type: "string", description: "Why this decision was needed." }, decision: { type: "string", description: "What was decided." } }, required: ["project", "title", "context", "decision"] } },
-  { name: "orchestrator_get_logs", label: "Logs", description: "Query orchestration logs: routing decisions, model choices, session activity, config changes.", parameters: { type: "object", properties: { limit: { type: "number", description: "Max entries (default: 50)." }, level: { type: "string", description: "Minimum level: debug, info, warn, error." }, source: { type: "string", description: "Filter by source (e.g., routing, session, models)." }, since: { type: "string", description: "ISO timestamp filter." } } } },
-  { name: "orchestrator_sync_project", label: "Sync Project", description: "Sync a registered project with the orchestrator: regenerates CONTEXT.md and KEY_FILES.md from the project source.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, commit: { type: "boolean", description: "Auto-commit changes to the project repo." } }, required: ["project"] } },
-  { name: "orchestrator_get_project_docs", label: "Project Docs", description: "Get project documentation files (CONTEXT.md, KEY_FILES.md, RECOVERY.md) from the orchestrator data directory.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." } }, required: ["project"] } },
-  { name: "orchestrator_advance_phase", label: "Advance Workflow Phase", description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish).", parameters: { type: "object", properties: { phase: { type: "string", description: "Target phase to transition to. Omit to auto-advance." }, skip: { type: "boolean", description: "Mark current phase as skipped." } } } },
-  { name: "orchestrator_get_routing", label: "Get Model Routing", description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation).", parameters: { type: "object", properties: { category: { type: "string", description: "Task category: coding, fixing, research, q&a, documentation" }, project: { type: "string", description: "Project name. Omit to use current project context." } }, required: ["category"] } },
-  { name: "orchestrator_get_registered_sessions", label: "Get Registered Sessions", description: "List all registered session keys for orchestrator tracking.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_doctor", label: "Doctor", description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.", parameters: { type: "object", properties: { check: { type: "string", description: "Specific check: 'all', 'sessions', 'context', 'data'" }, fix: { type: "boolean", description: "Auto-fix issues when possible" } } } },
-  { name: "orchestrator_release_project", label: "Release Project Binding", description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project and need to switch contexts with a fresh start.", parameters: { type: "object", properties: { force: { type: "boolean", description: "Force release even if migration in progress (default: false)" } } } },
-  { name: "orchestrator_list_active_projects", label: "List Active Projects", description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_join_project", label: "Join Active Project", description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name to join. Use orchestrator_list_active_projects first." }, task: { type: "string", description: "Task description for what you're joining to do." } }, required: ["project", "task"] } },
-  { name: "orchestrator_spawn_subagent", label: "Spawn Subagent", description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.", parameters: { type: "object", properties: { task: { type: "string", description: "Task description for the subagent." }, model: { type: "string", description: "Optional model override. Omit to use project routing rules." }, taskName: { type: "string", description: "Optional stable name for subagent (lowercase_underscores)." }, timeoutSeconds: { type: "number", description: "Optional timeout in seconds (default: 300, max: 1800)." } }, required: ["task"] } },
-  { name: "orchestrator_create_project", label: "Create Project", description: "Create a new project in orchestrator-data. Sets up project directory, STATE.md, and dashboard-config.json entry. Optionally spawns a dedicated session.", parameters: { type: "object", properties: { name: { type: "string", description: "Project name." }, directory: { type: "string", description: "Absolute path to project directory." }, description: { type: "string", description: "Short project description." }, spawn: { type: "boolean", description: "Schedule an immediate session." }, spawn_task: { type: "string", description: "Initial task description." } }, required: ["name"] } },
-  { name: "orchestrator_backlog_add", label: "Add Backlog Task", description: "Add a task to a project's backlog.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, title: { type: "string", description: "Task title." }, description: { type: "string", description: "Task description." }, priority: { type: "string", description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." }, labels: { type: "array", items: { type: "string" }, description: "Labels/tags." }, depends_on: { type: "array", items: { type: "string" }, description: "Task IDs this depends on." } }, required: ["project", "title"] } },
-  { name: "orchestrator_backlog_list", label: "List Backlog", description: "List backlog tasks with optional filters.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, status: { type: "string", description: "Filter by status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "Filter by priority: p0, p1, p2, p3." }, label: { type: "string", description: "Filter by label." } }, required: ["project"] } },
-  { name: "orchestrator_backlog_update", label: "Update Backlog Task", description: "Update a backlog task's status, priority, assignment, or labels.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name." }, id: { type: "string", description: "Task ID." }, status: { type: "string", description: "New status: todo, in_progress, done, blocked." }, priority: { type: "string", description: "New priority: p0, p1, p2, p3." }, assigned_to: { type: "string", description: "Assign to agent or user." }, labels: { type: "array", items: { type: "string" }, description: "Replace labels." } }, required: ["project", "id"] } },
-  { name: "orchestrator_backlog_dispatch", label: "Backlog Dispatch", description: "Pick highest-priority backlog task(s) and return dispatch instructions. Supports parallel dispatch (max_dispatch). Respects dependencies, labels, auto-claim.", parameters: { type: "object", properties: { project: { type: "string" }, task_id: { type: "string" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" }, max_dispatch: { type: "number" } } } },
-  { name: "orchestrator_backlog_dispatch_all", label: "Backlog Dispatch All", description: "Dispatch ALL currently available backlog tasks up to max_dispatch for parallel sub-agent execution. Auto-claims by default.", parameters: { type: "object", properties: { project: { type: "string" }, max_dispatch: { type: "number" }, auto_claim: { type: "boolean" }, filter_labels: { type: "string" } } } },
-  { name: "orchestrator_qa_submit", label: "QA Submit Finding", description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.", parameters: { type: "object", properties: { finding: { type: "string", description: "Describe the QA finding, issue, or observation." }, review_model: { type: "string", description: "Optional model for the QA review subagent." } }, required: ["finding"] } },
-  { name: "orchestrator_qa_approve", label: "QA Approve", description: "Approve the current work. Unblocks the work→log transition when QA gate is active.", parameters: { type: "object", properties: {} } },
-  { name: "orchestrator_qa_reject", label: "QA Reject", description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.", parameters: { type: "object", properties: { reason: { type: "string", description: "Why the work was rejected. Describe what needs to be fixed." } }, required: ["reason"] } },
-  { name: "orchestrator_generate_handoff", label: "Generate Handoff", description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.", parameters: { type: "object", properties: {} } },
-  // ── Quick Action Tools ────────────────────────────────────
-  { name: "orchestrator_grill_with_docs", label: "Grill Me With Docs", description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.", parameters: { type: "object", properties: { topic: { type: "string", description: "Optional focus topic." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_fix_docs_drift", label: "Fix Docs Drift", description: "Scans project docs for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current state.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
-  { name: "orchestrator_regenerate_state", label: "Regenerate State", description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events, safe for concurrent writers.", parameters: { type: "object", properties: { project: { type: "string", description: "Project name. Omit to use current context." } } } },
-  { name: "orchestrator_cleanup_docs", label: "Clean Up & Organize Docs", description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.", parameters: { type: "object", properties: { scope: { type: "string", description: "Scope: all, readme, adrs, docs, tests." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_setup_unit_tests", label: "Set Up Unit Tests", description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.", parameters: { type: "object", properties: { framework: { type: "string", description: "Test framework: vitest, jest, mocha, pytest, etc." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_setup_e2e_tests", label: "Set Up E2E Tests", description: "Spawns a subagent that sets up E2E test infrastructure and creates initial test scenarios.", parameters: { type: "object", properties: { framework: { type: "string", description: "Framework: playwright, cypress, puppeteer, etc." }, model: { type: "string", description: "Optional model override." } } } },
-  { name: "orchestrator_debug_issue", label: "Debug Issue", description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.", parameters: { type: "object", properties: { issue_description: { type: "string", description: "Describe the bug or issue in detail." }, model: { type: "string", description: "Optional model override." } }, required: ["issue_description"] } },
-  { name: "orchestrator_create_functionality", label: "Create New Functionality", description: "Spawns a subagent to design and implement new features or functionality in the project.", parameters: { type: "object", properties: { description: { type: "string", description: "Describe the new functionality — requirements and constraints." }, model: { type: "string", description: "Optional model override." } }, required: ["description"] } },
-];
+// ═══════════════════════════════════════════════════════════════
+//  SHARED BACKLOG HELPERS — extracted to eliminate duplicate code
+//  between backlog_dispatch and backlog_dispatch_all
+// ═══════════════════════════════════════════════════════════════
 
-
-// ── REGISTERED TOOL COUNTER ────────────────────────────────────
-/** Count registerTool calls, excluding those inside line comments. */
-function countRegisteredTools(sourceText: string): number {
-  const prefix = "api.";
-  const suffix = "registerTool({";
-  const target = prefix + suffix;
-  let count = 0, pos = 0;
-  while (pos < sourceText.length) {
-    const idx = sourceText.indexOf(target, pos);
-    if (idx === -1) break;
-    const lineStart = sourceText.lastIndexOf("\n", idx) + 1;
-    if (lineStart === 0) { pos = idx + 1; continue; }
-    const lineBefore = sourceText.slice(lineStart, idx).trimStart();
-    if (!lineBefore.startsWith("//")) count++;
-    pos = idx + 1;
+function _parseTaskField(val: any): any[] {
+  if (typeof val === "string") {
+    try { const p = JSON.parse(val); return Array.isArray(p) ? p : []; } catch { return []; }
   }
-  return count;
+  return Array.isArray(val) ? val : [];
 }
-const PLUGIN_ID = "genor-orchestrator";
+
+function _resolveBacklogCandidates(project: string, tasks: any[], filterLabels?: string, maxCount = 10): {
+  candidates: any[];
+  selected: any[];
+  dispatchList: any[];
+} {
+  let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
+  if (filterLabels) {
+    const fl = filterLabels.split(",").map((l: string) => l.trim().toLowerCase());
+    candidates = candidates.filter((t: any) => _parseTaskField(t.labels).some((l: string) => fl.includes(l.toLowerCase())));
+  }
+  const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
+  candidates = candidates.filter((t: any) => _parseTaskField(t.depends_on).every((d: string) => doneIds.has(d)));
+  const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+  candidates.sort((a: any, b: any) => {
+    const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return (a.created || "").localeCompare(b.created || "");
+  });
+  const selected = candidates.slice(0, maxCount);
+  const dispatchList = selected.map((task: any) => {
+    const taskLabels = _parseTaskField(task.labels);
+    const taskDeps = _parseTaskField(task.depends_on);
+    const labels = taskLabels.join(", ");
+    const deps = taskDeps.map((d: string) => {
+      const dt = tasks.find((t2: any) => t2.id === d);
+      return dt ? `${d} — ${dt.title}` : d;
+    });
+    return {
+      task_id: task.id,
+      title: task.title,
+      description: task.description || "",
+      priority: task.priority || "p2",
+      labels,
+      depends_on: deps,
+      spawn: [
+        `🎯 Task: ${task.title}`,
+        `ID: ${task.id}`,
+        task.description ? `Description: ${task.description}` : "",
+        `Priority: ${task.priority || "p2"}`,
+        labels ? `Labels: ${labels}` : "",
+        deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+      ].filter(Boolean).join("\n"),
+    };
+  });
+  return { candidates, selected, dispatchList };
+}
+
+// ── Tool metadata collector ────────────────────────────────────
+// Automatically populated by the registerTool wrapper inside register().
+// Used by the module-level manifest export. Inlined to avoid duplication
+// between TOOL_METADATA and api.registerTool calls.
+const _collectedToolMeta: Array<{ name: string; label: string; description: string; parameters: any }> = [];
+
+// Static tool name array for metadata reflection at import time.
+// openclaw plugins build evaluates the module before register() is called,
+// so _collectedToolMeta would be empty. This static list ensures
+// contracts.tools is properly populated in openclaw.plugin.json.
+// Must be kept in sync with the actual api.registerTool calls below.
+const _staticToolNames: string[] = [
+  "genorch_workflow_advance_phase",
+  "genorch_models_auto_discover",
+  "genorch_backlog_add",
+  "genorch_backlog_dispatch",
+  "genorch_backlog_dispatch_all",
+  "genorch_backlog_list",
+  "genorch_backlog_update",
+  "genorch_models_check_routing",
+  "genorch_project_tidy_docs",
+  "genorch_session_clear_work",
+  "genorch_feature_design",
+  "genorch_project_create",
+  "genorch_issue_debug",
+  "genorch_system_diagnose",
+  "genorch_project_sync_docs",
+  "genorch_handoff_create",
+  "genorch_config_show_routing",
+  "genorch_logs_query",
+  "genorch_models_list",
+  "genorch_project_docs_list",
+  "genorch_session_list",
+  "genorch_models_recommend",
+  "genorch_status",
+  "genorch_knowledge_quiz",
+  "genorch_project_join",
+  "genorch_project_list_active",
+  "genorch_adr_log",
+  "genorch_session_log",
+  "genorch_qa_approve",
+  "genorch_qa_reject",
+  "genorch_qa_submit",
+  "genorch_project_rebuild_state",
+  "genorch_session_register",
+  "genorch_project_leave",
+  "genorch_session_start_work",
+  "genorch_test_create_e2e",
+  "genorch_test_create_unit",
+  "genorch_task_delegate",
+  "genorch_project_sync_files",
+  "genorch_session_unregister",
+  "genorch_verify_pipeline_check",
+  "genorch_verify_pipeline_guide",
+  "genorch_verify_pipeline_start",
+  "genorch_worker_hire",
+  "genorch_worker_edit",
+  "genorch_worker_fire",
+  "genorch_room_create",
+  "genorch_room_edit",
+  "genorch_room_delete",
+  "genorch_task_create",
+  "genorch_task_move",
+  "genorch_task_assign",
+  "genorch_worker_message",
+];
+let _toolCount = 0;
+
+const PLUGIN_ID = "genor-orchestrator-software-house";
 
 const _plugin: Record<string, any> = definePluginEntry({
   id: PLUGIN_ID,
-  name: "Genor's Orchestrator",
-  description: "Model routing, session logging, project management, dashboard, hooks, and context injection. Plugin-driven: orchestrator drives the workflow, LLM focuses on thinking.",
+  name: "Genor Orchestrator Software House",
+  description: "AI-powered software house with persistent worker sessions, task execution, and inter-worker collaboration. Requires OpenAI HTTP API endpoints enabled in OpenClaw config.",
   register(api) {
     const cfg = api.pluginConfig as Record<string, any> || {};
     const dataDir = getDataDir(cfg.orchestratorDataDir as string | undefined);
     const logLevel = (cfg.logLevel as string) || "info";
     const logRetention = (cfg.logRetentionDays as number) || 30;
     const logger = new OrchestratorLogger(dataDir, logLevel, logRetention);
+
+    // ═══ Initialize SQLite database ═══
+    // Replaces all ad-hoc JSON file I/O with a single orchestrator.db
+    initDb(dataDir);
+    logger.info("db", "SQLite database initialized");
 
     for (const sub of ["logs", "sessions", "adrs", "projects"]) {
       const p = path.join(dataDir, sub);
@@ -2451,29 +2657,105 @@ const _plugin: Record<string, any> = definePluginEntry({
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  FIRST-RUN ONBOARDING
+    //  OPENAI ENDPOINT DETECTION & GATEWAY TOKEN ACCESS
     // ═══════════════════════════════════════════════════════════
-    // On first load, run all initialization tasks:
-    //   1. Ensure all data directories exist
-    //   2. Auto-populate model inventory from gateway config
-    //   3. Create default dashboard-config.json if missing
-    //   4. Create STATE.md for any existing project dirs that lack one
-    //   5. Run orchestrator_doctor checks to surface issues early
-    //   6. Write .FIRST_RUN marker so this only runs once
+    // Check if OpenAI HTTP API endpoint is enabled
+    // Plugin requires this for worker session execution
+    let gatewayToken: string | null = null;
+    let openaiEndpointEnabled = false;
+
+    // Try to detect if OpenAI endpoint is enabled (non-blocking)
+    const gatewayUrl = "http://localhost:18789";
+    fetch(`${gatewayUrl}/v1/models`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then((healthResponse) => {
+        if (healthResponse.ok) {
+          openaiEndpointEnabled = true;
+          logger.info("boot", "✅ OpenAI HTTP API endpoint detected");
+        } else {
+          logger.warn("boot", "⚠️  OpenAI HTTP API endpoint not responding");
+        }
+      })
+      .catch(() => {
+        logger.warn("boot", "⚠️  Could not detect OpenAI HTTP API endpoint");
+      });
+
+    // Get gateway token from environment (never copy to files)
+    try {
+      if (process.env.OPENCLAW_GATEWAY_TOKEN) {
+        gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+        logger.info("boot", "✅ Gateway token loaded from environment");
+      } else if (process.env.OPENCLAW_GATEWAY_PASSWORD) {
+        gatewayToken = process.env.OPENCLAW_GATEWAY_PASSWORD;
+        logger.info("boot", "✅ Gateway password loaded from environment");
+      } else {
+        logger.warn("boot", "⚠️  Gateway token not found in environment");
+        logger.warn("boot", "   Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD");
+      }
+    } catch (e: any) {
+      logger.warn("boot", `Gateway token access error: ${e.message}`);
+    }
+
+    // Log warnings if requirements not met
+    if (!openaiEndpointEnabled) {
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "⚠️  SOFTWARE HOUSE PLUGIN REQUIRES OPENAI ENDPOINTS");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "Enable in openclaw.json:");
+      logger.error("boot", "");
+      logger.error("boot", '{');
+      logger.error("boot", '  "gateway": {');
+      logger.error("boot", '    "http": {');
+      logger.error("boot", '      "endpoints": {');
+      logger.error("boot", '        "chatCompletions": { "enabled": true }');
+      logger.error("boot", '      }');
+      logger.error("boot", '    }');
+      logger.error("boot", '  }');
+      logger.error("boot", '}');
+      logger.error("boot", "");
+      logger.error("boot", "Then restart OpenClaw gateway.");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+    }
+
+    if (!gatewayToken) {
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "⚠️  GATEWAY TOKEN NOT FOUND");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+      logger.error("boot", "Worker execution requires gateway token.");
+      logger.error("boot", "Set OPENCLAW_GATEWAY_TOKEN environment variable.");
+      logger.error("boot", "═══════════════════════════════════════════════════════════════");
+    }
+
+    // Store for later use by worker engine
+    (global as any).__SOFTWARE_HOUSE_CONFIG__ = {
+      gatewayToken,
+      openaiEndpointEnabled,
+      gatewayUrl: "http://localhost:18789",
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    //  BOOT MODEL SYNC
+    // ═══════════════════════════════════════════════════════════
+    // Auto-populate model inventory from gateway config on EVERY boot.
+    // This keeps models.json in sync: new models are added, and models
+    // removed from the gateway config are pruned (not preserved as orphans).
+    //
+    // Also runs first-run onboarding tasks on initial install.
     const firstRunMarker = path.join(dataDir, ".FIRST_RUN");
+
+    // Auto-populate model inventory — runs every boot to stay in sync
+    try {
+      autoPopulate(dataDir, logger);
+      logger.info("boot", "Models synced from gateway config");
+    } catch (e: any) {
+      logger.warn("boot", `Boot model sync skipped — ${e.message}`);
+    }
+
+    // ── First-run onboarding ──
     if (!fs.existsSync(firstRunMarker)) {
       logger.info("boot", "═══════════ First run detected — running onboarding... ═══════════");
-
-      // Auto-populate model inventory
-      try {
-        const modelsPath = path.join(dataDir, "models.json");
-        if (!fs.existsSync(modelsPath)) {
-          autoPopulate(dataDir, logger);
-          logger.info("boot", "First-run: models auto-populated");
-        }
-      } catch (e: any) {
-        logger.warn("boot", `First-run: model population skipped — ${e.message}`);
-      }
 
       // Create default dashboard config if missing
       try {
@@ -2484,6 +2766,14 @@ const _plugin: Record<string, any> = definePluginEntry({
             projects: {},
           });
           logger.info("boot", "First-run: default dashboard config created");
+        }
+        // Init DB global config defaults if empty
+        const existingCfg = getAllGlobalConfig();
+        if (!existingCfg.free_only_mode && !existingCfg.disabled_models) {
+          setGlobalConfig("free_only_mode", false);
+          setGlobalConfig("disabled_models", []);
+          setGlobalConfig("safeguards", {});
+          logger.info("boot", "First-run: DB global config initialized");
         }
       } catch (e: any) {
         logger.warn("boot", `First-run: dashboard config creation skipped — ${e.message}`);
@@ -2498,16 +2788,9 @@ const _plugin: Record<string, any> = definePluginEntry({
             if (!fs.statSync(pp).isDirectory() || e.startsWith(".")) continue;
             const statePath = path.join(pp, "STATE.md");
             if (!fs.existsSync(statePath)) {
-              const sf = path.join(pp, "sessions.json");
-              let sessCount = 0;
-              if (fs.existsSync(sf)) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-                } catch { /* */ }
-              }
+              let sessCount = countSessions(e);
               const loc = getProjectLocation(e, dataDir);
-              const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run orchestrator_sync_project)";
+              const repoNote = loc ? `**Location:** \`${loc}\`` : "*(not configured — run genorch_project_sync_files)";
               const stateContent = [
                 `# STATE: ${e} — v0.0.0`,
                 "",
@@ -2522,9 +2805,9 @@ const _plugin: Record<string, any> = definePluginEntry({
                 "",
                 "1. Install the plugin in OpenClaw plugins config",
                 "2. Ensure 'orchestratorDataDir' points here",
-                "3. Call `orchestrator_register` to opt in",
-                "4. Call `orchestrator_set_context` to start work",
-                "5. Log sessions via `orchestrator_log_session`",
+                "3. Call `genorch_session_register` to opt in",
+                "4. Call `genorch_session_start_work` to start work",
+                "5. Log sessions via `genorch_session_log`",
               ].join("\n");
               fs.writeFileSync(statePath, stateContent, "utf-8");
               logger.info("boot", `First-run: created STATE.md for project "${e}"`);
@@ -2539,19 +2822,6 @@ const _plugin: Record<string, any> = definePluginEntry({
       logger.info("boot", `═══════════ First-run onboarding complete ═══════════`);
     }
 
-    // Schedule nightly model population
-    try {
-      const scriptDir = path.join(PLUGIN_ROOT, "scripts", "auto-populate-models.py");
-      if (fs.existsSync(scriptDir)) {
-        const cronCmd = `python3 "${scriptDir}" 2>&1 >> "${path.join(dataDir, "logs", "auto-populate.log")}"`;
-        const existing = execSync("crontab -l 2>/dev/null || true", { encoding: "utf-8", timeout: 5000 });
-        if (!existing.includes("auto-populate-models.py")) {
-          execSync(`(crontab -l 2>/dev/null; echo "0 3 * * * ${cronCmd} # genor-orchestrator auto-populate") | crontab -`, { timeout: 5000 });
-          logger.info("boot", "Scheduled nightly model population (3 AM)");
-        }
-      }
-    } catch { logger.debug("boot", "Cron scheduling skipped (no crontab access)"); }
-
     logger.info("plugin", "Plugin loaded", { dataDir, logLevel, logRetention });
 
     // ═══════════════════════════════════════════════════════════
@@ -2561,32 +2831,19 @@ const _plugin: Record<string, any> = definePluginEntry({
     api.on("session_start", async (event: any) => {
       try {
         const sk = (event.sessionKey || "").toString();
-        // Filter out background/dreaming/cron/subagent/acp sessions — their
-        // session keys would overwrite the interactive session key and cause
-        // mismatched session_key in auto-logged entries.
-        const isBackground = sk.includes("dreaming") || sk.includes(":cron:") || sk.includes(":subagent:") || sk.includes(":acp:");
-        if (isBackground) {
-          logger.debug("hooks", `session_start (skipped background): ${sk}`);
-          return;
+        if (!sk) return;
+        // Adopt the real gateway key so genorch_session_register can find it
+        if (sessionTracker.sessionKey !== sk) {
+          sessionTracker.start(sk, event.reason || "new");
         }
-        // ═══ SESSION ISOLATION: Don't reset tracker for unregistered sessions ═══
-        // Calling start() on an unregistered session would nuke the registered
-        // session's context (project, task, model) from the singleton tracker.
-        // Only start() if this session is explicitly registered, or if there
-        // are ZERO registered sessions (first-time setup).
-        const hasRegisteredSessions = sessionTracker.getRegisteredSessions().length > 0;
-        if (sessionTracker.isSessionRegistered(sk) || !hasRegisteredSessions) {
-          sessionTracker.start(sk || "unknown", event.reason || "new");
-        } else {
-          // Unregistered session starting alongside an active registered session.
-          // Don't touch the tracker state — just log it.
-          sessionTracker.trackAction("session_started");
-          logger.debug("hooks", `session_start (unregistered, skipped tracker reset): ${sk}`);
-        }
-        sessionTracker.trackAction("session_started");
-        writeLiveAgents("session_start", sessionTracker, logger);
-        logger.debug("hooks", `session_start: ${event.reason} key=${sk}`);
-      } catch (err: any) { logger.error("hooks", `session_start error: ${err.message}`); }
+        // Auto-register so tools like genorch_session_start_work can work
+        // without manually calling genorch_session_register first.
+        // NOTE: Key is adopted but NOT auto-registered.
+        // Registration is explicit — user must call genorch_session_register.
+        logger.info("hooks", `session_start adopted key: ${sk} (reason: ${event.reason || ""})`);
+      } catch (e: any) {
+        logger.warn("hooks", `session_start error: ${e.message}`);
+      }
     });
 
     api.on("session_end", async (event: any) => {
@@ -2609,9 +2866,9 @@ const _plugin: Record<string, any> = definePluginEntry({
         const isSubagent = !!subInfo;
         const isMain = sk_end && sk_end === sessionTracker.sessionKey;
         if (isMain) {
-          sessionTracker.setStatus("complete");
+          sessionTracker.setStatus("done");
           sessionTracker.trackAction("session_ending");
-          writeLiveAgents("session_end", sessionTracker, logger);
+          queueLiveAgents("session_end", sessionTracker);
         }
         const info = sessionTracker.end();
         if (info && (isMain || isSubagent)) {
@@ -2666,11 +2923,23 @@ const _plugin: Record<string, any> = definePluginEntry({
           logSession(dataDir, {
             project: info.project, task: info.task, model: info.model,
             agent: sessionTracker.currentAgent || "system",
-            status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "complete",
+            status: event.reason === "shutdown" ? "interrupted" : event.reason === "error" ? "failed" : "done",
             duration: info.duration,
+            start_time: new Date(sessionTracker.sessionStartTimestamp).toISOString(),
+            end_time: new Date().toISOString(),
             session_key: sk_end || sessionTracker.sessionKey || "",
             parent_session_key: isSubagent && subInfo ? subInfo.parentKey || null : (sk_end && sk_end !== sessionTracker.sessionKey ? sessionTracker.sessionKey || null : null),
             goal: info.task,
+            action_history: sessionTracker.actionHistory.slice(-20),
+            touched_files: sessionTracker.touchedFiles.slice(-20),
+            token_usage: sessionTracker.tokenUsage,
+            workflow: sessionTracker.workflow.toJSON(),
+            qa_status: sessionTracker.qaStatus,
+            qa_history: sessionTracker.qaHistory,
+            qa_findings: sessionTracker.qaFindings,
+            error_count: sessionTracker.errorCount,
+            last_error: sessionTracker.lastError,
+            last_activity_at: new Date(sessionTracker.lastActivityTimestamp).toISOString(),
             notes: `Completed: ${info.task} | Agent: ${sessionTracker.currentAgent || "?"} | Status: ${event.reason} | Workflow: ${sessionTracker.workflow.enabled ? sessionTracker.workflow.currentPhase : "OFF"}`,
           }, logger);
           generateRecoveryDoc(info.project, dataDir, logger);
@@ -2739,7 +3008,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           }
           
           sessionTracker.currentAction = "session_complete";
-          writeLiveAgents("session_complete", sessionTracker, logger);
+          queueLiveAgents("session_complete", sessionTracker);
           logger.info("hooks", `Session auto-logged: ${info.project}/${info.task} (${info.duration})`);
         }
         logger.debug("hooks", `session_end: ${event.reason}`);
@@ -2761,7 +3030,7 @@ const _plugin: Record<string, any> = definePluginEntry({
       if (!sessionTracker.sessionKey || !sessionTracker.isSessionRegistered(sessionTracker.sessionKey)) return;
       const subKey = (event?.sessionKey || event?.subagentKey || "").toString();
       sessionTracker.subagentDepth++;
-      sessionTracker.setStatus("working");
+      sessionTracker.setStatus("running");
       if (sessionTracker.currentProject) {
         logger.debug("subagent", `Depth ${sessionTracker.subagentDepth} for ${sessionTracker.currentProject} key=${subKey}`);
       }
@@ -2774,7 +3043,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           startedAt: new Date().toISOString(),
         });
       }
-      writeLiveAgents("subagent_spawned", sessionTracker, logger);
+      queueLiveAgents("subagent_spawned", sessionTracker);
     });
 
     api.on("subagent_ended", async (event: any) => {
@@ -2784,88 +3053,89 @@ const _plugin: Record<string, any> = definePluginEntry({
       sessionTracker.subagentDepth = Math.max(0, sessionTracker.subagentDepth - 1);
       if (subKey) sessionTracker.untrackSubagent(subKey);
       if (sessionTracker.currentProject) {
-        writeLiveAgents("subagent_ended", sessionTracker, logger);
+        queueLiveAgents("subagent_ended", sessionTracker);
       }
     });
+
+    // ═══ Model routing resolution — merges project overrides with global defaults ═══
+    function getEffectiveChain(project: string | null, category: string): string[] | null {
+      try {
+        // 1. Project-specific routing takes priority
+        if (project) {
+          const pc = getProjectConfig(project);
+          if (pc?.model_routing?.[category]?.length) {
+            return pc.model_routing[category];
+          }
+        }
+        // 2. Fall back to global default routing
+        const globalCfg = getAllGlobalConfig();
+        const globalRouting = globalCfg?.default_model_routing || {};
+        if (globalRouting[category]?.length) {
+          return globalRouting[category];
+        }
+      } catch (e: any) {
+        logger.warn("routing", `getEffectiveChain error: ${e.message}`);
+      }
+      return null;
+    }
 
     api.on("before_model_resolve", async (event: any, hookCtx: any) => {
       try {
         const ctxSessionKey = hookCtx?.sessionKey || "";
+        if (!ctxSessionKey) return;
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 1: KEY ADOPTION (resolves chicken-and-egg)
+        //  MUST run before the registration check so that
+        //  genorch_session_register sees a non-null session key.
+        // ═══════════════════════════════════════════════════════════
+        const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":acp:");
         
-        // ═══ SCOPE: Skip routing for unregistered sessions ═══
-        // But still let bridge logic run for synthetic-to-real key migration
-        const isUnregistered = !ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey);
-        const allRegistered = sessionTracker.getRegisteredSessions();
-        const hasSynthetic = allRegistered.some(k => k.startsWith("agent:main:auto:"));
-        
-        // If this session isn't registered AND there are no synthetic keys to bridge,
-        // skip all the heavy logic
-        if (isUnregistered && !hasSynthetic) {
-          return;
+        if (!isBackground) {
+          // ── Adopt the real gateway key (NO auto-registration) ──
+          // Key adoption is safe singleton set-once from null logic.
+          // Registration is EXPLICIT — user must call genorch_session_register.
+          if (sessionTracker.sessionKey !== ctxSessionKey) {
+            sessionTracker.start(ctxSessionKey, "resumed");
+          }
+          logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
         }
 
-        // ═══ SESSION ISOLATION: Resolve session key from hook context NOT tracker singleton ═══
-        // The hookCtx.sessionKey is the REAL gateway-provided key for THIS session.
-        // sessionTracker.sessionKey is a singleton and may have been overwritten by
-        // another session's hooks. Always use ctxSessionKey for lookups.
-        //
-        // Bridge synthetic fallback keys (from orchestrator_register) with the real
-        // key so before_prompt_build injection works. CRITICAL: Only bridge from
-        // synthetic fallback keys (agent:main:auto:...) to real keys. NEVER bridge
-        // from one real key to another — that would cross-contaminate sessions.
-        if (ctxSessionKey) {
-          const isBackground = ctxSessionKey.includes("dreaming") || ctxSessionKey.includes(":cron:") || ctxSessionKey.includes(":subagent:") || ctxSessionKey.includes(":acp:");
-          if (!isBackground) {
-            // ── Synthetic-to-real bridge ──
-            // If the tracker was given a synthetic fallback key (agent:main:auto:...)
-            // by a prior tool call, bridge it to the real gateway key now.
-            const regSk = sessionTracker.sessionKey;
-            const isSyntheticToReal = regSk && regSk !== ctxSessionKey && regSk.startsWith("agent:main:auto:");
-            if (isSyntheticToReal) {
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 2: SUBAGENT SESSION SETUP
+        //  If this is a subagent spawned by a registered parent, adopt
+        //  its key, register it, and inherit the parent's project context.
+        // ═══════════════════════════════════════════════════════════
+        if (ctxSessionKey.includes(":subagent:")) {
+          const subInfo = sessionTracker.getSubagent(ctxSessionKey);
+          if (subInfo && subInfo.parentKey && sessionTracker.isSessionRegistered(subInfo.parentKey)) {
+            if (!sessionTracker.isSessionRegistered(ctxSessionKey)) {
+              sessionTracker.start(ctxSessionKey, "subagent");
               sessionTracker.registerSession(ctxSessionKey);
-              const existingCtx = sessionTracker.getSessionContext(regSk);
-              if (existingCtx) {
-                const { project, task } = existingCtx;
-                sessionTracker.sessionKey = ctxSessionKey;
-                sessionTracker.setContext(project, task || "");
-                sessionTracker.setStatus("prompting");
+              if (subInfo.project) {
+                sessionTracker.setContext(subInfo.project, subInfo.task || "");
               }
-              logger.info("hooks", `before_model_resolve: bridged synthetic→real: ${regSk} → ${ctxSessionKey}`);
-            }
-            
-            // ── Session-scoped primary key adoption ──
-            // ONLY set sessionTracker.sessionKey and start() for the session that
-            // is actually registered. If a different session's hooks fire here,
-            // don't overwrite the tracker — use ctxSessionKey locally instead.
-            const isRegisteredForThisSession = sessionTracker.isSessionRegistered(ctxSessionKey);
-            if (isRegisteredForThisSession) {
-              if (!sessionTracker.sessionKey || sessionTracker.sessionKey !== ctxSessionKey) {
-                sessionTracker.start(ctxSessionKey, "resumed");
-              }
-              logger.info("hooks", "before_model_resolve: active key=" + ctxSessionKey);
-            } else {
-              // Unregistered session — still update status but don't pollute tracker key
-              logger.debug("hooks", `before_model_resolve: skippping tracker adoption for unregistered session: ${ctxSessionKey}`);
+              logger.info("hooks", `Subagent auto-registered: ${ctxSessionKey} (parent: ${subInfo.parentKey})`);
             }
           }
         }
-        
-        // Always update status but scope to the actual hook session
-        sessionTracker.setStatus("resolving");
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 3: STATUS UPDATE
+        // ═══════════════════════════════════════════════════════════
+        sessionTracker.setStatus("running");
         sessionTracker.trackAction("resolving_model");
-        writeLiveAgents("before_model_resolve", sessionTracker, logger);
-        
-        // ═══ SESSION-GATED: Only resolve models for the registered session ═══
-        // Don't enter model resolution if this session isn't registered.
-        if (!ctxSessionKey || !sessionTracker.isSessionRegistered(ctxSessionKey)) {
-          return;
-        }
+        queueLiveAgents("before_model_resolve", sessionTracker);
+
+        // ═══════════════════════════════════════════════════════════
+        //  STEP 4: MODEL ROUTING (only for registered sessions)
+        // ═══════════════════════════════════════════════════════════
+        if (!sessionTracker.isSessionRegistered(ctxSessionKey)) return;
         if (!sessionTracker.currentProject) return;
 
-        const md = readJSON(path.join(dataDir, "models.json"));
-        const allModels: ModelEntry[] = md?.models || [];
-        const cfg2: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
-        const pc = cfg2.projects?.[sessionTracker.currentProject];
+        const allModels: any[] = listModels(false);
+        const cfg2: Record<string, any> = getAllGlobalConfig();
+        const pc = sessionTracker.currentProject ? getProjectConfig(sessionTracker.currentProject) : null;
         
         // ── Resolve routing preset ──
         const routingPreset = pc?.routing_preset || "custom";
@@ -2873,7 +3143,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         // Preset: "no-steering" — skip entirely, let OpenClaw's default resolution run
         if (routingPreset === "no-steering") {
           logger.debug("routing", `no-steering preset for ${sessionTracker.currentProject} — skipping model override`);
-          sessionTracker.trackModel(event?.resolvedModel || "default", "default", 0);
+          sessionTracker.trackModel(event?.resolvedModel || "default", "default");
           return;
         }
         
@@ -2905,18 +3175,25 @@ const _plugin: Record<string, any> = definePluginEntry({
         }
         
         // ── Preset: "custom" or "custom-fallbacks-only" — try model_routing chains ──
-        // Determine the task category (infer from task name when possible)
+        // Determine the task category — explicit Task Type: line takes priority, else infer
         const ctx2 = sessionTracker.getSessionContext(ctxSessionKey);
         const taskStr = ctx2?.task || "";
         const taskLower = taskStr.toLowerCase();
+        const typeMatch = taskLower.match(/task\s*type:\s*(\w+)/);
         let taskCategory = "coding"; // default
-        if (taskLower.includes("fix") || taskLower.includes("bug") || taskLower.includes("error") || taskLower.includes("broken")) taskCategory = "fixing";
+        if (typeMatch && ["coding","fixing","research","qa","documentation","test"].includes(typeMatch[1])) {
+          taskCategory = typeMatch[1];
+        } else if (taskLower.includes("fix") || taskLower.includes("bug") || taskLower.includes("error") || taskLower.includes("broken")) taskCategory = "fixing";
         else if (taskLower.includes("research") || taskLower.includes("investigat") || taskLower.includes("explore") || taskLower.includes("learn") || taskLower.includes("find out")) taskCategory = "research";
         else if (taskLower.includes("q&a") || taskLower.includes("question") || taskLower.includes("answer") || taskLower.includes("what is") || taskLower.includes("how do")) taskCategory = "qa";
         else if (taskLower.includes("doc") || taskLower.includes("readme") || taskLower.includes("adr") || taskLower.includes("manual") || taskLower.includes("write up")) taskCategory = "documentation";
+        else if (taskLower.includes("test") || taskLower.includes("spec") || taskLower.includes("unit") || taskLower.includes("e2e")) taskCategory = "test";
         
+        // Merge project overrides + global defaults
+        const chain = getEffectiveChain(sessionTracker.currentProject, taskCategory);
+
+        // Also pass explicitly-set model_routing for per-project filtering below
         const modelRouting = pc?.model_routing || {};
-        const chain = modelRouting[taskCategory];
         
         if (chain && Array.isArray(chain) && chain.length > 0) {
           // Try models in chain order until we find an active one
@@ -2939,7 +3216,7 @@ const _plugin: Record<string, any> = definePluginEntry({
           }
           
           if (selected) {
-            sessionTracker.trackModel(selected.id, selected.provider, selected.tier);
+            sessionTracker.trackModel(selected.id, selected.provider);
             logger.info("routing", `[${routingPreset}] Routed ${sessionTracker.currentProject}/${taskCategory} → ${selected.id} (${selected.provider})`);
             
             // For custom-fallbacks-only: still let OpenClaw resolve primary,
@@ -2960,14 +3237,14 @@ const _plugin: Record<string, any> = definePluginEntry({
           logger.warn("routing", `Chain for ${taskCategory} unavailable: ${chainInfo} — falling back to tier-based`);
         }
         
-        // ── Fallback: tier-based model selection ──
+        // ── Fallback: first-eligible model selection ──
         if (eligible.length > 0) {
           const best = eligible
             .filter(m => m.agent_ready !== false && m.status === "active")
-            .sort((a, b) => (b.tier || 0) - (a.tier || 0))[0];
+            [0];
           if (best) {
-            sessionTracker.trackModel(best.id, best.provider, best.tier);
-            logger.info("routing", `[tier-fallback] Routed ${sessionTracker.currentProject} → ${best.id} (T${best.tier})`);
+            sessionTracker.trackModel(best.id, best.provider);
+            logger.info("routing", `[tier-fallback] Routed ${sessionTracker.currentProject} → ${best.id}`);
             return { modelOverride: best.id };
           }
         }
@@ -2975,7 +3252,7 @@ const _plugin: Record<string, any> = definePluginEntry({
         // ── Last resort: track whatever OpenClaw resolved ──
         if (event?.resolvedModel) {
           const resolvedInfo = allModels.find((m: ModelEntry) => m.id === event.resolvedModel);
-          sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider, resolvedInfo?.tier);
+          sessionTracker.trackModel(event.resolvedModel, resolvedInfo?.provider);
           logger.info("routing", `[pass-through] No eligible models for ${sessionTracker.currentProject}, using resolved: ${event.resolvedModel}`);
         }
       } catch (err: any) { logger.error("hooks", `before_model_resolve error: ${err.message}`); }
@@ -2988,9 +3265,9 @@ const _plugin: Record<string, any> = definePluginEntry({
         // been set by a different session's hooks. Always use hookCtx.sessionKey.
         const hk = hookCtx?.sessionKey || "";
         
-        sessionTracker.setStatus("prompting");
+        sessionTracker.setStatus("running");
         sessionTracker.trackAction("building_prompt");
-        writeLiveAgents("before_prompt_build", sessionTracker, logger);
+        queueLiveAgents("before_prompt_build", sessionTracker);
         
         // ═══ NO MUTATION: This hook NEVER modifies sessionTracker.sessionKey ═══
         // Previous code had a "safety net" that mutated sessionTracker.sessionKey
@@ -3007,6 +3284,15 @@ const _plugin: Record<string, any> = definePluginEntry({
         // NEVER use sessionTracker.sessionKey as fallback — it's singletons-tainted.
         // If hk (hook context key) is empty or not registered, NO injection.
         if (!hk) return;
+
+        // Safe key adoption: if the tracker has no session key yet (null),
+        // adopt the hook context key. Once set, never overwrite — prevents
+        // cross-session pollution where Session B's key would replace
+        // Session A's established key.
+        if (!sessionTracker.sessionKey) {
+          sessionTracker.start(hk, "resumed");
+          logger.info("hooks", `before_prompt_build adopted orphan session key: ${hk}`);
+        }
         const sk = hk;
         if (!sessionTracker.isSessionRegistered(sk)) return;
         const pc = sessionTracker.getSessionContext(sk);
@@ -3020,23 +3306,23 @@ const _plugin: Record<string, any> = definePluginEntry({
 You are working within Genor's Orchestrator plugin. Follow these rules automatically.
 
 `;
-        ctx += `**Workflow phases** (advance in order via \`orchestrator_advance_phase\`):
+        ctx += `**Workflow phases** (advance in order via \`genorch_workflow_advance_phase\`):
    analyze → plan → document → work → log → finish
 `;
         ctx += `**Enforced gates** (code blocks these if violated):
-• Must call \`orchestrator_register\` then \`orchestrator_set_context\` before project work
-• work→log: BLOCKED until QA approves (run \`orchestrator_qa_submit\` → \`orchestrator_qa_approve\`)\n• log→finish: BLOCKED until \`orchestrator_log_session\` AND \`orchestrator_generate_handoff\` complete
+• Must call \`genorch_session_register\` → \`genorch_project_bind\` → \`genorch_session_start_work\` in order
+• work→log: BLOCKED until QA approves (run \`genorch_qa_submit\` → \`genorch_qa_approve\`)\n• log→finish: BLOCKED until \`genorch_session_log\` AND \`genorch_handoff_create\` complete
 `;
         ctx += `**Model routing**: Orchestrator auto-selects the best model per task category.
-  Use \`orchestrator_get_routing\` to see recommendations. Don't override unless necessary.
+  Use \`genorch_models_recommend\` to see recommendations. Don't override unless necessary.
 `;
         ctx += `**Phase tools**:
   • Analyze: study context, output findings
-  • Plan: create step-by-step plan, ADR (\`orchestrator_log_decision\`)
-  • Document: \`orchestrator_log_decision\` for architecture decisions
+  • Plan: create step-by-step plan, ADR (\`genorch_adr_log\`)
+  • Document: \`genorch_adr_log\` for architecture decisions
   • Work: implement, then submit QA if enabled
-  • Log: \`orchestrator_log_session\` with status=complete
-  • Finish: \`orchestrator_generate_handoff\` before advancing
+  • Log: \`genorch_session_log\` with status=complete
+  • Finish: \`genorch_handoff_create\` before advancing
 
 `;
         
@@ -3046,6 +3332,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         pcl += ` | Sub-agents: ${sessionTracker.subagentDepth}`;
         pcl += ` | Data: orchestrator-data/projects/${pc.project}/`;
         ctx += pcl;
+        
+        // ═══ PROJECT DOCS INJECTION (style rules, code rules, feature map, structure) ═══
+        // Auto-inject project-specific rules and context to minimize LLM mental drift.
+        // Reads STYLE_GUIDE.md, ARCHITECTURE.md, FEATURES.md, PROJECT_PLAN.md, BUGS.md
+        // from the project directory and prepends them to the prompt.
+        const projectDocCtx = buildProjectDocContext(dataDir, pc.project);
+        if (projectDocCtx) {
+          ctx += "\n\n" + projectDocCtx;
+        }
         
         // ═══ PHASE ENFORCEMENT ═══
         // Inject current workflow phase instructions so the AI knows what phase
@@ -3066,11 +3361,11 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           };
           
           const phaseInstructions: Record<string, string> = {
-            analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call orchestrator_advance_phase when analysis is complete.",
-            plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call orchestrator_advance_phase when plan is approved.",
-            document: "📝 PHASE: DOCUMENT — Write an ADR (orchestrator_log_decision) or design doc covering the architecture, trade-offs, and key decisions. Call orchestrator_advance_phase when design is documented.",
-            work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with orchestrator_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call orchestrator_advance_phase when implementation is complete.`,
-            log: "📊 PHASE: LOG — Log the session via orchestrator_log_session with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with orchestrator_generate_handoff (REQUIRED before finish). Then call orchestrator_advance_phase. (Docs are auto-synced when advancing to finish.)",
+            analyze: "🔍 PHASE: ANALYZE — Study the request and project context. Output findings, questions, and scope. Do NOT write code yet. Call genorch_workflow_advance_phase when analysis is complete.",
+            plan: "📋 PHASE: PLAN — Create a step-by-step plan. List files to change, approach, risks, and dependencies. Do NOT code yet. Call genorch_workflow_advance_phase when plan is approved.",
+            document: "📝 PHASE: DOCUMENT — Write an ADR (genorch_adr_log) or design doc covering the architecture, trade-offs, and key decisions. Call genorch_workflow_advance_phase when design is documented.",
+            work: `⚡ PHASE: IMPLEMENT — Execute the plan. Write code. Make changes.${sessionTracker.workflow.includeQa ? " After implementation, submit for QA review with genorch_qa_submit (enforced: auto-spawns an independent QA review subagent). The work→log transition is BLOCKED until QA approves." : ""} Call genorch_workflow_advance_phase when implementation is complete.`,
+            log: "📊 PHASE: LOG — Log the session via genorch_session_log with status=complete. Include a summary of what was done, decisions made, and next steps. After logging, generate a handoff document with genorch_handoff_create (REQUIRED before finish). Then call genorch_workflow_advance_phase. (Docs are auto-synced when advancing to finish.)",
             finish: "✅ PHASE: FINISH — All phases complete. Verifying git status and ensuring everything is committed.",
           };
           
@@ -3101,17 +3396,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           if (sessionTracker.handoffGenerated) {
             ctx += `\n📄 Handoff: ✅ Generated (${sessionTracker.handoffPath || "unknown"})`;
           } else if (phase === "log" || phase === "finish") {
-            ctx += `\n📄 Handoff: ❌ Not generated — run orchestrator_generate_handoff`;
+            ctx += `\n📄 Handoff: ❌ Not generated — run genorch_handoff_create`;
           }
         }
         
         return { prependContext: ctx };
-      } catch { /* */ }
+      } catch (e: any) { logger.warn("context", "before_prompt_build failed:", e.message); }
     });
 
     api.on("agent_end", async () => {
       sessionTracker.trackAction("agent_stopped");
-      writeLiveAgents("agent_end", sessionTracker, logger);
+      queueLiveAgents("agent_end", sessionTracker);
       
       // ═══ AUTO-LOG UNREPORTED TASKS ═══
       // If the session has active project context but never logged completion,
@@ -3163,7 +3458,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.on("gateway_stop", async () => {
-      sessionTracker.setStatus("shutdown");
+      sessionTracker.setStatus("done");
       maintenanceSvc?.stop();
       logger.stop();
     });
@@ -3172,20 +3467,81 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     //  TOOLS
     // ═══════════════════════════════════════════════════════════
 
+    // ── Workflow helpers (extracted to eliminate advance_phase duplication) ──
+    const _checkQaGate = (): string | null => {
+      if (!sessionTracker.workflow.includeQa) return null;
+      if (sessionTracker.canAdvanceFromWork()) return null;
+      const qs = sessionTracker.qaStatus;
+      if (qs === "none") return "QA review required before advancing. Run genorch_qa_submit with your findings first.";
+      if (qs === "pending") return "QA review is pending approval. A reviewer must call genorch_qa_approve or genorch_qa_reject.";
+      if (qs === "rejected") return "QA review rejected the previous submission. Fix the reported issues and call genorch_qa_submit again.";
+      return "QA gate not passed. Submit findings with genorch_qa_submit.";
+    };
+    const _checkHandoffGate = (): string | null => {
+      if (!sessionTracker.canFinish()) return "Handoff document required before finishing. Run genorch_handoff_create to create one.";
+      if (!sessionTracker.loggedTaskCompletion) return "Task must be explicitly logged before finishing. Call genorch_session_log with status=complete first.";
+      return null;
+    };
+    const _checkGitStatus = (): void => {
+      const project = sessionTracker.currentProject;
+      if (!project) return;
+      const loc = getProjectLocation(project, dataDir);
+      if (!loc || !fs.existsSync(path.join(loc, ".git"))) return;
+      try {
+        const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
+        const changed = statusRaw.trim().split("\n").filter(Boolean);
+        if (changed.length > 0) logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase. Consider committing or stashing first.`);
+      } catch { /* git check non-fatal */ }
+    };
+    const _checkAdrPresence = (): void => {
+      const project = sessionTracker.currentProject;
+      if (!project) return;
+      const adrsDir = path.join(dataDir, "adrs");
+      let adrCount = 0;
+      if (fs.existsSync(adrsDir)) {
+        adrCount = fs.readdirSync(adrsDir).filter((f: string) => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
+      }
+      if (adrCount === 0) {
+        const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
+        if (fs.existsSync(projAdrsDir2)) {
+          adrCount = fs.readdirSync(projAdrsDir2).filter((f: string) => f.endsWith(".md")).length;
+        }
+      }
+      if (adrCount === 0) logger.warn("workflow", "No ADR found. Consider documenting decisions with genorch_adr_log before implementing.");
+    };
+
+    // ── Wrap api.registerTool to auto-collect metadata ──
+    // This eliminates TOOL_METADATA duplication (single source of truth).
+    const _origRegister = api.registerTool.bind(api);
+    api.registerTool = ((meta: any) => {
+      _collectedToolMeta.push({
+        name: meta.name,
+        label: meta.label,
+        description: meta.description,
+        parameters: JSON.parse(JSON.stringify(meta.parameters)),
+      });
+      _toolCount++;
+      return _origRegister(meta);
+    }) as typeof api.registerTool;
+
     api.registerTool({
-      name: "orchestrator_set_context",
-      label: "Orchestrator Set Context",
-      description: "MANDATORY before starting project work. Sets active project and task context, enabling auto-routing, auto-logging, and context injection.",
+      name: "genorch_session_start_work",
+      label: "Orchestrator Start Work",
+      description: "Start working on a specific task in the bound project. Requires prior genorch_project_bind. Sets task context enabling auto-routing, auto-logging, and project context injection.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project name (e.g., kfinance, kotw)." }),
-        task: Type.String({ description: "Describe the task you are about to do, as a concise bullet list. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files or systems are involved)\nExample: 'Add delete-story MCP tool to story-vault server. Currently story-vault has create/list/get but no delete. Requires: new delete_story tool in mcp_server.py, rebuild and restart gateway.'" }),
-        original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request that triggered this task. Captured in the session log for traceability — so we can see WHY the work was started, not just WHAT was done. Recommended: include the user's full request verbatim. Truncated to 500 chars." })),
+        task: Type.String({ description: "Describe the task concisely. Format:\n• What needs to be done\n• Why (context / motivation)\n• Scope (what files/systems are involved)" }),
+        task_type: Type.Optional(Type.Enum({ coding: "coding", fixing: "fixing", research: "research", qa: "qa", documentation: "documentation", test: "test" }, { description: "Task category for model routing. If omitted, inferred from task text." })),
+        original_prompt: Type.Optional(Type.String({ description: "OPTIONAL: The original user request, verbatim. Truncated to 500 chars." })),
       }),
-      async execute(_id: string, params: any) {
+      async execute(_id: string, _params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
+        const bind = requireBinding();
+        if (bind) return txt({ ok: false, error: bind });
+        const params = _params as { task: string; task_type?: string; original_prompt?: string };
+        const project = sessionTracker.currentProject!;
         try {
-          return txt(setContext(dataDir, params.project, params.task, logger, params.original_prompt));
+          return txt(setContext(dataDir, project, params.task, logger, params.original_prompt));
         } catch (err: any) {
           return txt({ ok: false, error: err.message });
         }
@@ -3193,7 +3549,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_clear_context",
+      name: "genorch_session_clear_work",
       label: "Orchestrator Clear Context",
       description: "Clear active project context. Disables auto-routing and auto-logging.",
       parameters: Type.Object({}),
@@ -3205,16 +3561,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_register",
+      name: "genorch_session_register",
       label: "Orchestrator Register",
-      description: "Register this session for orchestrator tracking. Must be called BEFORE orchestrator_set_context. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
+      description: "Register this session for orchestrator tracking. Must be called BEFORE genorch_session_start_work. Once registered, the orchestrator tracks the session lifecycle (start → context → work → end) and injects project context into prompts. Only call this when you intend to do project work in this session.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        // Resolve the session key: prefer the hook-populated key, fall back
-        // to a synthetic stable key derived from agent identity + timestamp.
-        // session_start may not fire for sessions that existed before a
-        // gateway restart, so we can't depend on it for existing sessions.
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        // The session key MUST be the real OpenClaw gateway session key.
+        // It is populated by the session_start and before_prompt_build
+        // hooks from the real event/hook context. NO synthetic keys.
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt("error: no session key available");
         
         // ═══ REGISTRATION GUARD: Detect stray/hallucinated registrations ═══
@@ -3236,7 +3591,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (newly) {
           if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
           sessionTracker.trackAction("session_registered");
-          writeLiveAgents("register", sessionTracker, logger);
+          queueLiveAgents("register", sessionTracker);
           logger.info("registration", `session registered: ${sk} (total: ${existingSessions.length + 1})`);
           // Return descriptive message so LLM + user can see what happened
           return txt({
@@ -3247,38 +3602,44 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             warning: hasActiveRegistration ? "Other sessions already registered with different context. Verify this was intentional." : undefined,
           });
         }
-        return txt("already registered");
+        // Already registered (auto-registration handles this)
+        return txt({
+          ok: true,
+          message: "already_registered",
+          session_key: sk,
+          note: "Session is auto-registered. Call genorch_session_start_work to bind to a project.",
+        });
       },
     });
 
     api.registerTool({
-      name: "orchestrator_unregister",
+      name: "genorch_session_unregister",
       label: "Orchestrator Unregister",
       description: "Unregister this session from orchestrator tracking. Clears project context and stops all tracking. The session will no longer receive project context injection. Call this when project work is complete or the session should no longer be tracked.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt("error: no session key available");
         // ═══ ENFORCE TASK COMPLETION LOGGING ═══
         if (sessionTracker.currentProject && !sessionTracker.loggedTaskCompletion) {
           return txt({
             ok: false,
             error: `❌ Task not logged. Session has active context on project "${sessionTracker.currentProject}" ` +
-              `but hasn't logged completion. Call orchestrator_log_session with status="complete" first ` +
+              `but hasn't logged completion. Call genorch_session_log with status="done" first ` +
               `to document what was done before unregistering.`,
           });
         }
         sessionTracker.unregisterSession(sk);
         sessionTracker.clearContext();
         sessionTracker.trackAction("session_unregistered");
-        writeLiveAgents("unregister", sessionTracker, logger);
+        queueLiveAgents("unregister", sessionTracker);
         logger.info("hooks", `session unregistered: ${sk}`);
         return txt("unregistered");
       },
     });
 
     api.registerTool({
-      name: "orchestrator_get_status",
+      name: "genorch_status",
       label: "Status",
       description: "Get quick orchestration status: model counts, session count, project list, free-only mode state.",
       parameters: Type.Object({}),
@@ -3288,7 +3649,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_config",
+      name: "genorch_config_show_routing",
       label: "Config",
       description: "Read the full routing configuration: free-only mode, disabled models, per-project allowlists.",
       parameters: Type.Object({}),
@@ -3298,7 +3659,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_models",
+      name: "genorch_models_list",
       label: "Models",
       description: "List models from the model inventory with optional filters (status, provider, search, project routing).",
       parameters: Type.Object({
@@ -3314,7 +3675,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_check_models",
+      name: "genorch_models_check_routing",
       label: "Check Models (routing)",
       description: "Check which models are eligible for a project, applying all routing filters. Typically handled by hooks; use for explicit inspection.",
       parameters: Type.Object({
@@ -3326,7 +3687,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_auto_populate",
+      name: "genorch_models_auto_discover",
       label: "Auto-Populate",
       description: "Auto-populate model inventory from OpenClaw gateway config. Merges into orchestrator-data/models.json, preserving manual ratings.",
       parameters: Type.Object({}),
@@ -3338,7 +3699,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_log_session",
+      name: "genorch_session_log",
       label: "Log Session",
       description: "Log a completed session. Normally handled automatically by hooks; use for manual logging or retroactive entries.",
       parameters: Type.Object({
@@ -3356,9 +3717,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`log: ${params.task}`);
-        writeLiveAgents("tool_log_session", sessionTracker, logger);
+        queueLiveAgents("tool_log_session", sessionTracker);
         // Mark completion logged so clearContext/unregister know work is documented
-        const terminal = ["complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
+        const terminal = ["done", "complete", "blocked", "failed", "interrupted"].includes((params.status || "").toLowerCase());
         if (terminal) sessionTracker.markLoggedCompletion();
         // Write state event for this session
         writeStateEvent(params.project, dataDir, {
@@ -3374,7 +3735,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_log_decision",
+      name: "genorch_adr_log",
       label: "Log Decision",
       description: "Log an architecture decision as an auto-numbered ADR file.",
       parameters: Type.Object({
@@ -3393,7 +3754,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_logs",
+      name: "genorch_logs_query",
       label: "Logs",
       description: "Query orchestration logs: routing decisions, model choices, session activity, config changes.",
       parameters: Type.Object({
@@ -3408,7 +3769,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_sync_project",
+      name: "genorch_project_sync_files",
       label: "Orchestrator Sync Project",
       description: "Sync a project's files from disk into orchestrator-data. Generates CONTEXT.md, KEY_FILES.md. Requires project location to be configured.",
       parameters: Type.Object({
@@ -3418,13 +3779,13 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         sessionTracker.trackAction(`sync: ${params.project}`);
-        writeLiveAgents("tool_sync_project", sessionTracker, logger);
+        queueLiveAgents("tool_sync_project", sessionTracker);
         return txt(syncProject(dataDir, params.project, logger));
       },
     });
 
     api.registerTool({
-      name: "orchestrator_get_project_docs",
+      name: "genorch_project_docs_list",
       label: "Orchestrator Get Project Docs",
       description: "List all orchestrator-managed documents for a project (CONTEXT.md, STATE.md, ROADMAP.md, RECOVERY.md, sessions.json, BACKLOG.json, etc.)",
       parameters: Type.Object({
@@ -3436,7 +3797,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_advance_phase",
+      name: "genorch_workflow_advance_phase",
       label: "Advance Workflow Phase",
       description: "Advance the workflow enforcement to the next phase (Analyze → Plan → Document → Work → Log → Finish). Use this after completing each step of the coding workflow.",
       parameters: Type.Object({
@@ -3451,145 +3812,46 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           return txt({ ok: false, error: "Workflow enforcement is not enabled for this project. Set workflow.enabled in dashboard-config.json" });
         }
         const currentPhase = wf.currentPhase;
+        const target = params.phase?.toLowerCase();
         
-        if (params.phase) {
-          // Check transition is valid
-          if (!wf.canTransitionTo(params.phase.toLowerCase() as any)) {
+        if (target) {
+          // Validate transition direction
+          if (!wf.canTransitionTo(target as any)) {
             return txt({ ok: false, error: `Cannot transition to '${params.phase}' from current phase '${currentPhase}'. Workflow must go forward: ${WORKFLOW_ORDER.join(" → ")}` });
           }
           
-          // ═══ QUALITY GATES — Enforced ═══
-          const target = params.phase.toLowerCase();
-          
-          // work → log: QA GATE (when include_qa is enabled)
-          if (currentPhase === "work" && target === "log" && wf.includeQa) {
-            if (!sessionTracker.canAdvanceFromWork()) {
-              const qaStatus = sessionTracker.qaStatus;
-              if (qaStatus === "none") {
-                return txt({ ok: false, error: "QA review required before advancing. Run orchestrator_qa_submit with your findings first.", qa_required: true });
-              }
-              if (qaStatus === "pending") {
-                return txt({ ok: false, error: "QA review is pending approval. A reviewer must call orchestrator_qa_approve or orchestrator_qa_reject.", qa_pending: true });
-              }
-              if (qaStatus === "rejected") {
-                return txt({ ok: false, error: "QA review rejected the previous submission. Fix the reported issues and call orchestrator_qa_submit again.", qa_rejected: true });
-              }
-              return txt({ ok: false, error: "QA gate not passed. Submit findings with orchestrator_qa_submit." });
-            }
+          // ═══ ENFORCED GATES ═══
+          if (currentPhase === "work" && target === "log") {
+            const qaErr = _checkQaGate();
+            if (qaErr) return txt({ ok: false, error: qaErr, qa_required: true });
           }
-          
-          // log → finish: HANDOFF GATE
           if (currentPhase === "log" && target === "finish") {
-            if (!sessionTracker.canFinish()) {
-              return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff to create one.", handoff_required: true });
-            }
-            if (!sessionTracker.loggedTaskCompletion) {
-              return txt({ ok: false, error: "Task must be explicitly logged before finishing. Call orchestrator_log_session with status=complete first.", log_required: true });
-            }
-            // Auto-fix docs drift before finalizing
+            const hfErr = _checkHandoffGate();
+            if (hfErr) return txt({ ok: false, error: hfErr, handoff_required: true, log_required: !sessionTracker.loggedTaskCompletion });
             tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
-          // work → log: GIT CHECK (soft warning, non-blocking)
-          if (currentPhase === "work" && target === "log") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const loc = getProjectLocation(project, dataDir);
-              if (loc && fs.existsSync(path.join(loc, ".git"))) {
-                try {
-                  const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                  const changed = statusRaw.trim().split("\n").filter(Boolean);
-                  if (changed.length > 0) {
-                    logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase. Consider committing or stashing first.`);
-                  }
-                } catch { /* git check non-fatal */ }
-              }
-            }
-          }
-          
-          // document → work: ADR CHECK (soft warning, non-blocking)
-          if (currentPhase === "document" && target === "work") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const adrsDir = path.join(dataDir, "adrs");
-              let adrCount = 0;
-              if (fs.existsSync(adrsDir)) {
-                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
-              }
-              if (adrCount === 0) {
-                const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
-                if (fs.existsSync(projAdrsDir2)) {
-                  adrCount = fs.readdirSync(projAdrsDir2).filter(f => f.endsWith(".md")).length;
-                }
-              }
-              if (adrCount === 0) {
-                logger.warn("workflow", "No ADR found. Consider documenting decisions with orchestrator_log_decision before implementing.");
-              }
-            }
-          }
+          // ═══ SOFT WARNINGS ═══
+          if (currentPhase === "work" && target === "log") _checkGitStatus();
+          if (currentPhase === "document" && target === "work") _checkAdrPresence();
           
           wf.completePhase(currentPhase, params.skip);
           wf.enterPhase(target as any);
         } else {
           // Auto-advance with quality gates
-          
-          // work → next: QA GATE CHECK (when include_qa)
           if (currentPhase === "work" && wf.includeQa) {
-            if (!sessionTracker.canAdvanceFromWork()) {
-              const qaSummary = sessionTracker.getQaSummary();
-              return txt({ ok: false, error: `QA review required. ${qaSummary}`, qa_required: true, qa_status: sessionTracker.qaStatus });
-            }
+            const qaErr = _checkQaGate();
+            if (qaErr) return txt({ ok: false, error: `QA review required. ${sessionTracker.getQaSummary()}`, qa_required: true, qa_status: sessionTracker.qaStatus });
+          }
+          if (currentPhase === "log") {
+            if (!sessionTracker.loggedTaskCompletion) return txt({ ok: false, error: "Task must be logged before finishing. Call genorch_session_log with status=complete.", log_required: true });
+            if (!sessionTracker.canFinish()) return txt({ ok: false, error: "Handoff document required before finishing. Run genorch_handoff_create.", handoff_required: true });
+            tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
           }
           
-          // log → finish: LOG CHECK
-          if (currentPhase === "log" && !sessionTracker.loggedTaskCompletion) {
-            return txt({ ok: false, error: "Task must be logged before finishing. Call orchestrator_log_session with status=complete.", log_required: true });
-          }
-          
-          // log → finish: HANDOFF GATE
-          if (currentPhase === "log" && !sessionTracker.canFinish()) {
-            return txt({ ok: false, error: "Handoff document required before finishing. Run orchestrator_generate_handoff.", handoff_required: true });
-          }
-          // Auto-fix docs drift before finalizing
-          tryFixDocsDrift(sessionTracker.currentProject, dataDir, logger);
-          
-          // document → next: ADR CHECK (soft warning)
-          if (currentPhase === "document") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const adrsDir = path.join(dataDir, "adrs");
-              let adrCount = 0;
-              if (fs.existsSync(adrsDir)) {
-                adrCount = fs.readdirSync(adrsDir).filter(f => f.endsWith(".md") && f.includes(project.replace(/[^a-zA-Z0-9_-]/g, "-"))).length;
-              }
-              if (adrCount === 0) {
-                const projAdrsDir2 = path.join(projDir(project, dataDir), "adrs");
-                if (fs.existsSync(projAdrsDir2)) {
-                  adrCount = fs.readdirSync(projAdrsDir2).filter(f => f.endsWith(".md")).length;
-                }
-              }
-              if (adrCount === 0) {
-                logger.warn("workflow", "No ADR found. Suggest documenting with orchestrator_log_decision before coding.");
-              }
-            }
-          }
-          
-          // work → next: GIT CHECK (soft warning)
-          if (currentPhase === "work") {
-            const project = sessionTracker.currentProject;
-            if (project) {
-              const loc = getProjectLocation(project, dataDir);
-              if (loc && fs.existsSync(path.join(loc, ".git"))) {
-                try {
-                  const statusRaw = execSync("git status --porcelain", { cwd: loc, encoding: "utf-8", timeout: 5000 });
-                  const changed = statusRaw.trim().split("\n").filter(Boolean);
-                  if (changed.length > 0) {
-                    logger.warn("workflow", `${changed.length} uncommitted file(s) before logging phase.`);
-                  }
-                } catch { /* git check non-fatal */ }
-              }
-            }
-          }
+          // Soft warnings
+          if (currentPhase === "document") _checkAdrPresence();
+          if (currentPhase === "work") _checkGitStatus();
           
           const next = wf.advance();
           if (!next) {
@@ -3608,7 +3870,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
 
         sessionTracker.trackAction(`workflow: ${wf.currentPhase}`);
-        writeLiveAgents("workflow_advance", sessionTracker, logger);
+        queueLiveAgents("workflow_advance", sessionTracker);
         logger.info("workflow", `Phase advanced: ${wf.currentPhase} (${wf.getProgress()})`);
         return txt({ ok: true, phase: wf.currentPhase, progress: wf.getProgress(), elapsed: wf.getPhaseElapsed(), phase_history: wf.phaseHistory });
       },
@@ -3619,7 +3881,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_add",
+      name: "genorch_backlog_add",
       label: "Add Backlog Task",
       description: "Add a task to a project's backlog.",
       parameters: Type.Object({
@@ -3638,7 +3900,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_backlog_list",
+      name: "genorch_backlog_list",
       label: "List Backlog",
       description: "List backlog tasks with optional filters.",
       parameters: Type.Object({
@@ -3655,7 +3917,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_backlog_update",
+      name: "genorch_backlog_update",
       label: "Update Backlog Task",
       description: "Update a backlog task's status, priority, assignment, or labels.",
       parameters: Type.Object({
@@ -3678,7 +3940,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_get_routing",
+      name: "genorch_models_recommend",
       label: "Get Model Routing",
       description: "Get the recommended model for a task category (coding, fixing, research, q&a, documentation). Returns the ordered model list and best available model for the given project and category.",
       parameters: Type.Object({
@@ -3686,19 +3948,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
       async execute(_id: string, params: any) {
-        const cfg: DashboardConfig = readJSON(path.join(dataDir, "dashboard-config.json")) || {};
         const proj = params.project || sessionTracker.currentProject;
         if (!proj) {
-          return txt({ ok: false, error: "No project specified and no project context set. Use orchestrator_set_context first or pass a project name." });
+          return txt({ ok: false, error: "No project specified and no project context set. Use genorch_session_start_work first or pass a project name." });
         }
-        const pc = cfg.projects?.[proj];
+        const pc = getProjectConfig(proj);
         if (!pc) {
-          return txt({ ok: false, error: `Project '${proj}' not found in dashboard-config.json` });
+          return txt({ ok: false, error: `Project '${proj}' not found.` });
         }
         
         // Load model inventory for quality data
-        const md = readJSON(path.join(dataDir, "models.json"));
-        const allModels: ModelEntry[] = md?.models || [];
+        const allModels: any[] = listModels(false);
         
         const preset = pc.routing_preset || "custom";
         const singleProvider = pc.routing_single_provider || null;
@@ -3720,7 +3980,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (preset === "free-only") {
           const freeModels = allModels
             .filter(m => !isPaid(m) && m.agent_ready !== false && m.status === "active")
-            .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+            
           return txt({
             ok: true,
             project: proj,
@@ -3733,8 +3993,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             model_quality: freeModels.slice(0, 5).map(m => ({
               id: m.id,
               provider: m.provider,
-              tier: m.tier,
-              speed: m.speed_rating || 0,
               context: m.context_window || 0,
               cost_type: m.cost_type || null,
             })),
@@ -3745,7 +4003,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (preset === "single-provider" && singleProvider) {
           const provModels = allModels
             .filter(m => m.provider === singleProvider && m.agent_ready !== false && m.status === "active")
-            .sort((a, b) => (b.tier || 0) - (a.tier || 0));
+            
           return txt({
             ok: true,
             project: proj,
@@ -3759,8 +4017,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             model_quality: provModels.slice(0, 5).map(m => ({
               id: m.id,
               provider: m.provider,
-              tier: m.tier,
-              speed: m.speed_rating || 0,
               context: m.context_window || 0,
             })),
           });
@@ -3776,21 +4032,19 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         }
         
         // Enrich with model quality data
-        const enriched = models.map(id => {
-          const found = allModels.find(m => m.id === id);
+        const enriched = models.map((id: string) => {
+          const found = allModels.find((m: any) => m.id === id);
           return found ? {
             id: found.id,
             provider: found.provider,
-            tier: found.tier,
-            speed: found.speed_rating || 0,
             context: found.context_window || 0,
             status: found.status || "unknown",
             agent_ready: found.agent_ready !== false,
-          } : { id, provider: "?", tier: 0, speed: 0, context: 0, status: "unknown", agent_ready: false };
+          } : { id, provider: "?", context: 0, status: "unknown", agent_ready: false };
         });
         
-        const available = enriched.filter(m => m.status === "active" && m.agent_ready);
-        const blocked = enriched.filter(m => m.status !== "active" || !m.agent_ready);
+        const available = enriched.filter((m: any) => m.status === "active" && m.agent_ready);
+        const blocked = enriched.filter((m: any) => m.status !== "active" || !m.agent_ready);
         
         return txt({
           ok: true,
@@ -3798,9 +4052,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           category: cat,
           preset,
           routing_preset: preset,
-          recommended: available[0]?.id || enriched[0]?.id || models[0],
-          fallbacks: available.slice(1).map(m => m.id),
-          blocked_chain: blocked.length > 0 ? blocked.map(m => m.id) : undefined,
+          recommended: (available[0]?.id as string) || (enriched[0]?.id as string) || (models[0] as string),
+          fallbacks: available.slice(1).map((m: any) => m.id),
+          blocked_chain: blocked.length > 0 ? blocked.map((m: any) => m.id) : undefined,
           all: models,
           model_quality: enriched,
           source: "dashboard-config.json projects." + proj + ".model_routing",
@@ -3809,9 +4063,9 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_get_registered_sessions",
+      name: "genorch_session_list",
       label: "Get Registered Sessions",
-      description: "List all currently registered orchestrator sessions with their project context, status, and activity. Only sessions that explicitly called orchestrator_register are tracked.",
+      description: "List all currently registered orchestrator sessions with their project context, status, and activity. Only sessions that explicitly called genorch_session_register are tracked.",
       parameters: Type.Object({}),
       async execute(_id: string, _params: any) {
         const keys = sessionTracker.getRegisteredSessions();
@@ -3834,7 +4088,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_doctor",
+      name: "genorch_system_diagnose",
       label: "Orchestrator Doctor",
       description: "Diagnose and auto-fix common orchestrator issues: session key mismatches, broken registration, stale data, context inconsistencies, orphaned projects, and missing STATE.md docs.",
       parameters: Type.Object({
@@ -3854,38 +4108,17 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (checks === "all" || checks === "sessions") {
           const hk = sessionTracker.sessionKey;
           if (!hk) {
-            addIssue("No session key set. orchestrator_register will use synthetic fallback.");
-            if (autoFix) {
-              const sk = agentDefaultSessionKey();
-              sessionTracker.registerSession(sk);
-              sessionTracker.sessionKey = sk;
-              addFix("Registered synthetic key: " + sk);
-            }
+            addIssue("No session key set. before_prompt_build or session_start hooks have not populated one yet.");
           } else {
             if (!sessionTracker.isSessionRegistered(hk)) {
-              addIssue("Session key " + hk + " is not registered. Call orchestrator_register.");
+              addIssue("Session key " + hk + " is not registered. Call genorch_session_register.");
               if (autoFix) { sessionTracker.registerSession(hk); addFix("Registered session: " + hk); }
             }
           }
+          // Synthetic keys no longer exist. We use real OpenClaw session IDs 1:1.
           const allRegSessions = sessionTracker.getRegisteredSessions();
-          const syntheticKeys = allRegSessions.filter(k => k.startsWith("agent:main:auto:"));
-          const realKeys = allRegSessions.filter(k => !k.startsWith("agent:main:auto:"));
-          if (syntheticKeys.length > 0 && realKeys.length === 0) {
-            addIssue("Only synthetic keys registered - project context injection may not fire because the gateway uses real session keys in hooks.");
-          }
-          if (autoFix && syntheticKeys.length > 0 && realKeys.length === 0 && hk && !hk.startsWith("agent:main:auto:")) {
-            for (const sk of syntheticKeys) {
-              const ctx = sessionTracker.getSessionContext(sk);
-              sessionTracker.registerSession(hk);
-              if (ctx) {
-                sessionTracker.sessionKey = hk;
-                sessionTracker.setContext(ctx.project, ctx.task || "");
-                sessionTracker.setStatus("resolving");
-                addFix("Copied context \"" + ctx.project + "\" from " + sk + " to real key " + hk);
-              } else {
-                addFix("Registered real key " + hk + " (no context to transfer)");
-              }
-            }
+          if (allRegSessions.length === 0) {
+            addIssue("No sessions registered. Use genorch_session_register.");
           }
         }
 
@@ -3897,7 +4130,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             .map(k => ({ key: k, ctx: sessionTracker.getSessionContext(k) }))
             .filter((x): x is { key: string; ctx: NonNullable<ReturnType<typeof sessionTracker.getSessionContext>> } => !!x.ctx);
           if (!ctx && allCtxRaw.length === 0) {
-            addIssue("No project context set. Use orchestrator_set_context to activate a project.");
+            addIssue("No project context set. Use genorch_session_start_work to activate a project.");
           } else if (!ctx && allCtxRaw.length > 0) {
             addIssue("Context is set for other sessions but NOT the current one. Session key may differ.");
             if (autoFix && allCtxRaw[0].ctx) {
@@ -3917,19 +4150,14 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
         // -- 3. DATA HEALTH --
         if (checks === "all" || checks === "data") {
-          const modelsPath = path.join(dataDir, "models.json");
-          if (fs.existsSync(modelsPath)) {
-            try {
-              const md = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
-              const activeModels = (md.models || []).filter((m: any) => m.status === "active").length;
-              if (activeModels === 0) addIssue("models.json has 0 active models. Run orchestrator_auto_populate.");
-            } catch (e: any) {
-              addIssue("models.json is corrupt: " + e.message + ". Run orchestrator_auto_populate.");
-              if (autoFix) { try { fs.unlinkSync(modelsPath); addFix("Deleted corrupt models.json"); } catch {} }
-            }
+          const mc = countModels();
+          if (mc.total === 0) addIssue("Model inventory is empty. Run genorch_models_auto_discover.");
+          else if (mc.active === 0) addIssue("Model inventory has 0 active models. Run genorch_models_auto_discover.");
+          // Check DB has global config
+          const dbCfg: any = getAllGlobalConfig();
+          if (!dbCfg || (!dbCfg.free_only_mode && !(dbCfg.disabled_models?.length))) {
+            addIssue("Global config not initialized in DB.");
           }
-          const cfgPath = path.join(dataDir, "dashboard-config.json");
-          if (!fs.existsSync(cfgPath)) addIssue("dashboard-config.json not found.");
           const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
           if (fs.existsSync(logPath)) {
             const stat = fs.statSync(logPath);
@@ -3967,28 +4195,18 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             for (const e of fs.readdirSync(pd)) {
               const pp = path.join(pd, e);
               if (!fs.statSync(pp).isDirectory()) continue;
-              // Check if project has any sessions
-              const sf = path.join(pp, "sessions.json");
-              let sessCount = 0;
-              if (fs.existsSync(sf)) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-                } catch {}
-              }
+              // Check if project has any sessions via DB
+              const projectSessions = listSessions(e);
+              const sessCount = projectSessions.length;
               // Check required docs
               const missingDocs = REQUIRED_PROJECT_DOCS.filter(doc => !fs.existsSync(path.join(pp, doc)));
               // Check for stale sessions (running entries older than 24h)
               let staleSessions = 0;
               if (sessCount > 0) {
-                try {
-                  const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                  const sessList = Array.isArray(d) ? d : (d.sessions || []);
-                  staleSessions = sessList.filter((s: any) =>
-                    s.status === "running" && s.start_time &&
-                    (Date.now() - new Date(s.start_time).getTime()) > 86400000
-                  ).length;
-                } catch {}
+                staleSessions = projectSessions.filter((s: any) =>
+                  s.status === "running" && s.start_ts &&
+                  (Date.now() - s.start_ts) > 86400000
+                ).length;
               }
 
               if (sessCount === 0) {
@@ -4025,7 +4243,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
                       ``,
                       `## Current State`,
                       ``,
-                      `_(Auto-generated by orchestrator_doctor. Update this file as the project evolves to keep docs in sync with reality.)_`,
+                      `_(Auto-generated by genorch_system_diagnose. Update this file as the project evolves to keep docs in sync with reality.)_`,
                     ].join("\n");
                     fs.writeFileSync(path.join(pp, "STATE.md"), stateContent, "utf-8");
                     addFix(`Auto-created STATE.md for project "${e}"`);
@@ -4056,7 +4274,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_release_project",
+      name: "genorch_project_leave",
       label: "Orchestrator Release Project",
       description: "Release the current session's project binding so it can work on a different project. Use when you're done with the current project.",
       parameters: Type.Object({
@@ -4065,21 +4283,21 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
-        const bound = sessionTracker.getBoundProject(sk);
+        const sk = sessionTracker.sessionKey;
+        const bound = sk ? sessionTracker.getBoundProject(sk) : null;
         if (!bound) return txt({ ok: false, error: "No project binding to release." });
         // ═══ ENFORCE TASK COMPLETION LOGGING ═══
-        if (!sessionTracker.loggedTaskCompletion) {
+        if (!sessionTracker.loggedTaskCompletion && !params.force) {
           return txt({
             ok: false,
             error: `❌ Task not logged. Session is bound to project "${bound}" but hasn't logged completion. ` +
-              `Call orchestrator_log_session with status="complete" first to document what was done ` +
+              `Call genorch_session_log with status="done" first to document what was done ` +
               `before releasing the binding. Use force=true to override this check.`,
           });
         }
-        const released = sessionTracker.releaseProjectBinding(sk);
+        const released = sessionTracker.releaseProjectBinding(sk ?? undefined);
         sessionTracker.trackAction(`released_project: ${released}`);
-        writeLiveAgents("release_project", sessionTracker, logger);
+        queueLiveAgents("release_project", sessionTracker);
         logger.info("sessions", `Released project binding: ${released} (session=${sk})`);
         return txt({
           ok: true,
@@ -4090,7 +4308,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_list_active_projects",
+      name: "genorch_project_list_active",
       label: "Orchestrator List Active Projects",
       description: "List projects that currently have active sessions working on them. Shows project names, active session count, and session keys.",
       parameters: Type.Object({}),
@@ -4103,14 +4321,8 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           for (const e of fs.readdirSync(pd)) {
             const pp = path.join(pd, e);
             if (!fs.statSync(pp).isDirectory()) continue;
-            const sf = path.join(pp, "sessions.json");
             let sessCount = 0;
-            if (fs.existsSync(sf)) {
-              try {
-                const d = JSON.parse(fs.readFileSync(sf, "utf-8"));
-                sessCount = (Array.isArray(d) ? d : (d.sessions || [])).length;
-              } catch { /* */ }
-            }
+            try { sessCount = countSessions(e); } catch { /* non-critical — project may have no sessions */ }
             const loc = getProjectLocation(e, dataDir);
             const hasState = fs.existsSync(path.join(pp, "STATE.md"));
             allProjects.push({
@@ -4136,32 +4348,21 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     });
 
     api.registerTool({
-      name: "orchestrator_join_project",
+      name: "genorch_project_join",
       label: "Orchestrator Join Project",
-      description: "Non-registered sessions can discover and join an active project. Handles registration + context setting in one step. Use for new/ad-hoc sessions contributing to existing projects.",
+      description: "Register session + bind to project + set task in one step. Convenience for new/ad-hoc sessions. Internally calls genorch_session_register + genorch_project_bind + genorch_session_start_work.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project name to join. Use orchestrator_list_active_projects first to see active projects." }),
+        project: Type.String({ description: "Project name. Use genorch_project_list_active first." }),
         task: Type.String({ description: "Task description for what you're joining to do." }),
       }),
       async execute(_id: string, params: any) {
-        const sk = sessionTracker.sessionKey || agentDefaultSessionKey();
+        const sk = sessionTracker.sessionKey;
         if (!sk) return txt({ ok: false, error: "No session key available." });
 
-        // Auto-register this session
         sessionTracker.registerSession(sk);
         if (!sessionTracker.sessionKey) sessionTracker.sessionKey = sk;
 
-        // Verify the project exists in data
-        const pd = path.join(dataDir, "projects");
-        const projExists = fs.existsSync(pd) && fs.existsSync(path.join(pd, params.project));
-        if (!projExists) {
-          return txt({
-            ok: false,
-            error: `Project "${params.project}" not found in orchestrator data. Active projects: ${sessionTracker.getActiveProjects().map(a => a.project).join(", ")}`,
-          });
-        }
-
-        try {
+        if (!sessionTracker.currentProject) {
           const result = setContext(dataDir, params.project, params.task, logger);
           logger.info("sessions", `Session joined project: ${params.project}/${params.task} (session=${sk})`);
           return txt({
@@ -4172,37 +4373,97 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             message: `Joined project "${params.project}" — context set, task: "${params.task}"`,
             details: result,
           });
-        } catch (err: any) {
+        }
+
+        // Already bound: just set task
+        return txt(setContext(dataDir, sessionTracker.currentProject, params.task, logger));
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_project_bind",
+      label: "Orchestrator Bind Project",
+      description: "Bind this session to a project. Loads project context (README, architecture, style guides, plan) for injection into prompts. Use BEFORE genorch_session_start_work. The LLM will receive full project knowledge on the next turn.",
+      parameters: Type.Object({
+        project: Type.String({ description: "Project name (e.g., kfinance, kotw). Use genorch_project_list_active to see available projects." }),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        try {
+          const result = setContext(dataDir, params.project, "", logger);
+          logger.info("sessions", `Session bound to project: ${params.project} (session=${sessionTracker.sessionKey})`);
           return txt({
-            ok: false,
-            error: `Failed to join project "${params.project}": ${err.message}`,
+            ok: true,
+            bound_project: params.project,
+            message: `Bound to project "${params.project}". Project context will be injected on next prompt. Call genorch_session_start_work to begin a task.`,
+            details: result,
           });
+        } catch (err: any) {
+          return txt({ ok: false, error: `Failed to bind project "${params.project}": ${err.message}` });
         }
       },
     });
 
     api.registerTool({
-      name: "orchestrator_spawn_subagent",
+      name: "genorch_task_delegate",
       label: "Orchestrator Spawn Subagent",
       description: "Spawn a subagent using orchestrator-managed project context, with model routing and auto-logging. Logged as subagent session under current project. Returns session key for tracking.",
       parameters: Type.Object({
         task: Type.String({ description: "Task description for the subagent." }),
-        model: Type.Optional(Type.String({ description: "Optional model override. Omit to use project routing rules." })),
+        task_type: Type.Optional(Type.Union([
+          Type.Literal("coding"),
+          Type.Literal("fixing"),
+          Type.Literal("research"),
+          Type.Literal("qa"),
+          Type.Literal("documentation"),
+          Type.Literal("test"),
+        ], { description: "Task category for model routing. Required when model is not specified — auto-selects from project routing config." })),
+        model: Type.Optional(Type.String({ description: "Optional model override. Omit to use project routing rules (requires task_type or auto-inferred from task text)." })),
         taskName: Type.Optional(Type.String({ description: "Optional stable name for subagent (lowercase with underscores/hyphens)." })),
         timeoutSeconds: Type.Optional(Type.Number({ description: "Optional timeout in seconds (default: 300, max: 1800)." })),
       }),
       async execute(_id: string, params: any) {
         const reg = requireRegistration();
-        if (reg) return txt({ ok: false, error: "Session not registered. Call orchestrator_register or orchestrator_join_project first." });
+        if (reg) return txt({ ok: false, error: "Session not registered. Call genorch_session_register or genorch_project_join first." });
         if (!sessionTracker.currentProject) {
-          return txt({ ok: false, error: "No active project. Set project context first with orchestrator_set_context or orchestrator_join_project." });
+          return txt({ ok: false, error: "No active project. Set project context first with genorch_session_start_work or genorch_project_join." });
         }
 
         const project = sessionTracker.currentProject;
         const task = params.task;
-        const model = params.model || sessionTracker.currentModel || undefined;
+        const taskType = params.task_type;
+        let model = params.model || sessionTracker.currentModel || undefined;
         const taskName = params.taskName || `sub-${project}-${Date.now().toString(36)}`;
         const timeoutSeconds = Math.min(params.timeoutSeconds || 300, 1800);
+
+        // Auto-resolve model using effective routing (project override + global fallback)
+        if (!model && taskType) {
+          try {
+            // Helper to get effective chain (same logic as getEffectiveChain in before_model_resolve)
+            function getChain(proj: string, cat: string): string[] | null {
+              const pc2 = getProjectConfig(proj);
+              if (pc2?.model_routing?.[cat]?.length) return pc2.model_routing[cat];
+              const gc = getAllGlobalConfig();
+              const gr = gc?.default_model_routing || {};
+              if (gr[cat]?.length) return gr[cat];
+              return null;
+            }
+            const chain = getChain(project, taskType);
+            if (chain && chain.length > 0) {
+              const allModels = listModels();
+              for (const chainId of chain) {
+                const found = allModels.find(m => m.id === chainId && m.status === "active" && m.agent_ready !== false);
+                if (found) { model = found.id; logger.info("routing", `Auto-routed ${project}/${taskType} → ${found.id}`); break; }
+              }
+              if (!model) logger.warn("routing", `Chain for ${project}/${taskType} all inactive — spawning without explicit model`);
+            } else {
+              logger.warn("routing", `No routing chain for ${project}/${taskType} — spawning without explicit model`);
+            }
+          } catch (e: any) {
+            logger.error("routing", `Auto-route error: ${e.message}`);
+          }
+        }
 
         // Log the subagent spawn
         sessionTracker.trackSubagent(`pending-${taskName}`, {
@@ -4213,7 +4474,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         });
 
         sessionTracker.trackAction(`spawn_subagent: ${taskName}`);
-        writeLiveAgents("spawn_subagent", sessionTracker, logger);
+        queueLiveAgents("spawn_subagent", sessionTracker);
 
         // Build the spawn message with full context
         const spawnTask = [
@@ -4221,6 +4482,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           `Project: ${project}`,
           `Parent Session: ${sessionTracker.sessionKey || "unknown"}`,
           `Task: ${task}`,
+          taskType ? `Task Type: ${taskType}` : "",
           model ? `Model: ${model}` : "",
           `Timeout: ${timeoutSeconds}s`,
         ].filter(Boolean).join("\n");
@@ -4229,10 +4491,13 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           logger.info("subagent", `Spawning: ${taskName} (${project}/${task}) model=${model || "auto"}`);
 
           // ── ACTUALLY SPAWN the subagent via OpenClaw runtime API ──
-          const sessionKey = sessionTracker.sessionKey;
-          if (!sessionKey) {
+          if (!sessionTracker.sessionKey) {
             return txt({ ok: false, error: "No session key available. Cannot spawn subagent." });
           }
+
+          // Generate a unique session key that incorporates the task name
+          const safeName = taskName.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
+          const sessionKey = `agent:main:subagent:${safeName || 'sub'}-${Date.now().toString(36)}`;
 
           const spawnResult = await api.runtime.subagent.run({
             sessionKey,
@@ -4250,7 +4515,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             model: model || "auto-routed",
             timeout_seconds: timeoutSeconds,
             run_id: spawnResult.runId,
-            message: `Subagent "${taskName}" spawned successfully (runId: ${spawnResult.runId}). Use orchestrator_spawn_subagent to track completion.`,
+            message: `Subagent "${taskName}" spawned successfully (runId: ${spawnResult.runId}). Use genorch_task_delegate to track completion.`,
           });
         } catch (err: any) {
           logger.error("subagent", `Spawn failed for ${taskName}: ${err.message}`);
@@ -4264,7 +4529,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_dispatch",
+      name: "genorch_backlog_dispatch",
       label: "Backlog Dispatch",
       description: "Pick the highest-priority available backlog task and return dispatch instructions for sub-agent execution. Use this to automate task assignment. Respects dependencies, labels, and priority ordering.",
       parameters: Type.Object({
@@ -4278,78 +4543,27 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         const project = params.project || sessionTracker.currentProject;
-        if (!project) return txt({ ok: false, error: "No project selected. Set context via orchestrator_set_context or pass project param." });
-        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
-        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json found for project "${project}".` });
-        let backlog: any;
-        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
-        const tasks = backlog.tasks || [];
-        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
-        if (params.filter_labels) {
-          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
-          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
-        }
-        if (params.task_id) {
-          candidates = candidates.filter((t: any) => t.id === params.task_id);
-          if (!candidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
-        }
-        // Resolve dependencies — only tasks whose deps are done
-        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
-        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
-        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
-        // Sort: priority then creation time
-        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
-        candidates.sort((a: any, b: any) => {
-          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
-          if (pa !== pb) return pa - pb;
-          return (a.created || "").localeCompare(b.created || "");
-        });
+        if (!project) return txt({ ok: false, error: "No project selected. Set context via genorch_session_start_work or pass project param." });
+        const tasks = listBacklogTasks(project);
 
-        // Phase 2c: Support parallel dispatch — take up to max_dispatch tasks
+        // Specific-task mode — filter early before shared resolution
+        let taskIdCandidates = tasks;
+        if (params.task_id) {
+          taskIdCandidates = tasks.filter((t: any) => t.id === params.task_id);
+          if (!taskIdCandidates.length) return txt({ ok: false, error: `Task "${params.task_id}" not found or unavailable.` });
+        }
+
         const maxD = Math.max(1, Math.min(params.max_dispatch || 1, 10));
-        const selected = candidates.slice(0, maxD);
+        const { candidates, selected, dispatchList } = _resolveBacklogCandidates(project, taskIdCandidates, params.filter_labels, maxD);
+        if (!candidates.length) return txt({ ok: false, error: "No available tasks to dispatch (dependencies unresolved or backlog empty)." });
 
         // Auto-claim selected tasks
         if (params.auto_claim) {
-          const claimedIds: string[] = [];
-          for (const task of selected) {
-            for (const t of tasks) {
-              if (t.id === task.id) {
-                t.status = "in_progress";
-                claimedIds.push(task.id);
-                break;
-              }
-            }
-          }
-          backlog.tasks = tasks;
-          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+          const claimedIds = selected.map((t: any) => { updateBacklogTask(t.id, { status: "in_progress" }); return t.id; });
           logger.info("dispatch", `Claimed ${claimedIds.length} tasks: ${claimedIds.join(", ")}`);
         }
 
         const loc = getProjectLocation(project, dataDir);
-        const dispatchList = selected.map((task: any) => {
-          const labels = (task.labels || []).join(", ");
-          const deps = (task.depends_on || []).map((d: string) => {
-            const dt = tasks.find((t2: any) => t2.id === d);
-            return dt ? `${d} — ${dt.title}` : d;
-          });
-          return {
-            task_id: task.id,
-            title: task.title,
-            description: task.description || "",
-            priority: task.priority || "p2",
-            labels,
-            depends_on: deps,
-            spawn: [
-              `🎯 Task: ${task.title}`,
-              `ID: ${task.id}`,
-              task.description ? `Description: ${task.description}` : "",
-              `Priority: ${task.priority || "p2"}`,
-              labels ? `Labels: ${labels}` : "",
-              deps.length ? `Dependencies: ${deps.join("; ")}` : "",
-            ].filter(Boolean).join("\n"),
-          };
-        });
 
         const result: any = {
           ok: true,
@@ -4364,8 +4578,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         // Single-task mode: backward-compatible top-level fields
         if (selected.length === 1) {
           const task = selected[0];
-          const labels = (task.labels || []).join(", ");
-          const deps = (task.depends_on || []).map((d: string) => {
+          const taskLabels: string[] = typeof task.labels === "string" ? (() => { try { return JSON.parse(task.labels); } catch { return []; } })() : (task.labels || []);
+          const taskDeps: string[] = typeof task.depends_on === "string" ? (() => { try { return JSON.parse(task.depends_on); } catch { return []; } })() : (task.depends_on || []);
+          const labels = taskLabels.join(", ");
+          const deps = taskDeps.map((d: string) => {
             const dt = tasks.find((t2: any) => t2.id === d);
             return dt ? `${d} — ${dt.title}` : d;
           });
@@ -4377,7 +4593,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             labels,
             status: task.status,
             depends_on: deps,
-            spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use orchestrator_spawn_subagent or sessions_spawn to dispatch this task.`,
+            spawn_instructions: dispatchList[0].spawn + `\n\n📋 Use genorch_task_delegate or sessions_spawn to dispatch this task.`,
           });
         }
 
@@ -4390,7 +4606,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_backlog_dispatch_all",
+      name: "genorch_backlog_dispatch_all",
       label: "Backlog Dispatch All",
       description: "Dispatch ALL currently available backlog tasks up to a max count, for parallel sub-agent execution. Returns spawn instructions for each task. Respects dependency resolution — only returns tasks whose dependencies are complete.",
       parameters: Type.Object({
@@ -4404,51 +4620,16 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (reg) return txt({ ok: false, error: reg });
         const project = params.project || sessionTracker.currentProject;
         if (!project) return txt({ ok: false, error: "No project selected." });
-        const bp = path.join(dataDir, "projects", project, "BACKLOG.json");
-        if (!fs.existsSync(bp)) return txt({ ok: false, error: `No BACKLOG.json for "${project}".` });
-        let backlog: any;
-        try { backlog = JSON.parse(fs.readFileSync(bp, "utf-8")); } catch (e: any) { return txt({ ok: false, error: `Failed to read backlog: ${e.message}` }); }
-        const tasks = backlog.tasks || [];
-        let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
-        if (params.filter_labels) {
-          const fl = params.filter_labels.split(",").map((l: string) => l.trim().toLowerCase());
-          candidates = candidates.filter((t: any) => (t.labels || []).some((l: string) => fl.includes(l.toLowerCase())));
-        }
-        // Resolve dependencies
-        const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
-        candidates = candidates.filter((t: any) => (t.depends_on || []).every((d: string) => doneIds.has(d)));
-        if (!candidates.length) return txt({ ok: false, message: "No available tasks to dispatch." });
-        // Sort
-        const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
-        candidates.sort((a: any, b: any) => {
-          const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
-          if (pa !== pb) return pa - pb;
-          return (a.created || "").localeCompare(b.created || "");
-        });
+        const tasks = listBacklogTasks(project);
         const maxD = Math.max(1, Math.min(params.max_dispatch || 5, 20));
-        const selected = candidates.slice(0, maxD);
-        // Auto-claim
+        const { candidates, selected, dispatchList } = _resolveBacklogCandidates(project, tasks, params.filter_labels, maxD);
+        if (!candidates.length) return txt({ ok: false, error: "No available tasks to dispatch." });
+        // Auto-claim (default true for dispatch_all)
         const autoClaim = params.auto_claim !== false;
         if (autoClaim) {
-          for (const task of selected) {
-            for (const t of tasks) { if (t.id === task.id) { t.status = "in_progress"; break; } }
-          }
-          backlog.tasks = tasks;
-          fs.writeFileSync(bp, JSON.stringify(backlog, null, 2));
+          for (const task of selected) updateBacklogTask(task.id, { status: "in_progress" });
         }
         const loc = getProjectLocation(project, dataDir);
-        const dispatchList = selected.map((task: any) => ({
-          task_id: task.id,
-          title: task.title,
-          description: task.description || "",
-          priority: task.priority || "p2",
-          labels: (task.labels || []).join(", "),
-          depends_on: (task.depends_on || []).map((d: string) => {
-            const dt = tasks.find((t2: any) => t2.id === d);
-            return dt ? `${d} — ${dt.title}` : d;
-          }),
-          spawn_key: `task_${task.id.replace(/[^a-z0-9]/gi, "_")}`,
-        }));
         return txt({
           ok: true,
           project,
@@ -4467,7 +4648,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_submit",
+      name: "genorch_qa_submit",
       label: "QA Submit Finding",
       description: "Submit a QA finding for review. When workflow.include_qa is enabled, this is required before advancing from work to log. ENFORCED: auto-spawns an independent QA review subagent.",
       parameters: Type.Object({
@@ -4480,15 +4661,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         if (!params.finding) {
           return txt({ ok: false, error: "Finding description is required." });
         }
-        sessionTracker.addQaFinding(params.finding);
-        logger.info("qa", `QA finding submitted: ${params.finding.substring(0, 100)}`);
+        
+        let reviewSessionKey: string | null = null;
+        const project = sessionTracker.currentProject;
+        const taskDesc = sessionTracker.currentTask || "Unknown task";
+        const parentKey = sessionTracker.sessionKey;
 
         // ── ENFORCED: Always spawn an independent QA review subagent ──
         // Uses a unique session key so each QA review gets its own isolated session
         let spawnResult = null;
-        const project = sessionTracker.currentProject;
-        const taskDesc = sessionTracker.currentTask || "Unknown task";
-        const parentKey = sessionTracker.sessionKey;
         if (parentKey && project) {
           try {
             const reviewTask = [
@@ -4508,6 +4689,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
             // Generate a UNIQUE session key so each QA review is a separate subagent session
             const qaSessionKey = `agent:main:subagent:orch-qa-${crypto.randomUUID()}`;
+            reviewSessionKey = qaSessionKey;
             const reviewModel = params.review_model || undefined;
             logger.info("qa", `Auto-spawning QA review subagent (${qaSessionKey}) for project=${project}`);
             const result = await api.runtime.subagent.run({
@@ -4524,9 +4706,14 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           }
         }
 
+        // Record QA finding after review subagent may have been spawned
+        sessionTracker.addQaFinding(params.finding, reviewSessionKey || undefined);
+        sessionTracker.setStatus("qa");
+        logger.info("qa", `QA finding submitted: ${params.finding.substring(0, 100)}`);
+
         return txt({
           ok: true,
-          message: "QA finding submitted. Waiting for review (call orchestrator_qa_approve or orchestrator_qa_reject).",
+          message: "QA finding submitted. Waiting for review (call genorch_qa_approve or genorch_qa_reject).",
           qa_status: sessionTracker.qaStatus,
           findings_count: sessionTracker.qaFindings.length,
           review_spawned: spawnResult?.runId ? true : false,
@@ -4541,7 +4728,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_approve",
+      name: "genorch_qa_approve",
       label: "QA Approve",
       description: "Approve the current work. Unblocks the work→log transition when QA gate is active.",
       parameters: Type.Object({}),
@@ -4549,9 +4736,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const reg = requireRegistration();
         if (reg) return txt({ ok: false, error: reg });
         if (sessionTracker.qaStatus !== "pending") {
-          return txt({ ok: false, error: "No pending QA review to approve. Submit findings with orchestrator_qa_submit first." });
+          return txt({ ok: false, error: "No pending QA review to approve. Submit findings with genorch_qa_submit first." });
         }
         sessionTracker.setQaStatus("approved");
+        sessionTracker.setStatus("running");
         logger.info("qa", "QA approved — work→log transition unblocked");
         return txt({
           ok: true,
@@ -4566,7 +4754,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_qa_reject",
+      name: "genorch_qa_reject",
       label: "QA Reject",
       description: "Reject the current work and return to work phase for fixes. Provide a reason for the rejection.",
       parameters: Type.Object({
@@ -4579,6 +4767,10 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           return txt({ ok: false, error: "Rejection reason is required." });
         }
         sessionTracker.setQaStatus("rejected");
+        sessionTracker.qaRejectedAt = new Date().toISOString();
+        sessionTracker.qaRejectReason = params.reason;
+        sessionTracker.qaHistory.push({ event: "reject", timestamp: new Date().toISOString(), detail: params.reason });
+        sessionTracker.setStatus("running");
         // Automatically return to work phase for fixes
         const wf = sessionTracker.workflow;
         if (wf.currentPhase !== "log") {
@@ -4601,7 +4793,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_generate_handoff",
+      name: "genorch_handoff_create",
       label: "Generate Handoff",
       description: "Generate a handoff/recovery document for the current task. Required before advancing to the finish phase.",
       parameters: Type.Object({}),
@@ -4611,7 +4803,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         const project = sessionTracker.currentProject;
         const task = sessionTracker.currentTask || "Unnamed task";
         if (!project) {
-          return txt({ ok: false, error: "No active project. Set context with orchestrator_set_context first." });
+          return txt({ ok: false, error: "No active project. Set context with genorch_session_start_work first." });
         }
         
         const projDir2 = projDir(project, dataDir);
@@ -4675,7 +4867,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_create_project",
+      name: "genorch_project_create",
       label: "Orchestrator Create Project",
       description: "Create a new project in orchestrator-data. Sets up the project directory, STATE.md, and dashboard-config.json entry. Returns the project info and a session spawn link.",
       parameters: Type.Object({
@@ -4701,6 +4893,15 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
         fs.mkdirSync(projDir2, { recursive: true });
 
+        // Initialize project docs from templates
+        initProjectDocs(projDir2, projectName, params.description, params.directory);
+
+        // Create project config entry in DB FIRST (so FK constraints on state_events don't fail)
+        setProjectConfig(projectName, {
+          location: params.directory || null,
+          workflow: { enabled: true },
+        });
+
         // Write project_created state event (append-only, no overwrites)
         writeStateEvent(projectName, dataDir, {
           type: "project_created",
@@ -4710,21 +4911,6 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
         });
         // Generate initial STATE.md from event log
         generateStateFromEvents(projectName, dataDir, logger);
-
-        // Create dashboard-config.json entry
-        const configPath = path.join(dataDir, "dashboard-config.json");
-        let cfg: any = {};
-        try {
-          if (fs.existsSync(configPath)) {
-            cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          }
-        } catch { /* */ }
-        if (!cfg.projects) cfg.projects = {};
-        cfg.projects[projectName] = {
-          location: params.directory || null,
-          workflow: { enabled: true },
-        };
-        writeJSON(configPath, cfg);
 
         logger.info("project", `Created project: ${projectName}${params.directory ? " @ " + params.directory : ""}`);
 
@@ -4745,7 +4931,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
             spawnInfo = {
               scheduled: true,
               task: spawnTask,
-              note: "Session spawn marker created. A dedicated session will be available shortly. Use orchestrator_join_project to start working.",
+              note: "Session spawn marker created. A dedicated session will be available shortly. Use genorch_project_join to start working.",
             };
           } catch (e: any) {
             logger.warn("project", `Spawn scheduling failed: ${e.message}`);
@@ -4759,7 +4945,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
           description: params.description || null,
           state_md: path.join(projDir2, "STATE.md"),
           spawn: spawnInfo,
-          message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call orchestrator_set_context to start working, or orchestrator_join_project if you're in a different session.`,
+          message: `Project "${projectName}" created. ${params.directory ? `Location: ${params.directory}` : ""} Call genorch_session_start_work to start working, or genorch_project_join if you're in a different session.`,
         });
       },
     });
@@ -4797,7 +4983,7 @@ You are working within Genor's Orchestrator plugin. Follow these rules automatic
 
     // ── Quick Action: Grill Me With Docs ───────────────────────
     api.registerTool({
-      name: "orchestrator_grill_with_docs",
+      name: "genorch_knowledge_quiz",
       label: "Grill Me With Docs",
       description: "Spawns a subagent that reads all project documentation and quizzes you on it — sharpens project understanding and catches knowledge gaps.",
       parameters: Type.Object({
@@ -4841,7 +5027,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Clean Up & Organize Docs ────────────────
     api.registerTool({
-      name: "orchestrator_cleanup_docs",
+      name: "genorch_project_tidy_docs",
       label: "Clean Up & Organize Docs",
       description: "Spawns a subagent that reads, cleans up, organizes, and updates project documentation — fixing broken links, stale content, and filling gaps.",
       parameters: Type.Object({
@@ -4887,7 +5073,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Set Up Unit Tests ───────────────────────
     api.registerTool({
-      name: "orchestrator_setup_unit_tests",
+      name: "genorch_test_create_unit",
       label: "Set Up Unit Tests",
       description: "Spawns a subagent that sets up unit test infrastructure (framework, config, CI) and creates initial tests for existing code.",
       parameters: Type.Object({
@@ -4933,7 +5119,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Set Up E2E Tests ────────────────────────
     api.registerTool({
-      name: "orchestrator_setup_e2e_tests",
+      name: "genorch_test_create_e2e",
       label: "Set Up E2E Tests",
       description: "Spawns a subagent that sets up end-to-end test infrastructure and creates initial E2E test scenarios.",
       parameters: Type.Object({
@@ -4979,7 +5165,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Debug Issue ─────────────────────────────
     api.registerTool({
-      name: "orchestrator_debug_issue",
+      name: "genorch_issue_debug",
       label: "Debug Issue",
       description: "Spawns a subagent to investigate and help fix a specific bug or issue in the project.",
       parameters: Type.Object({
@@ -5028,7 +5214,7 @@ Focus specifically on: ${params.topic}` : "";
 
     // ── Quick Action: Create New Functionality ────────────────
     api.registerTool({
-      name: "orchestrator_create_functionality",
+      name: "genorch_feature_design",
       label: "Create New Functionality",
       description: "Spawns a subagent to design and implement new features or functionality in the project.",
       parameters: Type.Object({
@@ -5081,7 +5267,7 @@ Focus specifically on: ${params.topic}` : "";
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_fix_docs_drift",
+      name: "genorch_project_sync_docs",
       label: "Fix Docs Drift",
       description: "Scans project documentation for stale version numbers, tool counts, test counts, and other drift. Updates STATE.md, CONTEXT.md, ROADMAP.md, and README.md to match current project state.",
       parameters: Type.Object({
@@ -5116,9 +5302,7 @@ Focus specifically on: ${params.topic}` : "";
               const content = fs.readFileSync(srcPath, "utf-8");
               const toolMatches = content.match(/api\.registerTool\(\{/g);
               if (toolMatches) {
-                // Subtract comment references (they contain "api.registerTool" in comments)
-                // Actual tool registrations start after the // ── line separating Metadata from register()
-                toolCount = countRegisteredTools(content);
+                toolCount = _toolCount;
               }
             }
             const testDir = path.join(srcDir, "tests");
@@ -5130,9 +5314,9 @@ Focus specifically on: ${params.topic}` : "";
               try {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
                 version = pkg.version || "";
-              } catch { /* */ }
+              } catch (e2: any) { logger.debug("doctor", "Version read failed:", e2.message); }
             }
-          } catch { /* */ }
+          } catch { /* doctor — project may not exist */ }
         }
 
         // Fix CONTEXT.md badges
@@ -5210,9 +5394,9 @@ Focus specifically on: ${params.topic}` : "";
     // ═══════════════════════════════════════════════════════════
 
     api.registerTool({
-      name: "orchestrator_regenerate_state",
+      name: "genorch_project_rebuild_state",
       label: "Regenerate State",
-      description: "Regenerate STATE.md from the project state event log (state-events.jsonl). No LLM involved — computed from actual events. Safe for concurrent writers since events are append-only.",
+      description: "Regenerate STATE.md from the project state event log (SQLite). Computed from actual events, no LLM involved.",
       parameters: Type.Object({
         project: Type.Optional(Type.String({ description: "Project name. Omit to use current project context." })),
       }),
@@ -5239,6 +5423,685 @@ Focus specifically on: ${params.topic}` : "";
     });
 
     // ═══════════════════════════════════════════════════════════
+    //  MULTI-AGENT VERIFICATION PIPELINE
+    //  Work → Review → Fix → loop until pass or max iterations
+    // ═══════════════════════════════════════════════════════════
+
+    // ═══ Pipeline temp directory helper — deterministic from pipeline_id ═══
+    function pipelineWorkDir(pipelineId: string): string {
+      return path.join(os.tmpdir(), `verify_${pipelineId.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
+    }
+
+    // ═══ Atomic phase transition — returns true if transition succeeded ═══
+    function transitionPhase(pipelineId: string, fromPhase: string, toPhase: string, updates?: Record<string, any>): boolean {
+      const fields = ["phase = ?"];
+      const values: any[] = [toPhase];
+      if (updates) {
+        for (const [k, v] of Object.entries(updates)) {
+          fields.push(`${k} = ?`);
+          values.push(v);
+        }
+      }
+      fields.push("updated_ts = ?");
+      values.push(Math.floor(Date.now() / 1000));
+      values.push(pipelineId);
+      values.push(fromPhase);
+      const result = getDb().prepare(
+        `UPDATE verification_runs SET ${fields.join(", ")} WHERE pipeline_id = ? AND phase = ?`
+      ).run(...values);
+      return result.changes > 0;
+    }
+
+    // ═══ Pipeline cleanup — removes temp dir ═══
+    function cleanupPipeline(pipelineId: string): void {
+      try {
+        const dir = pipelineWorkDir(pipelineId);
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch (e: any) {
+        logger.warn("verification", `Cleanup failed for ${pipelineId}: ${e.message}`);
+      }
+    }
+
+    api.registerTool({
+      name: "genorch_verify_pipeline_start",
+      label: "Verify Work",
+      description: "Start a multi-agent verification pipeline. Spawns a worker subagent, then a reviewer checks the work, and a fixer addresses issues — looping until pass or max iterations. Default max_iterations=3; after that the pipeline stalls at 'needs_guidance'. Use genorch_verify_pipeline_guide to give direction and retry.",
+      parameters: Type.Object({
+        task: Type.String({ description: "Description of the work to be done." }),
+        criteria: Type.String({ description: "Verification criteria — what the reviewer should check for." }),
+        max_iterations: Type.Optional(Type.Number({ description: "Maximum review-fix cycles (default: 3)." })),
+        worker_model: Type.Optional(Type.String({ description: "Model override for the worker subagent." })),
+        reviewer_model: Type.Optional(Type.String({ description: "Model override for the reviewer subagent." })),
+        fixer_model: Type.Optional(Type.String({ description: "Model override for the fixer subagent." })),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        if (!sessionTracker.currentProject) {
+          return txt({ ok: false, error: "No active project. Set project context first." });
+        }
+        if (!params.task) {
+          return txt({ ok: false, error: "Task description is required." });
+        }
+        if (!params.criteria) {
+          return txt({ ok: false, error: "Verification criteria is required." });
+        }
+
+        const pipelineId = `verify_${crypto.randomUUID().slice(0, 12)}`;
+        const maxIter = params.max_iterations || 3;
+        const workDir = pipelineWorkDir(pipelineId);
+        const workerOutputPath = path.join(workDir, "worker-output.md");
+        const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+        const fixerOutputPath = path.join(workDir, "fixer-output.md");
+
+        try { fs.mkdirSync(workDir, { recursive: true }); } catch (e: any) { logger.warn("verification", `Failed to create workDir ${workDir}: ${e.message}`); }
+
+        const project = sessionTracker.currentProject!;
+        const parentKey = sessionTracker.sessionKey || "";
+        const workerTask = [
+          `[Verification Pipeline — Worker #1 — Auto-spawned by Orchestrator Plugin]`,
+          `Project: ${project}`,
+          `Parent Session: ${parentKey}`,
+          ``,
+          `You are the WORKER in a multi-agent verification pipeline. Complete the following task.`,
+          ``,
+          `## Task`,
+          params.task,
+          ``,
+          `## Instructions`,
+          `1. Complete the task thoroughly — write code, make changes, produce required output.`,
+          `2. When finished, write your complete work output to: ${workerOutputPath}`,
+          `3. Be thorough and self-contained — your output will be reviewed independently.`,
+        ].filter(Boolean).join("\n");
+
+        try {
+          const workerSessionKey = `agent:main:subagent:verify-worker-${crypto.randomUUID().slice(0, 8)}`;
+          await api.runtime.subagent.run({
+            sessionKey: workerSessionKey,
+            message: workerTask,
+            model: params.worker_model || undefined,
+            lightContext: true,
+          });
+
+          const msgs = JSON.stringify([
+            { ts: Date.now(), level: "info", msg: `Worker #1 spawned (session: ${workerSessionKey})` },
+          ]);
+
+          addVerificationRun({
+            pipeline_id: pipelineId,
+            project,
+            task: params.task,
+            criteria: params.criteria,
+            phase: "working",
+            iteration: 1,
+            max_iterations: maxIter,
+            worker_session: workerSessionKey,
+            reviewer_session: "",
+            fixer_session: "",
+            worker_output_path: workerOutputPath,
+            reviewer_result: "",
+            fixer_output_path: fixerOutputPath,
+            guidance: "",
+            artifacts: JSON.stringify({ workDir, reviewerPath, fixerOutputPath }),
+            messages: msgs,
+            created_ts: Math.floor(Date.now() / 1000),
+            updated_ts: Math.floor(Date.now() / 1000),
+          });
+
+          addLog("info", "verification", `Pipeline ${pipelineId}: worker spawned for ${project}`);
+          logger.info("verification", `Pipeline ${pipelineId} started for project=${project}`);
+
+          return txt({
+            ok: true,
+            pipeline_id: pipelineId,
+            project,
+            phase: "working",
+            iteration: 1,
+            max_iterations: maxIter,
+            worker_session: workerSessionKey,
+            message: `✅ Pipeline started. Worker #1 spawned. Call genorch_verify_pipeline_check pipeline_id="${pipelineId}" to check.`,
+          });
+        } catch (err: any) {
+          logger.error("verification", `Pipeline ${pipelineId} spawn failed: ${err.message}`);
+          cleanupPipeline(pipelineId);
+          return txt({ ok: false, error: `Failed to start pipeline: ${err.message}` });
+        }
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_verify_pipeline_check",
+      label: "Verify Check Progress",
+      description: "Check and advance a multi-agent verification pipeline. Reads the current state, checks if the current subagent has completed (via output marker file), and spawns the next agent in the pipeline. Call repeatedly to advance through work→review→fix→loop.",
+      parameters: Type.Object({
+        pipeline_id: Type.String({ description: "Pipeline ID from genorch_verify_pipeline_start." }),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        if (!params.pipeline_id) {
+          return txt({ ok: false, error: "Pipeline ID is required." });
+        }
+
+        const run2 = getVerificationRun(params.pipeline_id);
+        if (!run2) {
+          return txt({ ok: false, error: `Pipeline "${params.pipeline_id}" not found.` });
+        }
+        const run = run2!;
+
+        // Terminal states — just report
+        if (run.phase === "pass") {
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: "✅ PASSED", reviewer_result: run.reviewer_result });
+        }
+        if (run.phase === "fail") {
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: "❌ FAILED — max iterations", reviewer_result: run.reviewer_result });
+        }
+
+        // Needs guidance — idle, waiting for user input
+        if (run.phase === "needs_guidance") {
+          const hasGuidance = run.guidance && run.guidance.trim().length > 0;
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration,
+            message: hasGuidance
+              ? "⏳ Guidance provided — call check again to resume."
+              : `⏳ Awaiting user guidance. Use genorch_verify_pipeline_guide to give direction.`,
+            reviewer_result: run.reviewer_result
+          });
+        }
+
+        const msgs: any[] = JSON.parse(run.messages || "[]");
+        const maxIter = run.max_iterations || 3;
+        const workDir = pipelineWorkDir(run.pipeline_id);
+
+        // ── Helper: log + persist messages ──
+        function pushMsg(level: string, msg: string): void {
+          msgs.push({ ts: Date.now(), level, msg });
+        }
+        function saveMsgs(): void {
+          updateVerificationRun(run.pipeline_id, { messages: JSON.stringify(msgs) });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: WORKING — worker subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "working") {
+          // Timeout check: 30 min
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Worker #${run.iteration} timed out after ${elapsed}s`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Worker #${run.iteration} timed out after 30 min.` });
+          }
+
+          const workerPath = run.worker_output_path;
+          if (!workerPath || !fs.existsSync(workerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "working", iteration: run.iteration, worker_session: run.worker_session, message: `⏳ Worker #${run.iteration} still running...` });
+          }
+
+          // Atomic: working → reviewing. If this fails, another caller already advanced.
+          const workerOutput = fs.readFileSync(workerPath, "utf-8");
+          const reviewerSessionKey = `agent:main:subagent:verify-reviewer-${crypto.randomUUID().slice(0, 8)}`;
+          const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+
+          // Delete old reviewer file if present
+          try { if (fs.existsSync(reviewerPath)) fs.unlinkSync(reviewerPath); } catch { /* */ }
+
+          const reviewerTask = [
+            `[Verification Pipeline — Reviewer #${run.iteration}]`,
+            `Project: ${run.project}`,
+            ``,
+            `Review the work against criteria.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Criteria`,
+            run.criteria,
+            `## Worker Output`,
+            workerOutput,
+            ``,
+            `## Instructions`,
+            `1. Check correctness, completeness, edge cases, code quality.`,
+            `2. Write verdict to: ${reviewerPath}`,
+            `3. First line MUST be "PASS" or "FAIL".`,
+            `   PASS = explain why it meets all criteria.`,
+            `   FAIL = explain what needs fixing.`,
+          ].filter(Boolean).join("\n");
+
+          if (!transitionPhase(run.pipeline_id, "working", "reviewing", {
+            reviewer_session: reviewerSessionKey,
+            messages: JSON.stringify(msgs),
+          })) {
+            // Another invocation already transitioned
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `Pipeline was already advanced by another call — reviewer spawning. Check again.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: reviewerSessionKey,
+              message: reviewerTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Reviewer #${run.iteration} spawned`);
+            saveMsgs();
+            addLog("info", "verification", `Pipeline ${run.pipeline_id}: worker done → reviewer #${run.iteration}`);
+            logger.info("verification", `Pipeline ${run.pipeline_id}: worker #${run.iteration} done → reviewer`);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `✅ Worker done. Reviewer #${run.iteration} spawned. Check again for verdict.` });
+          } catch (err: any) {
+            pushMsg("error", `Reviewer spawn failed: ${err.message}`);
+            saveMsgs();
+            addLog("error", "verification", `Pipeline ${run.pipeline_id}: reviewer spawn failed: ${err.message}`);
+            return txt({ ok: false, error: `Reviewer spawn failed: ${err.message}` });
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: REVIEWING — reviewer subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "reviewing") {
+          // Timeout check: 30 min
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            // Derive reviewer path from workDir
+            const rPath = path.join(workDir, "reviewer-verdict.md");
+            // If a partial verdict file exists, try to use it
+            if (fs.existsSync(rPath)) {
+              const partial = fs.readFileSync(rPath, "utf-8");
+              pushMsg("warn", `Reviewer timed out, using partial verdict`);
+              // Write partial verdict as the reviewer_result and transition to fail
+              updateVerificationRun(run.pipeline_id, { reviewer_result: partial, phase: "fail" });
+              cleanupPipeline(run.pipeline_id);
+              return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `⏰ Reviewer timed out. Partial verdict recovered.`, reviewer_result: partial });
+            }
+            pushMsg("error", `Reviewer #${run.iteration} timed out`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Reviewer #${run.iteration} timed out after 30 min.` });
+          }
+
+          const reviewerPath = path.join(workDir, "reviewer-verdict.md");
+          if (!fs.existsSync(reviewerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `⏳ Reviewer #${run.iteration} still reviewing...` });
+          }
+
+          const verdict = fs.readFileSync(reviewerPath, "utf-8");
+          const firstLine = verdict.trim().split("\n")[0].trim().toUpperCase();
+          const passed = firstLine.startsWith("PASS");
+
+          pushMsg("info", `Reviewer #${run.iteration} verdict: ${passed ? "PASS" : "FAIL"}`);
+          updateVerificationRun(run.pipeline_id, { reviewer_result: verdict, messages: JSON.stringify(msgs) });
+          addLog("info", "verification", `Pipeline ${run.pipeline_id}: reviewer verdict = ${passed ? "PASS" : "FAIL"}`);
+
+          if (passed) {
+            // Atomic: reviewing → pass
+            if (transitionPhase(run.pipeline_id, "reviewing", "pass")) {
+              cleanupPipeline(run.pipeline_id);
+              logger.info("verification", `Pipeline ${run.pipeline_id}: PASSED after ${run.iteration} iteration(s)`);
+              return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: `✅ PASSED after ${run.iteration} iteration(s)!`, reviewer_result: verdict });
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", message: "Already passed by another call.", reviewer_result: verdict });
+          }
+
+          // FAIL — check max iterations
+          if (run.iteration >= maxIter) {
+            // Transition to needs_guidance instead of terminal fail.
+            // Keep temp files — user can provide guidance and retry.
+            if (transitionPhase(run.pipeline_id, "reviewing", "needs_guidance")) {
+              logger.info("verification", `Pipeline ${run.pipeline_id}: needs guidance after ${maxIter} iterations`);
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "needs_guidance", iteration: run.iteration, message: `❌ FAILED after ${maxIter} iterations. Use genorch_verify_pipeline_guide to give direction and retry.`, reviewer_result: verdict });
+          }
+
+          // Spawn fixer
+          const nextIter = run.iteration + 1;
+          const fixerSessionKey = `agent:main:subagent:verify-fixer-${crypto.randomUUID().slice(0, 8)}`;
+          const fixerPath = path.join(workDir, "fixer-output.md");
+
+          // Save original worker output before fixer overwrites it
+          const origWorkerPath = path.join(workDir, "worker-original.md");
+          if (fs.existsSync(run.worker_output_path) && !fs.existsSync(origWorkerPath)) {
+            try { fs.copyFileSync(run.worker_output_path, origWorkerPath); } catch { /* */ }
+          }
+
+          const workerOutput = fs.existsSync(run.worker_output_path) ? fs.readFileSync(run.worker_output_path, "utf-8") : "(no worker output)";
+
+          const fixerTask = [
+            `[Verification Pipeline — Fixer #${nextIter}]`,
+            `Project: ${run.project}`,
+            ``,
+            `Fix the issues found by the reviewer.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Worker Output`,
+            workerOutput,
+            `## Reviewer's FAIL Verdict`,
+            verdict,
+            ``,
+            `## Instructions`,
+            `1. Address ALL issues in the verdict.`,
+            `2. Write your complete fixed output to: ${fixerPath}`,
+          ].filter(Boolean).join("\n");
+
+          // Atomic: reviewing → fixing
+          if (!transitionPhase(run.pipeline_id, "reviewing", "fixing", {
+            iteration: nextIter,
+            fixer_session: fixerSessionKey,
+            fixer_output_path: fixerPath,
+            messages: JSON.stringify(msgs),
+          })) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: nextIter, message: `Pipeline already advanced — fixer spawning.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: fixerSessionKey,
+              message: fixerTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Fixer #${nextIter} spawned`);
+            saveMsgs();
+            addLog("info", "verification", `Pipeline ${run.pipeline_id}: fixer #${nextIter} spawned`);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: nextIter, message: `🔧 Fixer #${nextIter} spawned. Check again for fixer progress.` });
+          } catch (err: any) {
+            pushMsg("error", `Fixer spawn failed: ${err.message}`);
+            saveMsgs();
+            return txt({ ok: false, error: `Fixer spawn failed: ${err.message}` });
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: FIXING — fixer subagent running
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "fixing") {
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Fixer #${run.iteration} timed out`);
+            saveMsgs();
+            cleanupPipeline(run.pipeline_id);
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Fixer #${run.iteration} timed out.` });
+          }
+
+          const fixerPath = run.fixer_output_path;
+          if (!fixerPath || !fs.existsSync(fixerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fixing", iteration: run.iteration, message: `⏳ Fixer #${run.iteration} still working...` });
+          }
+
+          const fixerOutput = fs.readFileSync(fixerPath, "utf-8");
+          pushMsg("info", `Fixer #${run.iteration} completed`);
+
+          // Write fixer output to worker path for re-review (worker output is the canonical "current state" for review)
+          try { fs.writeFileSync(run.worker_output_path, fixerOutput, "utf-8"); } catch (e: any) { logger.warn("verification", `Failed to update worker output: ${e.message}`); }
+
+          // Clear old reviewer verdict file
+          const oldReviewerPath = path.join(workDir, "reviewer-verdict.md");
+          try { if (fs.existsSync(oldReviewerPath)) fs.unlinkSync(oldReviewerPath); } catch (e: any) { logger.warn("verification", `Failed to clear old verdict: ${e.message}`); }
+
+          // Spawn re-review
+          const reviewerSessionKey = `agent:main:subagent:verify-reviewer-${crypto.randomUUID().slice(0, 8)}`;
+
+          const reReviewTask = [
+            `[Verification Pipeline — Reviewer #${run.iteration} (re-review)]`,
+            `Project: ${run.project}`,
+            ``,
+            `Re-review the fixed work.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Criteria`,
+            run.criteria,
+            `## Fixed Output`,
+            fixerOutput,
+            `## Previous Review (FAIL)`,
+            run.reviewer_result || "N/A",
+            ``,
+            `## Instructions`,
+            `1. Check ALL previous issues were addressed.`,
+            `2. Write verdict to: ${oldReviewerPath}`,
+            `3. First line MUST be "PASS" or "FAIL".`,
+          ].filter(Boolean).join("\n");
+
+          // Atomic: fixing → reviewing
+          if (!transitionPhase(run.pipeline_id, "fixing", "reviewing", {
+            reviewer_session: reviewerSessionKey,
+            reviewer_result: "",
+            messages: JSON.stringify(msgs),
+          })) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `Pipeline already advanced — re-review spawning.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: reviewerSessionKey,
+              message: reReviewTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Re-review reviewer #${run.iteration} spawned`);
+            saveMsgs();
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "reviewing", iteration: run.iteration, message: `✅ Fixer done. Re-review spawned. Check again for verdict.` });
+          } catch (err: any) {
+            pushMsg("error", `Re-review spawn failed: ${err.message}`);
+            saveMsgs();
+            return txt({ ok: false, error: `Re-review spawn failed: ${err.message}` });
+          }
+        }
+
+        // ── Phase: error or unknown ──
+        // ═══════════════════════════════════════════════════════
+        //  Phase: GUIDED FIXING — fixer running with user guidance
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "guided_fixing") {
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Guided fixer #${run.iteration} timed out`);
+            saveMsgs();
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Guided fixer #${run.iteration} timed out.` });
+          }
+
+          const fixerPath = run.fixer_output_path;
+          if (!fixerPath || !fs.existsSync(fixerPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_fixing", iteration: run.iteration, message: `⏳ Guided fixer still working...` });
+          }
+
+          const fixerOutput = fs.readFileSync(fixerPath, "utf-8");
+          pushMsg("info", `Guided fixer #${run.iteration} completed`);
+
+          // Write fixer output to worker path for review
+          try { fs.writeFileSync(run.worker_output_path, fixerOutput, "utf-8"); } catch (e: any) { logger.warn("verification", `Failed to update worker output: ${e.message}`); }
+
+          // Clear old reviewer verdict
+          const oldReviewerPath = path.join(workDir, "reviewer-verdict.md");
+          try { if (fs.existsSync(oldReviewerPath)) fs.unlinkSync(oldReviewerPath); } catch (e: any) { logger.warn("verification", `Failed to clear old verdict: ${e.message}`); }
+
+          // Spawn final review
+          const finalReviewerKey = `agent:main:subagent:verify-final-review-${crypto.randomUUID().slice(0, 8)}`;
+          const finalReviewTask = [
+            `[Verification Pipeline — Final Review]`,
+            `Project: ${run.project}`,
+            ``,
+            `Final review after user-guided fix.`,
+            ``,
+            `## Task`,
+            run.task,
+            `## Criteria`,
+            run.criteria,
+            `## User Guidance`,
+            run.guidance || "N/A",
+            `## Fixed Output`,
+            fixerOutput,
+            `## Previous Review (FAIL)`,
+            run.reviewer_result || "N/A",
+            ``,
+            `## Instructions`,
+            `1. Check ALL previous issues were addressed.`,
+            `2. Verify the user's guidance was followed.`,
+            `3. Write verdict to: ${oldReviewerPath}`,
+            `4. First line MUST be "PASS" or "FAIL".`,
+          ].filter(Boolean).join("\n");
+
+          // Atomic: guided_fixing → guided_review
+          if (!transitionPhase(run.pipeline_id, "guided_fixing", "guided_review", {
+            reviewer_session: finalReviewerKey,
+            reviewer_result: "",
+            messages: JSON.stringify(msgs),
+          })) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `Guided fix already advanced to review.` });
+          }
+
+          try {
+            await api.runtime.subagent.run({
+              sessionKey: finalReviewerKey,
+              message: finalReviewTask,
+              model: undefined,
+              lightContext: true,
+            });
+            pushMsg("info", `Final reviewer spawned`);
+            saveMsgs();
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `✅ Guided fix complete. Final review spawned. Check again for verdict.` });
+          } catch (err: any) {
+            pushMsg("error", `Final review spawn failed: ${err.message}`);
+            saveMsgs();
+            return txt({ ok: false, error: `Final review spawn failed: ${err.message}` });
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Phase: GUIDED REVIEW — final review after user guidance
+        // ═══════════════════════════════════════════════════════
+        if (run.phase === "guided_review") {
+          const elapsed = Math.floor(Date.now() / 1000) - run.created_ts;
+          if (elapsed > 1800) {
+            pushMsg("error", `Final review timed out`);
+            saveMsgs();
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "error", iteration: run.iteration, message: `⏰ Final review timed out.` });
+          }
+
+          const verdictPath = path.join(workDir, "reviewer-verdict.md");
+          if (!fs.existsSync(verdictPath)) {
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_review", iteration: run.iteration, message: `⏳ Final review still in progress...` });
+          }
+
+          const verdictContent = fs.readFileSync(verdictPath, "utf-8");
+          const firstLine = verdictContent.trim().split("\n")[0].trim().toUpperCase();
+          const passed = firstLine.startsWith("PASS");
+
+          pushMsg("info", `Final review verdict: ${passed ? "PASS" : "FAIL"}`);
+          updateVerificationRun(run.pipeline_id, { reviewer_result: verdictContent, messages: JSON.stringify(msgs) });
+
+          if (passed) {
+            if (transitionPhase(run.pipeline_id, "guided_review", "pass")) {
+              cleanupPipeline(run.pipeline_id);
+              logger.info("verification", `Pipeline ${run.pipeline_id}: PASSED after user guidance`);
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "pass", iteration: run.iteration, message: `✅ PASSED after user guidance!`, reviewer_result: verdictContent });
+          } else {
+            if (transitionPhase(run.pipeline_id, "guided_review", "fail")) {
+              cleanupPipeline(run.pipeline_id);
+              logger.info("verification", `Pipeline ${run.pipeline_id}: FINAL FAIL after user guidance`);
+            }
+            return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "fail", iteration: run.iteration, message: `❌ FINAL FAIL after user guidance.`, reviewer_result: verdictContent });
+          }
+        }
+
+        const recent = msgs.slice(-3).map((m: any) => m.msg).join("; ");
+        return txt({ ok: true, pipeline_id: run.pipeline_id, phase: run.phase, message: `State: "${run.phase}". ${recent}` });
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  TOOL: genorch_verify_pipeline_guide
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "genorch_verify_pipeline_guide",
+      label: "Provide Guidance",
+      description: "Provide user guidance for a stalled verification pipeline. After max retries, the pipeline enters 'needs_guidance' and waits for direction. Call this to give guidance and resume with a guided fixer + final review.",
+      parameters: Type.Object({
+        pipeline_id: Type.String({ description: "Pipeline ID from genorch_verify_pipeline_start." }),
+        guidance: Type.String({ description: "Your guidance for the fixer. Describe what needs to be fixed and how." }),
+      }),
+      async execute(_id: string, params: any) {
+        const reg = requireRegistration();
+        if (reg) return txt({ ok: false, error: reg });
+        if (!params.pipeline_id || !params.guidance) {
+          return txt({ ok: false, error: "Both pipeline_id and guidance are required." });
+        }
+
+        const run = getVerificationRun(params.pipeline_id);
+        if (!run) {
+          return txt({ ok: false, error: `Pipeline "${params.pipeline_id}" not found.` });
+        }
+
+        if (run.phase !== "needs_guidance") {
+          return txt({ ok: false, error: `Pipeline is in "${run.phase}" phase, not "needs_guidance". Cannot provide guidance now.` });
+        }
+
+        // Store guidance
+        updateVerificationRun(run.pipeline_id, { guidance: params.guidance });
+
+        // Spawn guided fixer
+        const nextIter = (run.iteration || 1) + 1;
+        const workDir = pipelineWorkDir(run.pipeline_id);
+        const fixerPath = path.join(workDir, "fixer-output.md");
+        const fixerSessionKey = `agent:main:subagent:verify-guided-fixer-${crypto.randomUUID().slice(0, 8)}`;
+
+        const workerOutputPath = run.worker_output_path;
+        const workerOutput = workerOutputPath && fs.existsSync(workerOutputPath)
+          ? fs.readFileSync(workerOutputPath, "utf-8")
+          : "(no previous worker output)";
+
+        const fixerTask = [
+          `[Verification Pipeline — Guided Fixer #${nextIter}]`,
+          `Project: ${run.project}`,
+          ``,
+          `Fix the issues with guidance from the project owner.`,
+          ``,
+          `## Task`,
+          run.task,
+          `## Previous Worker Output`,
+          workerOutput,
+          `## Reviewer's FAIL Verdict`,
+          run.reviewer_result || "N/A",
+          `## User/Owner Guidance`,
+          params.guidance,
+          ``,
+          `## Instructions`,
+          `1. Follow the user/owner's guidance carefully.`,
+          `2. Address ALL issues from the reviewer's verdict.`,
+          `3. Write your complete fixed output to: ${fixerPath}`,
+        ].filter(Boolean).join("\n");
+
+        // Atomic: needs_guidance → guided_fixing
+        if (!transitionPhase(run.pipeline_id, "needs_guidance", "guided_fixing", {
+          iteration: nextIter,
+          fixer_session: fixerSessionKey,
+          fixer_output_path: fixerPath,
+          messages: "[]",
+        })) {
+          return txt({ ok: false, error: "Pipeline was already advanced by another call." });
+        }
+
+        try {
+          if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
+          await api.runtime.subagent.run({
+            sessionKey: fixerSessionKey,
+            message: fixerTask,
+            model: undefined,
+            lightContext: true,
+          });
+          addLog("info", "verification", `Pipeline ${run.pipeline_id}: guided fixer #${nextIter} spawned`);
+          return txt({ ok: true, pipeline_id: run.pipeline_id, phase: "guided_fixing", iteration: nextIter,
+            message: `✅ Guidance received. Guided fixer #${nextIter} spawned. Call genorch_verify_pipeline_check to check progress.`,
+            guidance_received: true });
+        } catch (err: any) {
+          return txt({ ok: false, error: `Guided fixer spawn failed: ${err.message}` });
+        }
+      },
+    });
+
+    // ═══════════════════════════════════════════════════════════
     //  BACKGROUND MAINTENANCE
     // ═══════════════════════════════════════════════════════════
 
@@ -5258,11 +6121,11 @@ Focus specifically on: ${params.topic}` : "";
     // Shared: quick counts
     let modelCount = 0, sessionCount = 0;
     try {
-      const mf = path.join(dataDir, "models.json");
-      if (fs.existsSync(mf)) modelCount = JSON.parse(fs.readFileSync(mf, "utf-8")).models?.length || 0;
+      const mc = countModels();
+      modelCount = mc.total;
       const sf = path.join(dataDir, "session_log.md");
       if (fs.existsSync(sf)) sessionCount = fs.readFileSync(sf, "utf-8").split("\n").filter(l => l.startsWith("|") && !l.includes("Date") && !l.includes("---")).length;
-    } catch { /* */ }
+    } catch (e: any) { logger.debug("status", "Session count failed:", e.message); }
 
     //  SLASH COMMANDS
     //  Individually registered for Discord autocomplete:
@@ -5328,7 +6191,7 @@ Focus specifically on: ${params.topic}` : "";
         try {
           const proj = sessionTracker.currentProject;
           if (!proj) {
-            return { text: "**\u26a0 No project context.** Set context first with `/genor-set-context project=... task=...` or use `orchestrator_set_context`.", continueAgent: false };
+            return { text: "**\u26a0 No project context.** Set context first with `/genor-set-context project=... task=...` or use `genorch_session_start_work`.", continueAgent: false };
           }
           const loc = getProjectLocation(proj, dataDir);
           if (!loc || !fs.existsSync(path.join(loc, ".git"))) {
@@ -5413,10 +6276,10 @@ Focus specifically on: ${params.topic}` : "";
           const issues: string[] = [];
           // Session key check
           if (!hk) issues.push("No session key set.");
-          else if (!sessionTracker.isSessionRegistered(hk)) issues.push("Session not registered. Call orchestrator_register.");
+          else if (!sessionTracker.isSessionRegistered(hk)) issues.push("Session not registered. Call genorch_session_register.");
           // Context check
           const ctx = hk ? sessionTracker.getSessionContext(hk) : null;
-          if (!ctx) issues.push("No project context set. Use orchestrator_set_context.");
+          if (!ctx) issues.push("No project context set. Use genorch_session_start_work.");
           // Log age check
           const logPath = path.join(dataDir, "logs", "orchestrator.jsonl");
           if (fs.existsSync(logPath)) {
@@ -5438,7 +6301,7 @@ Focus specifically on: ${params.topic}` : "";
           } else {
             lines.push("", "**" + issues.length + " issue(s) found:**", "");
             for (const iss of issues) lines.push(iss);
-            lines.push("", "**Tip:** Use orchestrator_doctor (tool) with fix=true to auto-repair.");
+            lines.push("", "**Tip:** Use genorch_system_diagnose (tool) with fix=true to auto-repair.");
           }
           return { text: lines.join("\n"), continueAgent: false };
         } catch (e: any) {
@@ -5447,10 +6310,230 @@ Focus specifically on: ${params.topic}` : "";
       },
     });
 
+    // ═══════════════════════════════════════════════════════════
+    //  SOFTWARE HOUSE MANAGEMENT TOOLS
+    // ═══════════════════════════════════════════════════════════
+
+    api.registerTool({
+      name: "genorch_worker_hire",
+      label: "Hire Worker",
+      description: "Create a new worker.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Worker name." }),
+        role: Type.String({ description: "Worker role (e.g. developer, designer)." }),
+        sprite: Type.Optional(Type.String({ description: "Sprite color/style (default: blue)." })),
+        model: Type.Optional(Type.String({ description: "AI model to use for this worker." })),
+        room: Type.Optional(Type.String({ description: "Room ID to place the worker in." })),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const id = `w${Date.now()}`;
+        const proj = params.project || "genor-orchestrator-plugin";
+        db.prepare(`
+          INSERT INTO workers (id, name, role, sprite, model, prompt, room, project)
+          VALUES (?, ?, ?, ?, ?, '', ?, ?)
+        `).run(id, params.name, params.role || "", params.sprite || "blue", params.model || "", params.room || "", proj);
+        return txt({ ok: true, worker: { id, name: params.name } });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_worker_edit",
+      label: "Edit Worker",
+      description: "Edit worker details.",
+      parameters: Type.Object({
+        worker_id: Type.String({ description: "Worker ID." }),
+        name: Type.Optional(Type.String({ description: "New name." })),
+        role: Type.Optional(Type.String({ description: "New role." })),
+        sprite: Type.Optional(Type.String({ description: "New sprite color/style." })),
+        model: Type.Optional(Type.String({ description: "New AI model." })),
+        room: Type.Optional(Type.String({ description: "New room ID." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const updates: string[] = [];
+        const values: any[] = [];
+        for (const key of ["name", "role", "sprite", "model", "room"]) {
+          if (params[key] !== undefined) {
+            updates.push(`${key} = ?`);
+            values.push(params[key]);
+          }
+        }
+        if (updates.length === 0) return txt({ ok: false, error: "no fields to update" });
+        values.push(params.worker_id);
+        db.prepare(`UPDATE workers SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_worker_fire",
+      label: "Fire Worker",
+      description: "Remove a worker.",
+      parameters: Type.Object({
+        worker_id: Type.String({ description: "Worker ID." }),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        // Delete related records first (foreign key constraints)
+        db.prepare("DELETE FROM worker_messages WHERE from_worker = ? OR to_worker = ?").run(params.worker_id, params.worker_id);
+        db.prepare("DELETE FROM worker_sessions WHERE worker_id = ?").run(params.worker_id);
+        db.prepare("DELETE FROM worker_task_history WHERE worker_id = ?").run(params.worker_id);
+        db.prepare("DELETE FROM backlog_tasks WHERE worker_id = ?").run(params.worker_id);
+        db.prepare("DELETE FROM workers WHERE id = ?").run(params.worker_id);
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_room_create",
+      label: "Create Room",
+      description: "Create a new room.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Room name." }),
+        purpose: Type.Optional(Type.String({ description: "Room purpose/description." })),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const id = `room_${Date.now().toString(36)}`;
+        const proj = params.project || "genor-orchestrator-plugin";
+        db.prepare(`
+          INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
+          VALUES (?, ?, ?, '[]', ?)
+        `).run(id, params.name, params.purpose || "", proj);
+        return txt({ ok: true, room: { id, name: params.name } });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_room_edit",
+      label: "Edit Room",
+      description: "Edit room details.",
+      parameters: Type.Object({
+        room_id: Type.String({ description: "Room ID." }),
+        name: Type.Optional(Type.String({ description: "New name." })),
+        purpose: Type.Optional(Type.String({ description: "New purpose/description." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const updates: string[] = [];
+        const values: any[] = [];
+        for (const key of ["name", "purpose"]) {
+          if (params[key] !== undefined) {
+            updates.push(`${key} = ?`);
+            values.push(params[key]);
+          }
+        }
+        if (updates.length === 0) return txt({ ok: false, error: "no fields to update" });
+        values.push(params.room_id);
+        db.prepare(`UPDATE rooms SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_room_delete",
+      label: "Delete Room",
+      description: "Remove a room.",
+      parameters: Type.Object({
+        room_id: Type.String({ description: "Room ID." }),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        db.prepare("DELETE FROM rooms WHERE id = ?").run(params.room_id);
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_task_create",
+      label: "Create Task",
+      description: "Create a backlog task (replaces HTTP-only POST /backlog).",
+      parameters: Type.Object({
+        title: Type.String({ description: "Task title." }),
+        description: Type.Optional(Type.String({ description: "Task description." })),
+        priority: Type.Optional(Type.String({ description: "Priority: p0 (urgent), p1 (high), p2 (normal), p3 (low). Default: p2." })),
+        labels: Type.Optional(Type.Array(Type.String(), { description: "Labels/tags." })),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const proj = params.project || "genor-orchestrator-plugin";
+        const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        db.prepare(`
+          INSERT INTO backlog_tasks (id, project, title, description, priority, status, labels, created_ts, updated_ts)
+          VALUES (?, ?, ?, ?, ?, 'todo', ?, unixepoch(), unixepoch())
+        `).run(id, proj, params.title, params.description || "", params.priority || "p2", JSON.stringify(params.labels || []));
+        return txt({ ok: true, id });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_task_move",
+      label: "Move Task",
+      description: "Move task to a different phase.",
+      parameters: Type.Object({
+        task_id: Type.String({ description: "Task ID." }),
+        phase: Type.Enum({ todo: "todo", in_progress: "in_progress", review: "review", done: "done" }, { description: "Target phase: todo, in_progress, review, done." }),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        db.prepare("UPDATE backlog_tasks SET status = ?, updated_ts = ? WHERE id = ?")
+          .run(params.phase, Math.floor(Date.now() / 1000), params.task_id);
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_task_assign",
+      label: "Assign Task",
+      description: "Assign a task to a worker.",
+      parameters: Type.Object({
+        task_id: Type.String({ description: "Task ID." }),
+        worker_id: Type.String({ description: "Worker ID." }),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        db.prepare("UPDATE backlog_tasks SET worker_id = ?, updated_ts = ? WHERE id = ?")
+          .run(params.worker_id, Math.floor(Date.now() / 1000), params.task_id);
+        db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(params.worker_id);
+        db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)")
+          .run(params.worker_id, params.task_id, JSON.stringify({ assignedAt: new Date().toISOString() }));
+        return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_worker_message",
+      label: "Worker Message",
+      description: "Send message between workers.",
+      parameters: Type.Object({
+        from_worker_id: Type.String({ description: "Sender worker ID." }),
+        to_worker_id: Type.String({ description: "Recipient worker ID." }),
+        type: Type.Optional(Type.String({ description: "Message type (default: chat)." })),
+        content: Type.String({ description: "Message content." }),
+        project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO worker_messages (from_worker, to_worker, type, content)
+          VALUES (?, ?, ?, ?)
+        `).run(params.from_worker_id, params.to_worker_id, params.type || "chat", params.content);
+        return txt({ ok: true });
+      },
+    });
+
     // ── Dashboard HTTP handler — serve dashboard through gateway ──
     // Follows the same pattern as built-in plugins (canvas, admin-http-rpc, webhooks)
     try {
       const dashHandler = createDashboardHandler(api);
+      // Dashboard UI + API: "plugin" auth serves the dashboard and handles API calls
+      // No operator.write scope needed — dashboard handler uses OpenAI endpoint for spawns
       api.registerHttpRoute({
         path: "/orchestrator",
         auth: "plugin",
@@ -5458,11 +6541,31 @@ Focus specifically on: ${params.topic}` : "";
         handler: dashHandler,
       });
       logger.info("plugin", "Dashboard handler registered at /orchestrator");
+
+      // Spawns are drained by the before_prompt_build hook (has operator.write scope)
     } catch (dhErr: any) {
       logger.warn("plugin", "Dashboard route registration failed: " + (dhErr?.message || String(dhErr)));
     }
 
-    logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${Object.keys(TOOL_NAMES).length} tools, 5 slash commands`);
+    // Count actual registered tools from metadata
+  const toolCount = _collectedToolMeta.length;
+  logger.info("plugin", `Orchestrator ready — ${logLevel} logging, maintenance active, ${toolCount} tools, 5 slash commands`);
+
+    // ═══════════════════════════════════════════════════════════
+    //  WORKER TOOLS — Software House execution tools
+    // ═══════════════════════════════════════════════════════════
+
+
+    // Register all worker tools
+    for (const tool of WORKER_TOOLS) {
+      api.registerTool({
+        name: tool.name,
+        label: tool.label,
+        description: tool.description,
+        parameters: tool.parameters,
+        execute: tool.execute,
+      });
+    }
   },
 });
 
@@ -5493,14 +6596,26 @@ Object.defineProperty(pluginExport, toolPluginMetadataSymbol, {
         maintenanceIntervalMs: { type: "number", description: "Background maintenance interval in ms. (default: 1800000 = 30min)" },
       },
     },
-    tools: TOOL_METADATA.map(t => ({
-      name: t.name,
-      label: t.label,
-      description: t.description,
-      parameters: t.parameters,
-    })),
+    get tools() {
+      // Prefer the full metadata when register() has populated it.
+      // Fall back to name-only entries for build-time reflection
+      // (openclaw plugins build evaluates the module before register()).
+      return _collectedToolMeta.length > 0
+        ? _collectedToolMeta
+        : _staticToolNames.map((name) => ({ name }));
+    },
   },
   enumerable: false,
 });
 
+// ── Test helper ────────────────────────────────────────────────
+// Sets a synthetic session key so `genorch_session_register` works
+// in test environments where hooks don't fire.
+export function __setTestSessionKey(key: string): void {
+  sessionTracker.start(key, "test");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEFAULT EXPORT — required by OpenClaw plugin loader
+// ═══════════════════════════════════════════════════════════════
 export default pluginExport;
