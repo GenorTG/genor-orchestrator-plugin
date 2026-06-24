@@ -73,6 +73,42 @@ Each worker has a **session key** that tracks:
 
 ---
 
+## Critical Architecture Decision: How Work Gets Triggered
+
+### The Problem
+Plugins CANNOT spawn subagents directly. If the agent needs to be told "check the queue," the plugin is pointless.
+
+### The Solution: Plugin-Triggered Agent Turns
+
+```
+User assigns task in UI
+  → Plugin saves to database
+  → Plugin schedules agent turn (immediate)
+  → Agent turn fires automatically
+  → Agent sees injected context: "Worker Alex has task X"
+  → Agent spawns subagent with worker's context
+  → Subagent does work
+  → On completion, plugin checks for more work
+  → If more work, schedule another turn
+  → Repeat until queue is empty
+```
+
+**Key insight:** The plugin PUSHES work to the agent. The agent never needs to be told to check anything.
+
+### Implementation
+
+The plugin uses OpenClaw's `scheduleSessionTurn()` to trigger agent turns:
+
+1. **Task assigned** → Plugin calls `scheduleSessionTurn()` with immediate execution
+2. **Turn fires** → Agent sees injected context about the worker and task
+3. **Agent acts** → Spawns subagent with worker's model + context
+4. **Completion** → Plugin hook catches `agent_end` event
+5. **Next task** → Plugin checks queue, schedules another turn if needed
+
+This is fully automated. The user just assigns in the UI.
+
+---
+
 ## Architecture
 
 ```
@@ -88,17 +124,27 @@ Each worker has a **session key** that tracks:
         │            │            │            │            │
         ▼            ▼            ▼            ▼            ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      ORCHESTRATOR (Amy)                                     │
+│                      PLUGIN (Software House)                                │
 │                                                                             │
 │  1. Receives task assignment from UI/PM                                     │
-│  2. Loads worker context (role + instructions)                              │
-│  3. Builds prompt: "You are {worker}. Task: {task}. Context: {vault docs}" │
-│  4. Spawns subagent with worker's model + prompt                           │
-│  5. Monitors via hooks (agent_start, agent_end, tool_call)                 │
-│  6. On completion: updates worker status, processes next step              │
+│  2. Saves to database                                                       │
+│  3. Schedules agent turn (immediate)                                        │
+│  4. Injects worker context into turn                                        │
+│  5. Tracks completion via hooks                                             │
+│  6. Processes next task if queue not empty                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
         │
+        │ scheduleSessionTurn()
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      AGENT (Main Session)                                   │
+│                                                                             │
+│  Turn fires → sees injected context → spawns subagent → subagent works     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        │ sessions_spawn()
         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      SUBAGENT (Child Session)                               │

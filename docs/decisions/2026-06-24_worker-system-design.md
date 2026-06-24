@@ -18,13 +18,17 @@ We need to make Software House workers functional — not just visual representa
 Workers are manually assigned tasks by PM/User, but the system is designed to eventually support automatic task picking from backlog. Manual gating ensures we can control and debug the system before enabling automation.
 
 ### 2. Execution Model
-**Chose:** Persistent sessions per worker, subagent spawns for task execution.
+**Chose:** Plugin-triggered agent turns with subagent spawns.
 
-Each worker has a persistent session key for tracking. When work needs to be done, the orchestrator spawns a subagent with the worker's context. This gives us:
-- Session history for debugging
-- Ability to recover from failures
-- Token usage tracking
-- Clean separation between workers
+The plugin PUSHES work to the agent by scheduling immediate turns. The agent never needs to be told to check anything. When a task is assigned:
+1. Plugin saves to database
+2. Plugin calls `scheduleSessionTurn()` (immediate)
+3. Agent turn fires with injected context
+4. Agent spawns subagent with worker's context
+5. On completion, plugin checks for more work
+6. If more queue, schedule another turn
+
+This is fully automated. The user just assigns in the UI.
 
 ### 3. Context Model
 **Chose:** Worker system prompt + task description + relevant vault docs.
