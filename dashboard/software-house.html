@@ -1287,6 +1287,7 @@ function renderAgentPanel(id) {
     ${agentTasks.length ? `<div class="detail-section"><h4>Taski (${agentTasks.length})</h4>
       ${agentTasks.map(t=>`<div class="kanban-card" onclick="openTaskPanel('${t.id}')">${t.pri} ${t.title}</div>`).join('')}
     </div>` : ''}
+    ${!isOrch ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openWorkerMessageModal('${a.id}')">💬 Wyślij wiadomość</button>` : }
     ${isOrch ? `<p style="margin-top:12px;font-size:11px;color:var(--purple)">🧠 Project Manager — <b>Thinking</b> = planuje sprint.</p>` : ''}`;
 
   document.getElementById('detailFoot').innerHTML = `
@@ -1697,6 +1698,88 @@ function sendChat() {
       else if (l.includes('zatrud') || l.includes('hire')) orchSay('hire');
       else addBotMsg('Rozumiem. Mogę pokazać status, zaplanować sprint albo zatrudnić kogoś — napisz co potrzebujesz.');
     } else {
+
+// WORKER MESSAGING
+let workerMessageTarget = null;
+
+function openWorkerMessageModal(workerId) {
+  workerMessageTarget = workerId;
+  const worker = agents.find(a => a.id === workerId);
+  if (!worker) return;
+  
+  // Create modal
+  const modal = document.createElement('div');
+  modal.id = 'workerMessageModal';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width:400px">
+      <h3>💬 Wyślij wiadomość do ${worker.name}</h3>
+      <div style="margin:12px 0">
+        <label style="font-size:11px;color:var(--text-dim)">Typ wiadomości:</label>
+        <select id="workerMsgType" style="width:100%;margin-top:4px;padding:6px;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)">
+          <option value="chat">💬 Chat</option>
+          <option value="task_assign">📋 Przypisz zadanie</option>
+          <option value="review_request">👀 Poproś o review</option>
+          <option value="review_feedback">📝 Feedback</option>
+        </select>
+      </div>
+      <div style="margin:12px 0">
+        <label style="font-size:11px;color:var(--text-dim)">Wiadomość:</label>
+        <textarea id="workerMsgContent" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);min-height:80px" placeholder="Napisz wiadomość..."></textarea>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="closeWorkerMessageModal()">Anuluj</button>
+        <button class="btn primary" onclick="sendWorkerMessage()">Wyślij</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function closeWorkerMessageModal() {
+  const modal = document.getElementById('workerMessageModal');
+  if (modal) modal.remove();
+  workerMessageTarget = null;
+}
+
+function sendWorkerMessage() {
+  if (!workerMessageTarget) return;
+  
+  const type = document.getElementById('workerMsgType').value;
+  const content = document.getElementById('workerMsgContent').value.trim();
+  
+  if (!content) {
+    toast('❌ Wpisz wiadomość');
+    return;
+  }
+  
+  // Find PM as sender (or use first available worker)
+  const senderId = agents.find(a => a.isOrchestrator)?.id || agents[0]?.id;
+  if (!senderId) {
+    toast('❌ Brak dostępnych nadawców');
+    return;
+  }
+  
+  fetch(`/orchestrator/api/software-house/worker/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fromWorker: senderId,
+      toWorker: workerMessageTarget,
+      type,
+      content
+    })
+  }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      toast(`✅ Wiadomość wysłana do ${agents.find(a => a.id === workerMessageTarget)?.name}`);
+      closeWorkerMessageModal();
+    } else {
+      toast(`❌ Błąd: ${data.error}`);
+    }
+  }).catch(err => {
+    toast(`❌ Błąd sieci: ${err.message}`);
+  });
+}
       addBotMsg(`❌ Błąd: ${data.error}`);
     }
   }).catch(err => {
