@@ -204,12 +204,12 @@ Return a summary of what you did when complete.`;
                 headers: {
                     "Authorization": `Bearer ${this.config.gatewayToken}`,
                     "Content-Type": "application/json",
-                    "x-openclaw-session-key": `worker:${worker.id}:session`,
+                    "x-openclaw-session-key": `plugin-${worker.project}-${worker.name.toLowerCase().replace(/\s+/g, '-')}`,
                     "x-openclaw-model": worker.model || "openclaw/default",
                 },
                 body: JSON.stringify({
-                    model: `openclaw/${worker.id}`,
-                    user: `worker:${worker.id}:task:${Date.now()}`,
+                    model: `openclaw/${worker.project}-${worker.name.toLowerCase().replace(/\s+/g, '-')}`,
+                    user: `plugin-${worker.project}-${worker.name.toLowerCase().replace(/\s+/g, '-')}`,
                     messages,
                     tools: this.getAvailableTools(),
                 }),

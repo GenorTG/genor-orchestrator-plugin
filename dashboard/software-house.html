@@ -218,6 +218,10 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .msg.bot{background:var(--bg-desk);border:1px solid var(--border);align-self:flex-start}
 .msg.user{background:var(--accent);color:#000;align-self:flex-end;font-weight:500}
 .msg .time{font-size:9px;opacity:.5;margin-top:4px}
+  .msg .avatar{width:24px;height:24px;border-radius:4px;flex-shrink:0}
+  .msg.user{display:flex;align-items:flex-start;gap:8px;flex-direction:row-reverse}
+  .msg.user .avatar{order:2}
+  .msg.bot{display:flex;align-items:flex-start;gap:8px}
 .msg .act{display:inline-block;margin:5px 5px 0 0;padding:3px 8px;border-radius:4px;font-size:10px;border:1px solid var(--accent);color:var(--accent);font-weight:600}
 .chat-input-wrap{padding:10px;border-top:1px solid var(--border);display:flex;gap:6px}
 .chat-input-wrap input{flex:1;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;color:var(--text);font-size:12px}
@@ -581,11 +585,12 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 <script>
 const BOOTSTRAP_URL = '/orchestrator/api/software-house/bootstrap';
 let projectsCatalog = {};
-let currentProjectId = 'genor-orchestrator-plugin';
+let currentProjectId = new URLSearchParams(window.location.search).get('project') || 'genor-orchestrator-plugin';
 let project = projectsCatalog[currentProjectId];
 let rooms = [];
 let agents = [];
 let tasks = [];
+let availableModels = [];
 
 const STATUS = {
   working:  { label:'Working',  cls:'working',  anim:true },
@@ -652,6 +657,14 @@ const framePlayers = new Map();
 const MIN_ROOM_W = DESK_W + ROOM_PAD_X * 2;
 const MIN_ROOM_H = DESK_H + ROOM_PAD_Y + 56;
 
+async function loadModels() {
+  try {
+    const res = await fetch('/orchestrator/api/software-house/models');
+    if (!res.ok) return;
+    availableModels = await res.json();
+  } catch (e) {}
+}
+
 function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
 async function loadData() {
@@ -665,6 +678,8 @@ async function loadData() {
     loadProject(currentProjectId, true);
     applyTransform();
     focusRoom('command');
+    initProjectSelect();
+    loadModels();
   } catch (e) {
     console.error('Bootstrap load failed:', e);
     toast('⚠️ Nie wczytano danych z API — sprawdź logi');
@@ -684,9 +699,9 @@ function loadProject(id, skipSave) {
   }
   currentProjectId = id;
   project = p;
-  rooms = deepClone(p.rooms);
+  rooms = deepClone(p.rooms || []);
   agents = deepClone(p.workers || p.agents || []);
-  tasks = deepClone(p.tasks);
+  tasks = deepClone(p.tasks || []);
   project.vault = p.vault || {};
   manualRoomLayout = false;
   roomEditEnabled = false;
@@ -700,13 +715,40 @@ function loadProject(id, skipSave) {
   if (!skipSave) toast(`📁 Projekt: ${project.name}`);
 }
 
-function switchProject(id) { loadProject(id); }
-
 function initProjectSelect() {
   const sel = document.getElementById('projectSelect');
   sel.innerHTML = Object.values(projectsCatalog).map(p =>
-    `<option value="${p.id}">${p.name}</option>`).join('');
+    `<option value="${p.id}"${!p.hasWorkers ? ' style="color:var(--text-dim)"' : ''}>${p.name}${!p.hasWorkers ? ' (empty)' : ''}</option>`).join('') +
+    `<option value="__new__" style="color:var(--green);font-weight:700">➕ Nowy projekt…</option>`;
   sel.value = currentProjectId;
+}
+
+async function createNewProject(name) {
+  try {
+    const res = await fetch('/orchestrator/api/software-house/projects/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Create failed');
+    toast(`✅ Projekt "${name}" utworzony`);
+    window.location.href = '/orchestrator/software-house?project=' + encodeURIComponent(name);
+  } catch (e) {
+    toast('⚠️ ' + e.message);
+  }
+}
+
+function switchProject(id) { 
+  if (id === '__new__') {
+    const name = prompt('Nazwa nowego projektu:');
+    if (name && name.trim()) createNewProject(name.trim());
+    else document.getElementById('projectSelect').value = currentProjectId;
+    return;
+  }
+  if (id === currentProjectId) return;
+  // Reload page with new project param for full data
+  window.location.href = '/orchestrator/software-house?project=' + encodeURIComponent(id);
 }
 
 function getTeamStats() {
@@ -1264,16 +1306,12 @@ function renderAgentPanel(id) {
   document.getElementById('detailBody').innerHTML = `
     <div class="form-grid">
       <div class="form-field"><label>Status</label>
-        <select id="mStatus">
-          ${isOrch
-            ? `<option value="thinking"${vs==='thinking'?' selected':''}>🧠 Thinking</option><option value="working"${vs==='working'?' selected':''}>⚡ Working</option>`
-            : `<option value="working"${vs==='working'?' selected':''}>⚡ Working</option>
-               <option value="reviewing"${vs==='reviewing'?' selected':''}>👁️ Reviewing</option>
-               <option value="sleep"${vs==='sleep'?' selected':''}>💤 Sleep</option>
-               <option value="thinking"${vs==='thinking'?' selected':''}>🤔 Thinking</option>
-               <option value="error"${vs==='error'?' selected':''}>🔴 Error</option>`}
-        </select></div>
-      <div class="form-field"><label>Model</label><input id="mModel" value="${a.model}"></div>
+        <div style="padding:6px 10px;border-radius:6px;background:var(--bg-floor);color:var(--text-bright);font-size:12px;display:flex;align-items:center;gap:6px">
+          <span class="dot" style="background:${vs==='working'?'var(--green)':vs==='thinking'?'var(--yellow)':vs==='sleep'?'var(--text-dim)':'var(--red)'}"></span>
+          ${vs === 'working' ? '⚡ Working' : vs === 'thinking' ? '🤔 Thinking' : vs === 'reviewing' ? '👁️ Reviewing' : vs === 'sleep' ? '💤 Sleep' : vs === 'error' ? '🔴 Error' : vs || 'Unknown'}
+        </div></div>
+      <div class="form-field"><label>Model</label>
+        <select id="mModel">${availableModels.length ? availableModels.map(m => `<option value="${m.id}"${a.model===m.id?' selected':''}>${m.name}${m.provider?' ['+m.provider+']':''}</option>`).join('') : `<option value="${a.model}">${a.model}</option>`}</select></div>
       <div class="form-field"><label>Pokój</label>
         <select id="mRoom">${rooms.map(r=>`<option value="${r.id}"${r.id===a.room?' selected':''}>${r.name}</option>`).join('')}</select></div>
       <div class="form-field"><label>Sprite</label>
@@ -1301,7 +1339,6 @@ function saveAgent() {
   if (!a) return;
   
   const updates = {
-    status: document.getElementById('mStatus').value,
     model: document.getElementById('mModel').value,
     room: document.getElementById('mRoom').value,
     sprite: document.getElementById('mSprite').value,
@@ -1890,12 +1927,12 @@ function positionPmBubble() {
 function renderPmBubbleMsgs() {
   const el = document.getElementById('pmBubbleMsgs');
   const welcome = `Cześć! Jestem <b>Project Managerem</b> projektu <b>${project.name}</b>. Mogę zaplanować sprint, sprawdzić status zespołu albo zatrudnić kogoś.`;
-  el.innerHTML = `<div class="msg bot">${welcome}<div class="time">teraz</div></div>`;
+  el.innerHTML = `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${welcome}<div class="time">teraz</div></div>`;
 }
 function pmQuick(action) {
   const el = document.getElementById('pmBubbleMsgs');
   const append = html => {
-    el.innerHTML += `<div class="msg bot">${html}<div class="time">teraz</div></div>`;
+    el.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${html}<div class="time">teraz</div></div>`;
     el.scrollTop = el.scrollHeight;
     positionPmBubble();
   };
@@ -1958,7 +1995,7 @@ function sendPmBubble() {
       // Get the last PM response
       const lastPmMsg = [...data.messages].reverse().find(m => m.sender === 'pm');
       if (lastPmMsg) {
-        el.innerHTML += `<div class="msg bot">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        el.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         el.scrollTop = el.scrollHeight;
         positionPmBubble();
         // Also update sidebar chat
@@ -1968,7 +2005,7 @@ function sendPmBubble() {
           if (msg.sender === 'user') {
             chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
           } else {
-            chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
           }
         });
         chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2099,7 +2136,6 @@ document.addEventListener('click', e => {
   closePmBubble();
 });
 window.addEventListener('resize', () => { if (pmBubbleOpen) positionPmBubble(); });
-initProjectSelect();
 loadData().then(() => loadChatHistory());
 applyTransform();
 </script>

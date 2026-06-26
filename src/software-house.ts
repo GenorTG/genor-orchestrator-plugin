@@ -11,7 +11,7 @@
  */
 
 import { IncomingMessage, ServerResponse } from "node:http";
-import { getDb, WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow } from "./db.js";
+import { getDb, listModels, WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow } from "./db.js";
 import { getDataDir } from "./shared.js";
 
 // ── HELPERS ──────────────────────────────────────────────────
@@ -51,6 +51,18 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
   const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
 
+  // Fetch all projects from orchestrator
+  let allProjects: string[] = [];
+  try {
+    const host = req.headers.host || "localhost:18789";
+    const proto = "http";
+    const prRes = await fetch(`${proto}://${host}/orchestrator/api/projects`);
+    if (prRes.ok) {
+      const prData = await prRes.json() as any;
+      allProjects = (prData.projects || []).map((p: any) => p.name);
+    }
+  } catch {}
+
   // Query workers
   const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(project) as unknown as WorkerRow[];
   
@@ -63,70 +75,79 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
   // Query vault docs
   const vaultDocs = db.prepare("SELECT * FROM vault_docs WHERE project = ?").all(project) as unknown as VaultDocRow[];
 
-  // Format response to match mock JSON shape
-  const response = {
-    defaultProjectId: "genor-orchestrator-plugin",
-    projects: {
-      [project]: {
-        id: project,
-        name: project,
-        rooms: rooms.map(r => ({
-          id: r.id,
-          name: r.name,
-          tag: r.id,
-          color: "#5e9cff",
-          isCommand: r.isCommand === 1,
-          purpose: r.purpose,
-          taskTypes: JSON.parse(r.taskTypes || "[]"),
-          layout: "auto",
-          x: r.x,
-          y: r.y,
-          w: r.w,
-          h: r.h,
-        })),
-        workers: workers.map(w => ({
-          id: w.id,
-          name: w.name,
-          role: w.role,
-          sprite: w.sprite,
-          model: w.model,
-          status: w.status,
-          task: null, // Will be filled from backlog_tasks
-          progress: 0,
-          room: w.room,
-          isOrchestrator: w.role.toLowerCase().includes("project manager"),
-          prompt: w.prompt,
-          ctx: "—",
-        })),
-        tasks: tasks.map(t => ({
-          id: t.id,
-          title: t.title,
-          desc: t.description,
-          worker: t.worker_id || null,
-          phase: t.status,
-          pri: t.priority,
-          type: JSON.parse(t.labels || "[]")[0] || "dev",
-        })),
-        vault: Object.fromEntries(
-          vaultDocs.map(d => [
-            d.path,
-            {
-              folder: d.folder || null,
-              icon: d.icon,
-              title: d.title,
-              updated: d.updated_at,
-              tags: JSON.parse(d.tags || "[]"),
-              status: d.status,
-              links: JSON.parse(d.links || "[]"),
-              html: d.content,
-            },
-          ])
-        ),
-      },
-    },
+  // Build project list — all orchestrator projects + any from software house DB
+  const dbProjects = db.prepare("SELECT DISTINCT project FROM workers UNION SELECT DISTINCT project FROM rooms").all() as any[];
+  const extraProjects = [...new Set([...allProjects, ...dbProjects.map((r: any) => r.project)])].filter(Boolean);
+
+  const projects: Record<string, any> = {};
+  for (const pId of extraProjects) {
+    projects[pId] = {
+      id: pId,
+      name: pId,
+      hasWorkers: (db.prepare("SELECT COUNT(*) as c FROM workers WHERE project = ?").get(pId) as any).c > 0,
+    };
+  }
+
+  // Fill current project with full detail
+  projects[project] = {
+    id: project,
+    name: project,
+    hasWorkers: workers.length > 0,
+    rooms: rooms.map(r => ({
+      id: r.id,
+      name: r.name,
+      tag: r.id,
+      color: "#5e9cff",
+      isCommand: r.isCommand === 1,
+      purpose: r.purpose,
+      taskTypes: JSON.parse(r.taskTypes || "[]"),
+      layout: "auto",
+      x: r.x,
+      y: r.y,
+      w: r.w,
+      h: r.h,
+    })),
+    workers: workers.map(w => ({
+      id: w.id,
+      name: w.name,
+      role: w.role,
+      sprite: w.sprite,
+      model: w.model,
+      status: w.status,
+      task: null,
+      progress: 0,
+      room: w.room,
+      isOrchestrator: w.role.toLowerCase().includes("project manager"),
+      prompt: w.prompt,
+      ctx: "—",
+    })),
+    tasks: tasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      desc: t.description,
+      worker: t.worker_id || null,
+      phase: t.status,
+      pri: t.priority,
+      type: JSON.parse(t.labels || "[]")[0] || "dev",
+    })),
+    vault: Object.fromEntries(
+      vaultDocs.map(d => [
+        d.path,
+        {
+          folder: d.folder || null,
+          icon: d.icon,
+          title: d.title,
+          updated: d.updated_at,
+          tags: JSON.parse(d.tags || "[]"),
+          status: d.status,
+          links: JSON.parse(d.links || "[]"),
+          html: d.content,
+        },
+      ])
+    ),
   };
 
-  json(res, { ok: true, ...response });
+  json(res, { ok: true, defaultProjectId: project, projects });
 }
 
 // ── WORKERS ──────────────────────────────────────────────────
@@ -186,7 +207,7 @@ export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse
   const values: any[] = [];
 
   for (const [key, value] of Object.entries(body)) {
-    if (["name", "role", "sprite", "model", "prompt", "room", "status"].includes(key)) {
+    if (["name", "role", "sprite", "model", "prompt", "room"].includes(key)) {
       updates.push(`${key} = ?`);
       values.push(value);
     }
@@ -745,6 +766,50 @@ export async function handleWorkerRecover(req: IncomingMessage, res: ServerRespo
   json(res, { ok: true, tasksRequeued: result.changes });
 }
 
+/**
+ * GET /api/software-house/models
+ * List available agent-ready models from OpenClaw registry.
+ */
+export async function handleModels(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const models = listModels(true); // agent_ready only
+    json(res, models.map((m: any) => ({
+      id: m.id || m.name,
+      name: m.name || m.id,
+      provider: m.provider || "",
+    })));
+  } catch (e) {
+    json(res, { error: "Failed to load models" }, 500);
+  }
+}
+
+/**
+ * POST /api/software-house/projects/create
+ * Create a new project via the orchestrator.
+ */
+export async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await parseBody(req);
+  const name = body?.name?.trim();
+  if (!name) {
+    json(res, { error: "name required" }, 400);
+    return;
+  }
+
+  try {
+    const host = req.headers.host || "localhost:18789";
+    const proto = "http";
+    const createRes = await fetch(`${proto}://${host}/orchestrator/api/create-project`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await createRes.json();
+    json(res, { ok: createRes.ok, ...data });
+  } catch (e) {
+    json(res, { error: "Failed to create project" }, 500);
+  }
+}
+
 // ── ROUTER ───────────────────────────────────────────────────
 
 /**
@@ -767,6 +832,18 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
     // Bootstrap
     if (normalizedPathname === "/api/software-house/bootstrap" && method === "GET") {
       await handleBootstrap(req, res);
+      return true;
+    }
+
+    // Models
+    if (normalizedPathname === "/api/software-house/models" && method === "GET") {
+      await handleModels(req, res);
+      return true;
+    }
+
+    // Project management
+    if (normalizedPathname === "/api/software-house/projects/create" && method === "POST") {
+      await handleCreateProject(req, res);
       return true;
     }
 
