@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS workers (
     room TEXT DEFAULT '',
     status TEXT DEFAULT 'sleep',
     project TEXT DEFAULT '',
+    is_pm INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS rooms (
@@ -466,6 +467,19 @@ const MIGRATIONS = [
         name: "Add worker sessions, messages, and task history",
         apply: () => {
             migrateV5();
+        },
+    },
+    {
+        version: 6,
+        name: "Add is_pm column to workers table",
+        apply: () => {
+            const db = getDb();
+            try {
+                db.exec("ALTER TABLE workers ADD COLUMN is_pm INTEGER DEFAULT 0");
+            }
+            catch { /* column may already exist */ }
+            const now = Math.floor(Date.now() / 1000);
+            db.prepare("INSERT OR REPLACE INTO _schema_version (version, name, applied_ts) VALUES (?, ?, ?)").run(6, "Add is_pm column to workers table", now);
         },
     },
 ];

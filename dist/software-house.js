@@ -102,7 +102,8 @@ export async function handleBootstrap(req, res) {
             task: null,
             progress: 0,
             room: w.room,
-            isOrchestrator: w.role.toLowerCase().includes("project manager"),
+            isOrchestrator: w.is_pm === 1 || w.role.toLowerCase().includes("project manager"),
+            is_pm: w.is_pm === 1,
             prompt: w.prompt,
             ctx: "—",
         })),
@@ -149,17 +150,18 @@ export async function handleWorkersGet(req, res) {
 export async function handleWorkerHire(req, res) {
     const db = getDb();
     const body = await parseBody(req);
-    const { id: providedId, name, role, sprite, model, prompt, room, project } = body;
+    const { id: providedId, name, role, sprite, model, prompt, room, project, is_pm } = body;
     if (!name) {
         json(res, { error: "name required" }, 400);
         return;
     }
     // Generate ID if not provided
     const id = providedId || `w${Date.now()}`;
+    const isPmValue = is_pm ? 1 : 0;
     db.prepare(`
-    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin");
+    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", isPmValue);
     json(res, { ok: true, worker: { id, name } });
 }
 /**
@@ -178,9 +180,9 @@ export async function handleWorkerEdit(req, res) {
     const updates = [];
     const values = [];
     for (const [key, value] of Object.entries(body)) {
-        if (["name", "role", "sprite", "model", "prompt", "room"].includes(key)) {
+        if (["name", "role", "sprite", "model", "prompt", "room", "is_pm"].includes(key)) {
             updates.push(`${key} = ?`);
-            values.push(value);
+            values.push(key === "is_pm" ? (value ? 1 : 0) : value);
         }
     }
     if (updates.length === 0) {

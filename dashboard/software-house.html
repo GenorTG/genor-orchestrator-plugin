@@ -511,8 +511,13 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 
   <aside class="chat-panel">
     <div class="chat-head">
-      <div style="font-weight:700;color:var(--text-bright);font-size:13px">💬 Chat z Orchestratorem</div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Kliknij PM na mapie → dymek czatu</div>
+      <div style="font-weight:700;color:var(--text-bright);font-size:13px">💬 Chat z pracownikiem</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Wybierz pracownika z listy i pisz jak do PM</div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+        <select id="chatWorkerSelect" style="flex:1;background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text-bright);font-size:11px" onchange="onChatWorkerSelect(this.value)">
+          <option value="">🧠 Wybierz pracownika…</option>
+        </select>
+      </div>
       <div class="quick-chips">
         <button class="chip" onclick="orchSay('status')">Status</button>
         <button class="chip" onclick="orchSay('plan')">Plan</button>
@@ -522,11 +527,11 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       </div>
     </div>
     <div class="chat-msgs" id="chatMsgs">
-      <div class="msg bot">Cześć! Kliknij <b>Project Managera</b> na mapie — otworzy się dymek czatu. Albo pisz tutaj. Vault z dokumentacją → 📚 w sidebarze.
+      <div class="msg bot">Cześć! Wybierz pracownika z listy, żeby rozpocząć czat. Albo kliknij pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.
         <div class="time">teraz</div></div>
     </div>
     <div class="chat-input-wrap">
-      <input id="chatInput" placeholder="Napisz do orchestratora…" onkeydown="if(event.key==='Enter')sendChat()">
+      <input id="chatInput" placeholder="Napisz do pracownika…" onkeydown="if(event.key==='Enter')sendChat()">
       <button onclick="sendChat()">→</button>
     </div>
   </aside>
@@ -569,6 +574,10 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
               <img src="assets/pixel-agents/hacker/static.png" alt=""><span style="font-size:10px;color:var(--text-dim)">Hacker</span>
             </div>
           </div></div>
+        <div class="form-field" style="display:flex;flex-direction:row;align-items:center;gap:8px;grid-column:1/-1;padding:8px 0">
+          <input type="checkbox" id="hireIsPm" style="width:18px;height:18px;cursor:pointer">
+          <label for="hireIsPm" style="cursor:pointer;font-weight:700;color:var(--purple)">🧠 PM — ustaw jako Project Managera</label>
+        </div>
         <div class="form-field full"><label>Instrukcje</label>
           <textarea id="hirePrompt">Programista w software house. Czysty kod, testy, raportowanie postępu.</textarea></div>
       </div>
@@ -712,6 +721,10 @@ function loadProject(id, skipSave) {
   document.getElementById('projectSelect').value = id;
   activeVaultFile = 'STATE.md';
   renderAll();
+  // Populate worker selector
+  const ws = document.getElementById('chatWorkerSelect');
+  ws.innerHTML = '<option value="">🧠 Wybierz pracownika…</option>' + 
+    agents.map(a => `<option value="${a.id}">${a.isOrchestrator ? '🧠' : '👤'} ${a.name} (${a.role})</option>`).join('');
   if (!skipSave) toast(`📁 Projekt: ${project.name}`);
 }
 
@@ -752,7 +765,7 @@ function switchProject(id) {
 }
 
 function getTeamStats() {
-  const devs = agents.filter(a => !a.isOrchestrator);
+  const devs = agents; // All workers including PM
   const working = devs.filter(a => ['working','reviewing','thinking'].includes(visualState(a))).length;
   const sleep = devs.filter(a => visualState(a) === 'sleep').length;
   const errors = devs.filter(a => visualState(a) === 'error').length;
@@ -762,7 +775,7 @@ function getTeamStats() {
 function renderProjPanel() {
   const s = getTeamStats();
   document.getElementById('projStats').innerHTML = `
-    <div class="stat-card wide"><div><div class="num">${s.total}</div><div class="lbl">Programistów</div></div>
+    <div class="stat-card wide"><div><div class="num">${s.total}</div><div class="lbl">Pracowników</div></div>
       <div style="text-align:right;font-size:10px;color:var(--text-dim)">${s.tasks} aktywnych tasków</div></div>
     <div class="stat-card working"><div class="num">${s.working}</div><div class="lbl">Pracuje</div></div>
     <div class="stat-card sleep"><div class="num">${s.sleep}</div><div class="lbl">Sleep</div></div>
@@ -779,7 +792,7 @@ function renderProjPanel() {
     </div>`;
   }
   listHtml += rooms.filter(r => !r.isCommand).map(r => {
-    const cnt = agents.filter(a => a.room === r.id && !a.isOrchestrator).length;
+    const cnt = agents.filter(a => a.room === r.id).length;
     const active = detailMode === 'room' && detailId === r.id ? ' active' : '';
     return `<div class="room-row${active}" onclick="openRoomPanel('${r.id}')">
       <span class="dot" style="background:${r.color}"></span>
@@ -1277,9 +1290,8 @@ function openAgentPanel(id) { openDetailPanel('agent', id); }
 function onDeskClick(e, id) {
   e.stopPropagation();
   const a = agents.find(x => x.id === id);
-  if (a?.isOrchestrator) { openPmBubble(id); return; }
-  closePmBubble();
-  openAgentPanel(id);
+  if (!a) return;
+  openPmBubble(id);
 }
 function openRoomPanel(id) { openDetailPanel('room', id); }
 function openTaskPanel(id) { openDetailPanel('task', id); }
@@ -1317,11 +1329,15 @@ function renderAgentPanel(id) {
       <div class="form-field"><label>Sprite</label>
         <select id="mSprite">${Object.entries(SPRITES).map(([k,v])=>
           `<option value="${k}"${a.sprite===k?' selected':''}>${v.label}</option>`).join('')}</select></div>
+      <div class="form-field" style="display:flex;flex-direction:row;align-items:center;gap:8px;padding:16px 0 0">
+        <input type="checkbox" id="mIsPm" style="width:18px;height:18px;cursor:pointer" ${a.isOrchestrator ? 'checked' : ''}>
+        <label for="mIsPm" style="cursor:pointer;font-weight:700;color:var(--purple);font-size:12px">🧠 PM — Project Manager</label>
+      </div>
       <div class="form-field"><label>Aktualne zadanie</label><input id="mTask" value="${a.task||''}" placeholder="Brak"></div>
       ${a.progress ? `<div class="form-field"><label>Postęp ${a.progress}%</label><div class="progress"><i style="width:${a.progress}%"></i></div></div>` : ''}
       <div class="form-field"><label>Instrukcje systemowe</label><textarea id="mPrompt">${a.prompt}</textarea></div>
     </div>
-    ${room && !isOrch ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openRoomPanel('${room.id}')">🏢 Ustawienia pokoju: ${room.name}</button>` : ''}
+    ${room ? `<button class="btn" style="width:100%;margin-top:12px" onclick="openRoomPanel('${room.id}')">🏢 Ustawienia pokoju: ${room.name}</button>` : ''}
     ${agentTasks.length ? `<div class="detail-section"><h4>Taski (${agentTasks.length})</h4>
       ${agentTasks.map(t=>`<div class="kanban-card" onclick="openTaskPanel('${t.id}')">${t.pri} ${t.title}</div>`).join('')}
     </div>` : ''}
@@ -1338,12 +1354,16 @@ function saveAgent() {
   const a = agents.find(x => x.id === selectedAgent);
   if (!a) return;
   
+  const isPmCheckbox = document.getElementById('mIsPm');
+  const isPm = isPmCheckbox ? isPmCheckbox.checked : a.isOrchestrator;
+  
   const updates = {
     model: document.getElementById('mModel').value,
     room: document.getElementById('mRoom').value,
     sprite: document.getElementById('mSprite').value,
     task: document.getElementById('mTask').value || null,
     prompt: document.getElementById('mPrompt').value,
+    is_pm: isPm,
   };
   
   // Call real API
@@ -1354,6 +1374,11 @@ function saveAgent() {
   }).then(res => res.json()).then(data => {
     if (data.ok) {
       Object.assign(a, updates);
+      a.isOrchestrator = isPm;
+      // Re-populate worker selector
+      const ws = document.getElementById('chatWorkerSelect');
+      ws.innerHTML = '<option value="">🧠 Wybierz pracownika…</option>' + 
+        agents.map(x => `<option value="${x.id}">${x.isOrchestrator ? '🧠' : '👤'} ${x.name} (${x.role})</option>`).join('');
       if (!manualRoomLayout) manualRoomLayout = false;
       renderAll();
       renderAgentPanel(a.id);
@@ -1511,7 +1536,7 @@ function renderRoomPanel(roomId) {
   const r = rooms.find(x => x.id === roomId);
   if (!r) return;
   pickedRoomTaskTypes = [...(r.taskTypes || [])];
-  const devs = agents.filter(a => a.room === roomId && !a.isOrchestrator);
+  const devs = agents.filter(a => a.room === roomId);
   const routed = tasks.filter(t => r.taskTypes?.includes(t.type));
   const size = computeRoomSize(r);
 
@@ -1659,13 +1684,15 @@ function pickSprite(el) {
   el.classList.add('picked'); pickedSprite = el.dataset.sprite;
 }
 function confirmHire() {
+  const isPm = document.getElementById('hireIsPm').checked;
   const workerData = {
     name: document.getElementById('hireName').value.trim() || 'Nowy Agent',
-    role: document.getElementById('hireRole').value,
+    role: isPm ? 'Project Manager' : document.getElementById('hireRole').value,
     sprite: pickedSprite,
     model: document.getElementById('hireModel').value,
     room: document.getElementById('hireRoom').value,
     prompt: document.getElementById('hirePrompt').value,
+    is_pm: isPm,
   };
   
   // Call real API
@@ -1678,6 +1705,7 @@ function confirmHire() {
       const a = {
         id: data.worker.id,
         ...workerData,
+        isOrchestrator: isPm,
         status: 'sleep', task: null, progress: 0,
         ctx: '0/195k',
       };
@@ -1697,26 +1725,42 @@ function confirmHire() {
 }
 
 // CHAT
-function addBotMsg(html) {
+function getSelectedChatWorker() {
+  const sel = document.getElementById('chatWorkerSelect').value;
+  return sel ? agents.find(a => a.id === sel) : null;
+}
+function onChatWorkerSelect(workerId) {
+  if (!workerId) return;
+  const a = agents.find(x => x.id === workerId);
+  if (!a) return;
+  const chatMsgs = document.getElementById('chatMsgs');
+  chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt="">Rozpoczęto czat z <b>${a.name}</b> (${a.role}).<div class="time">teraz</div></div>`;
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+}
+function addBotMsg(html, worker) {
   const el = document.getElementById('chatMsgs');
-  el.innerHTML += `<div class="msg bot">${html}<div class="time">teraz</div></div>`;
+  const sprite = worker?.sprite || 'blue';
+  el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${html}<div class="time">teraz</div></div>`;
   el.scrollTop = el.scrollHeight;
 }
 function orchSay(key) {
   const replies = {
-    status: () => `📊 <b>${project.name}</b><br>${agents.filter(a=>!a.isOrchestrator).map(a=>`• ${a.name}: ${STATUS[visualState(a)]?.label}${a.task?' — '+a.task:''}`).join('<br>')}`,
+    status: () => `📊 <b>${project.name}</b><br>${agents.map(a=>`• ${a.name}${a.isOrchestrator?' 🧠':''}: ${STATUS[visualState(a)]?.label}${a.task?' — '+a.task:''}`).join('<br>')}`,
     plan: () => `📋 Plan dla <b>${project.name}</b>:<br>1. API Gateway (Alex 64%)<br>2. Dashboard UI (Maya 72%)<br>3. Fix CI (Bob — ERROR)<br><button class="act" onclick="toast('Plan OK')">Zatwierdź</button>`,
-    help: () => `Kliknij agenta → panel. PM → dymek czatu. Kanban → klik task. Vault → 📚 kontekst projektu.`,
+    help: () => `Kliknij agenta → dymek czatu. Kanban → klik task. Vault → 📚 kontekst projektu.`,
     hire: () => `Kliknij <b>+ Wolne biurko</b> — bez limitu miejsc w pokoju.`,
   };
   orchSay._reply = k => replies[k] ? replies[k]() : '';
   if (key === 'hire') { openHireModal(); return; }
-  if (replies[key]) addBotMsg(replies[key]());
+  if (replies[key]) addBotMsg(replies[key](), getSelectedChatWorker());
 }
 function sendChat() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
+  
+  const worker = getSelectedChatWorker();
+  const workerId = worker?.id || null;
   
   // Display user message
   document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
@@ -1726,13 +1770,13 @@ function sendChat() {
   fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: text, sender: 'user' })
+    body: JSON.stringify({ message: text, sender: 'user', workerId: workerId })
   }).then(res => res.json()).then(data => {
     if (data.ok) {
       // Fetch chat history to get PM response from backend
       return fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
     } else {
-      addBotMsg('Coś poszło nie tak. Spróbuj ponownie.');
+      addBotMsg('Coś poszło nie tak. Spróbuj ponownie.', worker);
     }
   }).then(res => res?.json()).then(data => {
     if (data?.ok && data.messages) {
@@ -1742,13 +1786,14 @@ function sendChat() {
         if (msg.sender === 'user') {
           chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         } else {
-          chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          const sprite = worker?.sprite || 'blue';
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
     }
   }).catch(err => {
-    addBotMsg('Błąd połączenia: ' + err.message);
+    addBotMsg('Błąd połączenia: ' + err.message, worker);
   });
 }
 
@@ -1806,8 +1851,8 @@ function sendWorkerMessage() {
     return;
   }
   
-  // Find PM as sender (or use first available worker)
-  const senderId = agents.find(a => a.isOrchestrator)?.id || agents[0]?.id;
+  // Use first available worker as sender
+  const senderId = agents[0]?.id;
   if (!senderId) {
     toast('❌ Brak dostępnych nadawców');
     return;
@@ -1891,7 +1936,10 @@ function openPmBubble(id) {
   document.getElementById('pmBubbleAvatar').src = staticPath(a.sprite);
   renderPmBubbleMsgs();
   document.getElementById('pmBubble').classList.add('show');
-  document.querySelectorAll('.desk-slot.orchestrator').forEach(el => el.classList.add('chatting'));
+  // Find the desk slot for this specific worker and mark it
+  document.querySelectorAll('.desk-slot').forEach(el => el.classList.remove('chatting'));
+  const desk = document.querySelector(`.desk-slot[style*="${a._x}px"], .desk-slot[style*="top:${a._y}px"]`);
+  if (desk) desk.classList.add('chatting');
   positionPmBubble();
   setTimeout(() => document.getElementById('pmBubbleInput').focus(), 80);
   renderDesks();
@@ -1899,12 +1947,14 @@ function openPmBubble(id) {
 function closePmBubble() {
   pmBubbleOpen = false;
   document.getElementById('pmBubble').classList.remove('show');
-  document.querySelectorAll('.desk-slot.orchestrator').forEach(el => el.classList.remove('chatting'));
-  if (selectedAgent && agents.find(a => a.id === selectedAgent)?.isOrchestrator) selectedAgent = null;
+  document.querySelectorAll('.desk-slot').forEach(el => el.classList.remove('chatting'));
+  selectedAgent = null;
   renderDesks();
 }
 function positionPmBubble() {
-  const desk = document.querySelector('.desk-slot.orchestrator');
+  const a = agents.find(x => x.id === selectedAgent);
+  if (!a) return;
+  const desk = document.querySelector(`[style*="left:${a._x}px"][style*="top:${a._y}px"]`);
   const bubble = document.getElementById('pmBubble');
   if (!desk || !bubble.classList.contains('show')) return;
   const rect = desk.getBoundingClientRect();
@@ -1925,14 +1975,19 @@ function positionPmBubble() {
   bubble.style.top = top + 'px';
 }
 function renderPmBubbleMsgs() {
+  const a = agents.find(x => x.id === selectedAgent);
+  if (!a) return;
   const el = document.getElementById('pmBubbleMsgs');
-  const welcome = `Cześć! Jestem <b>Project Managerem</b> projektu <b>${project.name}</b>. Mogę zaplanować sprint, sprawdzić status zespołu albo zatrudnić kogoś.`;
-  el.innerHTML = `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${welcome}<div class="time">teraz</div></div>`;
+  const roleLabel = a.isOrchestrator ? 'Project Managerem' : 'asystentem';
+  const welcome = `Cześć! Jestem <b>${a.name}</b>, ${roleLabel} projektu <b>${project.name}</b>. Mogę zaplanować sprint, sprawdzić status zespołu albo zatrudnić kogoś.`;
+  el.innerHTML = `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt="">${welcome}<div class="time">teraz</div></div>`;
 }
 function pmQuick(action) {
+  const a = agents.find(x => x.id === selectedAgent);
   const el = document.getElementById('pmBubbleMsgs');
+  const sprite = a?.sprite || 'blue';
   const append = html => {
-    el.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${html}<div class="time">teraz</div></div>`;
+    el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${html}<div class="time">teraz</div></div>`;
     el.scrollTop = el.scrollHeight;
     positionPmBubble();
   };
@@ -1972,6 +2027,8 @@ function sendPmBubble() {
   const input = document.getElementById('pmBubbleInput');
   const text = input.value.trim();
   if (!text) return;
+  const a = agents.find(x => x.id === selectedAgent);
+  const sprite = a?.sprite || 'blue';
   const el = document.getElementById('pmBubbleMsgs');
   el.innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   input.value = '';
@@ -1980,11 +2037,11 @@ function sendPmBubble() {
   // Also send to sidebar chat
   document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   
-  // Send to real API, then fetch updated chat history (includes PM response)
+  // Send to real API, then fetch updated chat history (includes PM/worker response)
   fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: text, sender: 'user' })
+    body: JSON.stringify({ message: text, sender: 'user', workerId: selectedAgent })
   }).then(res => res.json()).then(data => {
     if (data.ok) {
       // Fetch chat history to get PM response from backend
@@ -1995,17 +2052,18 @@ function sendPmBubble() {
       // Get the last PM response
       const lastPmMsg = [...data.messages].reverse().find(m => m.sender === 'pm');
       if (lastPmMsg) {
-        el.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         el.scrollTop = el.scrollHeight;
         positionPmBubble();
         // Also update sidebar chat
         const chatMsgs = document.getElementById('chatMsgs');
         chatMsgs.innerHTML = '';
         data.messages.forEach(msg => {
+          const msgSprite = msg.worker_id ? agents.find(x => x.id === msg.worker_id)?.sprite || 'blue' : (a?.sprite || 'blue');
           if (msg.sender === 'user') {
             chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
           } else {
-            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt="PM">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(msgSprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
           }
         });
         chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2111,10 +2169,12 @@ async function loadChatHistory() {
       const chatMsgs = document.getElementById('chatMsgs');
       chatMsgs.innerHTML = '';
       data.messages.forEach(msg => {
+        const worker = msg.worker_id ? agents.find(a => a.id === msg.worker_id) : null;
+        const sprite = worker?.sprite || 'blue';
         if (msg.sender === 'user') {
           chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         } else {
-          chatMsgs.innerHTML += `<div class="msg bot">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2132,7 +2192,7 @@ try {
 applyFontScale();
 document.addEventListener('click', e => {
   if (!pmBubbleOpen) return;
-  if (e.target.closest('#pmBubble,.desk-slot.orchestrator')) return;
+  if (e.target.closest('#pmBubble,.desk-slot')) return;
   closePmBubble();
 });
 window.addEventListener('resize', () => { if (pmBubbleOpen) positionPmBubble(); });

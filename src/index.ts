@@ -6321,6 +6321,7 @@ Focus specifically on: ${params.topic}` : "";
       parameters: Type.Object({
         name: Type.String({ description: "Worker name." }),
         role: Type.String({ description: "Worker role (e.g. developer, designer)." }),
+        is_pm: Type.Optional(Type.Boolean({ description: "Set true to make this worker a PM (Project Manager)." })),
         sprite: Type.Optional(Type.String({ description: "Sprite color/style (default: blue)." })),
         model: Type.Optional(Type.String({ description: "AI model to use for this worker." })),
         room: Type.Optional(Type.String({ description: "Room ID to place the worker in." })),
@@ -6330,11 +6331,12 @@ Focus specifically on: ${params.topic}` : "";
         const db = getDb();
         const id = `w${Date.now()}`;
         const proj = params.project || "genor-orchestrator-plugin";
+        const isPmValue = params.is_pm ? 1 : 0;
         db.prepare(`
-          INSERT INTO workers (id, name, role, sprite, model, prompt, room, project)
-          VALUES (?, ?, ?, ?, ?, '', ?, ?)
-        `).run(id, params.name, params.role || "", params.sprite || "blue", params.model || "", params.room || "", proj);
-        return txt({ ok: true, worker: { id, name: params.name } });
+          INSERT INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
+          VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)
+        `).run(id, params.name, params.role || "", params.sprite || "blue", params.model || "", params.room || "", proj, isPmValue);
+        return txt({ ok: true, worker: { id, name: params.name, is_pm: params.is_pm || false } });
       },
     });
 
@@ -6383,6 +6385,25 @@ Focus specifically on: ${params.topic}` : "";
         db.prepare("DELETE FROM backlog_tasks WHERE worker_id = ?").run(params.worker_id);
         db.prepare("DELETE FROM workers WHERE id = ?").run(params.worker_id);
         return txt({ ok: true });
+      },
+    });
+
+    api.registerTool({
+      name: "genorch_worker_set_pm",
+      label: "Set Worker as PM",
+      description: "Set or unset a worker as Project Manager (PM).",
+      parameters: Type.Object({
+        worker_id: Type.String({ description: "Worker ID." }),
+        is_pm: Type.Boolean({ description: "True to make this worker a PM, false to remove PM status." }),
+      }),
+      async execute(_id: string, params: any) {
+        const db = getDb();
+        const isPmValue = params.is_pm ? 1 : 0;
+        const result = db.prepare("UPDATE workers SET is_pm = ? WHERE id = ?").run(isPmValue, params.worker_id);
+        if (result.changes === 0) {
+          return txt({ ok: false, error: "worker not found" });
+        }
+        return txt({ ok: true, worker_id: params.worker_id, is_pm: !!params.is_pm });
       },
     });
 

@@ -117,7 +117,8 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
       task: null,
       progress: 0,
       room: w.room,
-      isOrchestrator: w.role.toLowerCase().includes("project manager"),
+      isOrchestrator: w.is_pm === 1 || w.role.toLowerCase().includes("project manager"),
+      is_pm: w.is_pm === 1,
       prompt: w.prompt,
       ctx: "—",
     })),
@@ -170,7 +171,7 @@ export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse
 export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const db = getDb();
   const body = await parseBody(req);
-  const { id: providedId, name, role, sprite, model, prompt, room, project } = body;
+  const { id: providedId, name, role, sprite, model, prompt, room, project, is_pm } = body;
 
   if (!name) {
     json(res, { error: "name required" }, 400);
@@ -179,11 +180,12 @@ export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse
 
   // Generate ID if not provided
   const id = providedId || `w${Date.now()}`;
+  const isPmValue = is_pm ? 1 : 0;
 
   db.prepare(`
-    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin");
+    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", isPmValue);
 
   json(res, { ok: true, worker: { id, name } });
 }
@@ -207,9 +209,9 @@ export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse
   const values: any[] = [];
 
   for (const [key, value] of Object.entries(body)) {
-    if (["name", "role", "sprite", "model", "prompt", "room"].includes(key)) {
+    if (["name", "role", "sprite", "model", "prompt", "room", "is_pm"].includes(key)) {
       updates.push(`${key} = ?`);
-      values.push(value);
+      values.push(key === "is_pm" ? (value ? 1 : 0) : value);
     }
   }
 
