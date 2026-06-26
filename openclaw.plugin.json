@@ -2,7 +2,7 @@
   "id": "genor-orchestrator-software-house",
   "name": "Genor's Orchestrator",
   "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
-  "version": "0.1.0-alpha",
+  "version": "1.1.0-alpha",
   "configSchema": {
     "type": "object",
     "properties": {
