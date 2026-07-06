@@ -9,7 +9,11 @@
  * - PM Chat: persistent messaging
  * - Vault: document management
  */
-import { getDb, listModels } from "./db.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { execSync } from "node:child_process";
+import { getDb, listModels, setProjectConfig, getProjectConfig } from "./db.js";
+import { getDataDir } from "./shared.js";
 // ── HELPERS ──────────────────────────────────────────────────
 function json(res, data, status = 200) {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -33,6 +37,48 @@ function parseBody(req) {
 function getProject(req) {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     return url.searchParams.get("project") || null;
+}
+// ── GIT HELPERS ────────────────────────────────────────────────
+function gitExec(location, args, timeout = 15000) {
+    if (!fs.existsSync(path.join(location, ".git")))
+        return "";
+    try {
+        return execSync(`git ${args.join(" ")}`, {
+            cwd: location,
+            encoding: "utf-8",
+            timeout,
+            stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+    }
+    catch {
+        return "";
+    }
+}
+function getRepoStatus(location) {
+    const gitDir = path.join(location, ".git");
+    if (!fs.existsSync(gitDir)) {
+        return { hasRepo: false };
+    }
+    const branch = gitExec(location, ["rev-parse", "--abbrev-ref", "HEAD"]) || "unknown";
+    const lastCommitRaw = gitExec(location, ["log", "--oneline", "-1"]);
+    const lastCommit = lastCommitRaw || "";
+    const remote = gitExec(location, ["remote", "get-url", "origin"]) || "";
+    const statusOut = gitExec(location, ["status", "--porcelain"]) || "";
+    const dirty = statusOut.length > 0;
+    let ahead = 0;
+    let behind = 0;
+    if (remote) {
+        try {
+            const revList = gitExec(location, ["rev-list", "--left-right", "--count", `${branch}...${branch}@{upstream}`], 10000);
+            if (revList) {
+                const parts = revList.split(/\s+/);
+                ahead = parseInt(parts[0], 10) || 0;
+                behind = parseInt(parts[1], 10) || 0;
+            }
+        }
+        catch { /* no upstream */ }
+    }
+    return { hasRepo: true, branch, dirty, lastCommit, remote, ahead, behind };
 }
 // ── BOOTSTRAP ────────────────────────────────────────────────
 /**
@@ -67,17 +113,35 @@ export async function handleBootstrap(req, res) {
     const extraProjects = [...new Set([...allProjects, ...dbProjects.map((r) => r.project)])].filter(Boolean);
     const projects = {};
     for (const pId of extraProjects) {
+        const pc = getProjectConfig(pId);
+        const repoUrl = pc?.repo_url || "";
+        const location = pc?.location || "";
+        let repoStatus = null;
+        if (location && fs.existsSync(location)) {
+            repoStatus = getRepoStatus(location);
+        }
         projects[pId] = {
             id: pId,
             name: pId,
             hasWorkers: db.prepare("SELECT COUNT(*) as c FROM workers WHERE project = ?").get(pId).c > 0,
+            repo_url: repoUrl,
+            repo: repoStatus,
         };
     }
     // Fill current project with full detail
+    const pc = getProjectConfig(project);
+    const repoUrl = pc?.repo_url || "";
+    const location = pc?.location || "";
+    let repoStatus = null;
+    if (location && fs.existsSync(location)) {
+        repoStatus = getRepoStatus(location);
+    }
     projects[project] = {
         id: project,
         name: project,
         hasWorkers: workers.length > 0,
+        repo_url: repoUrl,
+        repo: repoStatus,
         rooms: rooms.map(r => ({
             id: r.id,
             name: r.name,
@@ -665,19 +729,209 @@ export async function handleCreateProject(req, res) {
         json(res, { error: "name required" }, 400);
         return;
     }
+    const repoUrl = body?.repo_url?.trim() || "";
     try {
-        const host = req.headers.host || "localhost:18789";
-        const proto = "http";
-        const createRes = await fetch(`${proto}://${host}/orchestrator/api/create-project`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name }),
-        });
-        const data = await createRes.json();
-        json(res, { ok: createRes.ok, ...data });
+        const dataDir = getDataDir();
+        const location = path.join(dataDir, "projects", name);
+        // Create directory / clone repo
+        let cloned = false;
+        if (repoUrl) {
+            // Remove existing dir if present (e.g. from a previous failed attempt)
+            if (fs.existsSync(location)) {
+                fs.rmSync(location, { recursive: true, force: true });
+            }
+            fs.mkdirSync(path.dirname(location), { recursive: true });
+            execSync(`git clone "${repoUrl}" "${location}"`, {
+                encoding: "utf-8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"],
+            });
+            cloned = true;
+        }
+        else {
+            fs.mkdirSync(location, { recursive: true });
+            execSync(`git init "${location}"`, {
+                encoding: "utf-8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
+            });
+        }
+        // Store project config
+        const config = { location };
+        if (repoUrl)
+            config.repo_url = repoUrl;
+        setProjectConfig(name, config);
+        // Forward to orchestrator API (skip when cloned — we already set up everything)
+        if (!cloned) {
+            const host = req.headers.host || "localhost:18789";
+            const proto = "http";
+            try {
+                await fetch(`${proto}://${host}/orchestrator/api/create-project`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name }),
+                });
+            }
+            catch { /* orchestrator API may not be available */ }
+        }
+        json(res, { ok: true, project: name, location, repo_url: repoUrl, cloned });
     }
     catch (e) {
-        json(res, { error: "Failed to create project" }, 500);
+        json(res, { error: e.message || "Failed to create project" }, 500);
+    }
+}
+// ── GIT / REPO ENDPOINTS ──────────────────────────────────
+/**
+ * POST /api/software-house/projects/clone
+ * Clone a repo into an existing project location.
+ */
+export async function handleCloneProject(req, res) {
+    const body = await parseBody(req);
+    const { project, repo_url } = body;
+    if (!project || !repo_url) {
+        json(res, { error: "project and repo_url required" }, 400);
+        return;
+    }
+    try {
+        const dataDir = getDataDir();
+        const existing = getProjectConfig(project);
+        const location = existing?.location || path.join(dataDir, "projects", project);
+        // Remove existing content before cloning
+        if (fs.existsSync(location)) {
+            fs.rmSync(location, { recursive: true, force: true });
+        }
+        fs.mkdirSync(path.dirname(location), { recursive: true });
+        execSync(`git clone "${repo_url}" "${location}"`, {
+            encoding: "utf-8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"],
+        });
+        // Update project config
+        setProjectConfig(project, { location, repo_url });
+        json(res, { ok: true, project, location });
+    }
+    catch (e) {
+        json(res, { error: e.message || "Failed to clone project" }, 500);
+    }
+}
+/**
+ * GET /api/software-house/projects/:name/repo
+ * Return git status for a project.
+ */
+export async function handleRepoStatus(req, res) {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const cleanPath = url.pathname.replace(/^\/orchestrator/, "");
+    const match = cleanPath.match(/^\/api\/software-house\/projects\/([^/]+)\/repo$/);
+    if (!match) {
+        json(res, { error: "invalid path" }, 400);
+        return;
+    }
+    const projectName = match[1];
+    try {
+        const pc = getProjectConfig(projectName);
+        const location = pc?.location;
+        if (!location || !fs.existsSync(location)) {
+            json(res, { ok: true, hasRepo: false, error: "Project location not found" });
+            return;
+        }
+        const status = getRepoStatus(location);
+        json(res, { ok: true, ...status });
+    }
+    catch (e) {
+        json(res, { error: e.message || "Failed to get repo status" }, 500);
+    }
+}
+/**
+ * POST /api/software-house/projects/:name/repo/push
+ * Stage all, commit, and push.
+ */
+export async function handleRepoPush(req, res) {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const cleanPath = url.pathname.replace(/^\/orchestrator/, "");
+    const match = cleanPath.match(/^\/api\/software-house\/projects\/([^/]+)\/repo\/push$/);
+    if (!match) {
+        json(res, { error: "invalid path" }, 400);
+        return;
+    }
+    const projectName = match[1];
+    const body = await parseBody(req);
+    const { message } = body;
+    if (!message) {
+        json(res, { error: "commit message required" }, 400);
+        return;
+    }
+    try {
+        const pc = getProjectConfig(projectName);
+        const location = pc?.location;
+        if (!location || !fs.existsSync(path.join(location, ".git"))) {
+            json(res, { error: "No git repository at project location" }, 400);
+            return;
+        }
+        let committed = false;
+        let pushed = false;
+        // Stage all
+        execSync(`git add -A`, { cwd: location, encoding: "utf-8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] });
+        // Check if there's something to commit
+        const statusOut = execSync(`git status --porcelain`, { cwd: location, encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+        if (statusOut) {
+            // Use temp file for commit message to avoid shell escaping issues
+            const msgFile = path.join(location, ".git", "_commit_msg.txt");
+            fs.writeFileSync(msgFile, message, "utf-8");
+            execSync(`git commit -F "${msgFile}"`, {
+                cwd: location, encoding: "utf-8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"],
+            });
+            fs.rmSync(msgFile, { force: true });
+            committed = true;
+        }
+        // Push
+        const remote = gitExec(location, ["remote", "get-url", "origin"]);
+        if (remote) {
+            execSync(`git push`, { cwd: location, encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+            pushed = true;
+        }
+        json(res, { ok: true, committed, pushed });
+    }
+    catch (e) {
+        json(res, { error: e.message || "Failed to push" }, 500);
+    }
+}
+/**
+ * POST /api/software-house/projects/:name/repo/pull
+ * Pull from remote.
+ */
+export async function handleRepoPull(req, res) {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const cleanPath = url.pathname.replace(/^\/orchestrator/, "");
+    const match = cleanPath.match(/^\/api\/software-house\/projects\/([^/]+)\/repo\/pull$/);
+    if (!match) {
+        json(res, { error: "invalid path" }, 400);
+        return;
+    }
+    const projectName = match[1];
+    try {
+        const pc = getProjectConfig(projectName);
+        const location = pc?.location;
+        if (!location || !fs.existsSync(path.join(location, ".git"))) {
+            json(res, { error: "No git repository at project location" }, 400);
+            return;
+        }
+        // Capture HEAD before pull
+        let filesChanged = 0;
+        let pullOutput = "";
+        try {
+            const beforeHead = gitExec(location, ["rev-parse", "HEAD"]);
+            pullOutput = execSync(`git pull`, { cwd: location, encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+            // Count files changed by comparing tree after pull
+            if (beforeHead) {
+                const changed = gitExec(location, ["diff", "--name-only", `${beforeHead}...HEAD`]);
+                filesChanged = changed ? changed.split("\n").filter(Boolean).length : 0;
+            }
+            // Fallback: count from pull output message
+            if (!filesChanged) {
+                const match = pullOutput.match(/(\d+) files? changed/);
+                if (match)
+                    filesChanged = parseInt(match[1], 10);
+            }
+        }
+        catch { /* pull failed */ }
+        json(res, { ok: true, pulled: true, filesChanged });
+    }
+    catch (e) {
+        json(res, { error: e.message || "Failed to pull" }, 500);
     }
 }
 // ── ROUTER ───────────────────────────────────────────────────
@@ -708,6 +962,25 @@ export async function handleSoftwareHouseRoute(req, res) {
         // Project management
         if (normalizedPathname === "/api/software-house/projects/create" && method === "POST") {
             await handleCreateProject(req, res);
+            return true;
+        }
+        // Repo / Git endpoints
+        if (normalizedPathname === "/api/software-house/projects/clone" && method === "POST") {
+            await handleCloneProject(req, res);
+            return true;
+        }
+        if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo$/)) {
+            if (method === "GET") {
+                await handleRepoStatus(req, res);
+                return true;
+            }
+        }
+        if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo\/push$/) && method === "POST") {
+            await handleRepoPush(req, res);
+            return true;
+        }
+        if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo\/pull$/) && method === "POST") {
+            await handleRepoPull(req, res);
             return true;
         }
         // Workers

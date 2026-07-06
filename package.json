@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
     "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:playwright": "npx playwright test --config playwright.config.ts"
   },
   "files": [
     "dist",
@@ -22,6 +23,7 @@
     "typebox": "^1.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^25.9.3",
     "openclaw": "^2026.6.5",
     "typescript": "^5.9.0",
