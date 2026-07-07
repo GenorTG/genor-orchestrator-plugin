@@ -4,7 +4,7 @@
 // Handles task execution via OpenAI HTTP API endpoint.
 // Workers are persistent AI personas that execute tasks using
 // OpenClaw's agent sessions with full tool access.
-import { getDb } from "./db.js";
+import { getWorker, getBacklogTask, listWorkerTaskHistory, addWorkerTaskHistory, listVaultDocs } from "./db.js";
 // ═══════════════════════════════════════════════════════════════
 //  WORKER ENGINE CLASS
 // ═══════════════════════════════════════════════════════════════
@@ -38,13 +38,12 @@ export class WorkerEngine {
             };
         }
         // 2. Load worker from database
-        const db = getDb();
-        const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(workerId);
+        const worker = getWorker(workerId);
         if (!worker) {
             return { success: false, error: `Worker not found: ${workerId}` };
         }
         // 3. Load task from database
-        const task = db.prepare("SELECT * FROM backlog_tasks WHERE id = ?").get(taskId);
+        const task = getBacklogTask(taskId.toString());
         if (!task) {
             return { success: false, error: `Task not found: ${taskId}` };
         }
@@ -96,11 +95,10 @@ Return a summary of what you did when complete.`;
     //  CONTEXT LOADING
     // ═══════════════════════════════════════════════════════════════
     async loadContext(worker, task) {
-        const db = getDb();
         const contextParts = [];
         // Load vault docs for the project
         try {
-            const vaultDocs = db.prepare("SELECT * FROM vault_docs WHERE project_id = ?").all(task.project || "genor-orchestrator-plugin");
+            const vaultDocs = listVaultDocs(task.project || "genor-orchestrator-plugin");
             if (vaultDocs.length > 0) {
                 contextParts.push("### Project Documentation");
                 for (const doc of vaultDocs.slice(0, 5)) { // Limit to 5 docs
@@ -114,7 +112,7 @@ Return a summary of what you did when complete.`;
         }
         // Load worker's previous tasks for context
         try {
-            const previousTasks = db.prepare("SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT 3").all(worker.id);
+            const previousTasks = listWorkerTaskHistory(worker.id, 3);
             if (previousTasks.length > 0) {
                 contextParts.push("### Your Recent Work");
                 for (const pt of previousTasks) {
@@ -392,11 +390,7 @@ Return a summary of what you did when complete.`;
     // ═══════════════════════════════════════════════════════════════
     logTaskResult(workerId, taskId, result) {
         try {
-            const db = getDb();
-            db.prepare(`
-        INSERT INTO worker_task_history (worker_id, task_id, action, details)
-        VALUES (?, ?, ?, ?)
-      `).run(workerId, taskId, result.success ? "completed" : "failed", JSON.stringify({
+            addWorkerTaskHistory(workerId, taskId, result.success ? "completed" : "failed", JSON.stringify({
                 output: result.output,
                 error: result.error,
                 filesChanged: result.filesChanged,

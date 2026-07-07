@@ -10,7 +10,7 @@ import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createDashboardHandler } from "./dashboard-handler.js";
 import { getDataDir } from "./shared.js";
-import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, getAllSessions, addSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, listModels, countModels, getLiveAgents, setLiveAgents, addLog, addStateEvent, getStateEvents, addVerificationRun, getVerificationRun, updateVerificationRun, getDb } from "./db.js";
+import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, getAllSessions, addSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, listModels, countModels, getLiveAgents, setLiveAgents, addLog, addStateEvent, getStateEvents, addVerificationRun, getVerificationRun, updateVerificationRun, getDb, addWorker, updateWorker, deleteWorker, getWorker, getStalledTasksForWorker, addRoom, updateRoom, deleteRoom, addWorkerMessage, addWorkerTaskHistory, deleteWorkerMessagesByWorker, deleteWorkerSessionsByWorker, deleteWorkerTaskHistoryByWorker, } from "./db.js";
 //  PLUGIN ROOT — all paths resolve from here (no skill dir dependency!)
 // ═══════════════════════════════════════════════════════════════
 const __filename = fileURLToPath(import.meta.url);
@@ -6076,14 +6076,10 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
                 const id = `w${Date.now()}`;
                 const proj = params.project || "genor-orchestrator-plugin";
                 const isPmValue = params.is_pm ? 1 : 0;
-                db.prepare(`
-          INSERT INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
-          VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)
-        `).run(id, params.name, params.role || "", params.sprite || "blue", params.model || "", params.room || "", proj, isPmValue);
+                addWorker(id, params.name, params.role || "", params.sprite || "blue", params.model || "", "", params.room || "", proj, isPmValue);
                 return txt({ ok: true, worker: { id, name: params.name, is_pm: params.is_pm || false } });
             },
         });
@@ -6100,19 +6096,15 @@ Focus specifically on: ${params.topic}` : "";
                 room: Type.Optional(Type.String({ description: "New room ID." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                const updates = [];
-                const values = [];
+                const updates = {};
                 for (const key of ["name", "role", "sprite", "model", "room"]) {
                     if (params[key] !== undefined) {
-                        updates.push(`${key} = ?`);
-                        values.push(params[key]);
+                        updates[key] = params[key];
                     }
                 }
-                if (updates.length === 0)
+                if (Object.keys(updates).length === 0)
                     return txt({ ok: false, error: "no fields to update" });
-                values.push(params.worker_id);
-                db.prepare(`UPDATE workers SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+                updateWorker(params.worker_id, updates);
                 return txt({ ok: true });
             },
         });
@@ -6124,13 +6116,16 @@ Focus specifically on: ${params.topic}` : "";
                 worker_id: Type.String({ description: "Worker ID." }),
             }),
             async execute(_id, params) {
-                const db = getDb();
                 // Delete related records first (foreign key constraints)
-                db.prepare("DELETE FROM worker_messages WHERE from_worker = ? OR to_worker = ?").run(params.worker_id, params.worker_id);
-                db.prepare("DELETE FROM worker_sessions WHERE worker_id = ?").run(params.worker_id);
-                db.prepare("DELETE FROM worker_task_history WHERE worker_id = ?").run(params.worker_id);
-                db.prepare("DELETE FROM backlog_tasks WHERE worker_id = ?").run(params.worker_id);
-                db.prepare("DELETE FROM workers WHERE id = ?").run(params.worker_id);
+                deleteWorkerMessagesByWorker(params.worker_id);
+                deleteWorkerSessionsByWorker(params.worker_id);
+                deleteWorkerTaskHistoryByWorker(params.worker_id);
+                // Unassign backlog tasks
+                const stalled = getStalledTasksForWorker(params.worker_id);
+                for (const t of stalled) {
+                    updateBacklogTask(t.id, { worker_id: null });
+                }
+                deleteWorker(params.worker_id);
                 return txt({ ok: true });
             },
         });
@@ -6143,12 +6138,12 @@ Focus specifically on: ${params.topic}` : "";
                 is_pm: Type.Boolean({ description: "True to make this worker a PM, false to remove PM status." }),
             }),
             async execute(_id, params) {
-                const db = getDb();
                 const isPmValue = params.is_pm ? 1 : 0;
-                const result = db.prepare("UPDATE workers SET is_pm = ? WHERE id = ?").run(isPmValue, params.worker_id);
-                if (result.changes === 0) {
+                const worker = getWorker(params.worker_id);
+                if (!worker) {
                     return txt({ ok: false, error: "worker not found" });
                 }
+                updateWorker(params.worker_id, { is_pm: isPmValue });
                 return txt({ ok: true, worker_id: params.worker_id, is_pm: !!params.is_pm });
             },
         });
@@ -6162,13 +6157,9 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
                 const id = `room_${Date.now().toString(36)}`;
                 const proj = params.project || "genor-orchestrator-plugin";
-                db.prepare(`
-          INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
-          VALUES (?, ?, ?, '[]', ?)
-        `).run(id, params.name, params.purpose || "", proj);
+                addRoom(id, params.name, params.purpose || "", "[]", proj);
                 return txt({ ok: true, room: { id, name: params.name } });
             },
         });
@@ -6182,19 +6173,15 @@ Focus specifically on: ${params.topic}` : "";
                 purpose: Type.Optional(Type.String({ description: "New purpose/description." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                const updates = [];
-                const values = [];
+                const updates = {};
                 for (const key of ["name", "purpose"]) {
                     if (params[key] !== undefined) {
-                        updates.push(`${key} = ?`);
-                        values.push(params[key]);
+                        updates[key] = params[key];
                     }
                 }
-                if (updates.length === 0)
+                if (Object.keys(updates).length === 0)
                     return txt({ ok: false, error: "no fields to update" });
-                values.push(params.room_id);
-                db.prepare(`UPDATE rooms SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+                updateRoom(params.room_id, updates);
                 return txt({ ok: true });
             },
         });
@@ -6206,8 +6193,7 @@ Focus specifically on: ${params.topic}` : "";
                 room_id: Type.String({ description: "Room ID." }),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                db.prepare("DELETE FROM rooms WHERE id = ?").run(params.room_id);
+                deleteRoom(params.room_id);
                 return txt({ ok: true });
             },
         });
@@ -6223,13 +6209,15 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
                 const proj = params.project || "genor-orchestrator-plugin";
                 const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-                db.prepare(`
-          INSERT INTO backlog_tasks (id, project, title, description, priority, status, labels, created_ts, updated_ts)
-          VALUES (?, ?, ?, ?, ?, 'todo', ?, unixepoch(), unixepoch())
-        `).run(id, proj, params.title, params.description || "", params.priority || "p2", JSON.stringify(params.labels || []));
+                addBacklogTask({
+                    id, project: proj, title: params.title,
+                    description: params.description || "",
+                    priority: params.priority || "p2",
+                    status: "todo",
+                    labels: JSON.stringify(params.labels || []),
+                });
                 return txt({ ok: true, id });
             },
         });
@@ -6243,9 +6231,7 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                db.prepare("UPDATE backlog_tasks SET status = ?, updated_ts = ? WHERE id = ?")
-                    .run(params.phase, Math.floor(Date.now() / 1000), params.task_id);
+                updateBacklogTask(params.task_id, { status: params.phase });
                 return txt({ ok: true });
             },
         });
@@ -6259,12 +6245,9 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                db.prepare("UPDATE backlog_tasks SET worker_id = ?, updated_ts = ? WHERE id = ?")
-                    .run(params.worker_id, Math.floor(Date.now() / 1000), params.task_id);
-                db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(params.worker_id);
-                db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)")
-                    .run(params.worker_id, params.task_id, JSON.stringify({ assignedAt: new Date().toISOString() }));
+                updateBacklogTask(params.task_id, { worker_id: params.worker_id });
+                updateWorker(params.worker_id, { status: 'working' });
+                addWorkerTaskHistory(params.worker_id, params.task_id, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
                 return txt({ ok: true });
             },
         });
@@ -6280,11 +6263,7 @@ Focus specifically on: ${params.topic}` : "";
                 project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
             }),
             async execute(_id, params) {
-                const db = getDb();
-                db.prepare(`
-          INSERT INTO worker_messages (from_worker, to_worker, type, content)
-          VALUES (?, ?, ?, ?)
-        `).run(params.from_worker_id, params.to_worker_id, params.type || "chat", params.content);
+                addWorkerMessage(params.from_worker_id, params.to_worker_id, params.type || "chat", params.content);
                 return txt({ ok: true });
             },
         });

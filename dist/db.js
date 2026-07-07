@@ -1126,3 +1126,193 @@ export function migrateV5() {
   `);
     console.log("V5 migration complete: worker_sessions, worker_messages, worker_task_history");
 }
+// ═══════════════════════════════════════════════════════════════
+//  WORKERS — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function listWorkers(project) {
+    return getDb().prepare("SELECT * FROM workers WHERE project = ?").all(project);
+}
+export function getWorker(id) {
+    return getDb().prepare("SELECT * FROM workers WHERE id = ?").get(id);
+}
+export function addWorker(id, name, role, sprite, model, prompt, room, project, is_pm) {
+    getDb().prepare(`
+    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", is_pm ?? 0);
+}
+export const WORKER_COLUMNS = new Set(["name", "role", "sprite", "model", "prompt", "room", "project", "status", "is_pm"]);
+export function updateWorker(id, updates) {
+    const fields = [];
+    const values = [];
+    for (const [k, v] of Object.entries(updates)) {
+        if (!WORKER_COLUMNS.has(k))
+            continue;
+        fields.push(`${k} = ?`);
+        values.push(v !== undefined ? v : null);
+    }
+    if (!fields.length)
+        return;
+    values.push(id);
+    getDb().prepare(`UPDATE workers SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+}
+export function deleteWorker(id) {
+    getDb().prepare("DELETE FROM workers WHERE id = ?").run(id);
+}
+export function countWorkers(project) {
+    const row = getDb().prepare("SELECT COUNT(*) as cnt FROM workers WHERE project = ?").get(project);
+    return Number(row?.cnt) || 0;
+}
+export function deleteWorkersByProject(project) {
+    getDb().prepare("DELETE FROM workers WHERE project = ?").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  ROOMS — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function listRooms(project) {
+    return getDb().prepare("SELECT * FROM rooms WHERE project = ?").all(project);
+}
+export function getRoom(id) {
+    return getDb().prepare("SELECT * FROM rooms WHERE id = ?").get(id);
+}
+export const ROOM_COLUMNS = new Set(["name", "purpose", "taskTypes", "project", "x", "y", "w", "h", "isCommand"]);
+export function addRoom(id, name, purpose, taskTypes, project) {
+    getDb().prepare(`
+    INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, name, purpose || "", taskTypes || "[]", project || "genor-orchestrator-plugin");
+}
+export function updateRoom(id, updates) {
+    const fields = [];
+    const values = [];
+    for (const [k, v] of Object.entries(updates)) {
+        if (!ROOM_COLUMNS.has(k))
+            continue;
+        fields.push(`${k} = ?`);
+        values.push(v !== undefined ? v : null);
+    }
+    if (!fields.length)
+        return;
+    values.push(id);
+    getDb().prepare(`UPDATE rooms SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+}
+export function deleteRoom(id) {
+    getDb().prepare("DELETE FROM rooms WHERE id = ?").run(id);
+}
+// ═══════════════════════════════════════════════════════════════
+//  VAULT DOCS — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function listVaultDocs(project) {
+    return getDb().prepare("SELECT * FROM vault_docs WHERE project = ?").all(project);
+}
+export function getVaultDoc(path, project) {
+    return getDb().prepare("SELECT * FROM vault_docs WHERE path = ? AND project = ?").get(path, project);
+}
+export function addVaultDoc(path, title, content, folder, project, tags, status, links, icon) {
+    const now = new Date().toISOString();
+    getDb().prepare(`
+    INSERT OR REPLACE INTO vault_docs (id, path, title, content, folder, project, tags, status, links, icon, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(path.replace(/[^a-zA-Z0-9]/g, "_"), path, title || path, content || "", folder || "", project || "genor-orchestrator-plugin", tags || "[]", status || "", links || "[]", icon || "📄", now);
+}
+export function deleteVaultDoc(id) {
+    getDb().prepare("DELETE FROM vault_docs WHERE id = ?").run(id);
+}
+export function deleteVaultDocsByProject(project) {
+    getDb().prepare("DELETE FROM vault_docs WHERE project = ?").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  PM CHAT — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function listPmChat(project) {
+    return getDb().prepare("SELECT * FROM pm_chat WHERE project = ? ORDER BY created_at ASC").all(project);
+}
+export function addPmChat(message, sender, project) {
+    getDb().prepare(`
+    INSERT INTO pm_chat (message, sender, project)
+    VALUES (?, ?, ?)
+  `).run(message, sender || "user", project || "genor-orchestrator-plugin");
+}
+export function clearPmChat(project) {
+    getDb().prepare("DELETE FROM pm_chat WHERE project = ?").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  WORKER MESSAGES — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function addWorkerMessage(fromWorker, toWorker, type, content, taskId) {
+    getDb().prepare(`
+    INSERT INTO worker_messages (from_worker, to_worker, type, content, task_id)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(fromWorker, toWorker, type || "chat", content, taskId ?? null);
+}
+export function listWorkerMessages(workerId, unreadOnly) {
+    let query = "SELECT * FROM worker_messages WHERE to_worker = ?";
+    if (unreadOnly)
+        query += " AND read_at IS NULL";
+    query += " ORDER BY created_at DESC LIMIT 50";
+    return getDb().prepare(query).all(workerId);
+}
+export function deleteWorkerMessagesByWorker(workerId) {
+    getDb().prepare("DELETE FROM worker_messages WHERE from_worker = ? OR to_worker = ?").run(workerId, workerId);
+}
+export function deleteWorkerMessagesByProject(project) {
+    getDb().prepare("DELETE FROM worker_messages WHERE from_worker IN (SELECT id FROM workers WHERE project = ?) OR to_worker IN (SELECT id FROM workers WHERE project = ?)").run(project, project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  WORKER SESSIONS
+// ═══════════════════════════════════════════════════════════════
+export function deleteWorkerSessionsByWorker(workerId) {
+    getDb().prepare("DELETE FROM worker_sessions WHERE worker_id = ?").run(workerId);
+}
+export function deleteWorkerSessionsByProject(project) {
+    getDb().prepare("DELETE FROM worker_sessions WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  WORKER TASK HISTORY — CRUD
+// ═══════════════════════════════════════════════════════════════
+export function addWorkerTaskHistory(workerId, taskId, action, details) {
+    getDb().prepare(`
+    INSERT INTO worker_task_history (worker_id, task_id, action, details)
+    VALUES (?, ?, ?, ?)
+  `).run(workerId, taskId, action, details);
+}
+export function listWorkerTaskHistory(workerId, limit = 10) {
+    return getDb().prepare("SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT ?").all(workerId, limit);
+}
+export function getWorkerLastActivity(workerId) {
+    return getDb().prepare("SELECT created_at FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT 1").get(workerId);
+}
+export function getWorkerCurrentTask(workerId) {
+    return getDb().prepare("SELECT * FROM backlog_tasks WHERE worker_id = ? AND status != 'done' LIMIT 1").get(workerId);
+}
+export function getStalledTasksForWorker(workerId) {
+    return getDb().prepare("SELECT * FROM backlog_tasks WHERE worker_id = ? AND status IN ('in_progress', 'testing')").all(workerId);
+}
+export function deleteWorkerTaskHistoryByWorker(workerId) {
+    getDb().prepare("DELETE FROM worker_task_history WHERE worker_id = ?").run(workerId);
+}
+export function deleteWorkerTaskHistoryByProject(project) {
+    getDb().prepare("DELETE FROM worker_task_history WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  SESSIONS — bulk operations
+// ═══════════════════════════════════════════════════════════════
+export function deleteSessionsByProject(project) {
+    getDb().prepare("DELETE FROM sessions WHERE project = ?").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  BACKLOG — bulk operations
+// ═══════════════════════════════════════════════════════════════
+export function countBacklogByProject(project) {
+    const row = getDb().prepare("SELECT COUNT(*) as cnt FROM backlog_tasks WHERE project = ?").get(project);
+    return Number(row?.cnt) || 0;
+}
+export function deleteBacklogByProject(project) {
+    getDb().prepare("DELETE FROM backlog_tasks WHERE project = ?").run(project);
+}
+// ═══════════════════════════════════════════════════════════════
+//  STATE EVENTS — bulk
+// ═══════════════════════════════════════════════════════════════
+export function deleteStateEventsByProject(project) {
+    getDb().prepare("DELETE FROM state_events WHERE project = ?").run(project);
+}

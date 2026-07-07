@@ -14,7 +14,19 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
-import { getDb, listModels, setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs, WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow } from "./db.js";
+import {
+  listModels, setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs,
+  WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow,
+  listWorkers, countWorkers, getWorker, addWorker, updateWorker, deleteWorker, deleteWorkersByProject,
+  listRooms, addRoom, updateRoom, deleteRoom,
+  listVaultDocs, getVaultDoc, addVaultDoc, deleteVaultDocsByProject,
+  listPmChat, addPmChat, clearPmChat,
+  addBacklogTask, updateBacklogTask, deleteBacklogTask, getBacklogTask, listBacklogTasks, countBacklogByProject, deleteBacklogByProject,
+  countSessions, deleteSessionsByProject, deleteStateEventsByProject,
+  addWorkerTaskHistory, listWorkerTaskHistory, getWorkerCurrentTask, getWorkerLastActivity, getStalledTasksForWorker,
+  addWorkerMessage, deleteWorkerMessagesByWorker, deleteWorkerMessagesByProject,
+  deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject
+} from "./db.js";
 import { getDataDir } from "./shared.js";
 
 // ── HELPERS ──────────────────────────────────────────────────
@@ -96,20 +108,19 @@ function getRepoStatus(location: string): any {
  * Returns full project state matching mock JSON shape exactly.
  */
 export async function handleBootstrap(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
 
   // Query workers
-  const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(project) as unknown as WorkerRow[];
+  const workers = listWorkers(project);
   
   // Query rooms
-  const rooms = db.prepare("SELECT * FROM rooms WHERE project = ?").all(project) as unknown as RoomRow[];
+  const rooms = listRooms(project);
   
   // Query tasks
-  const tasks = db.prepare("SELECT * FROM backlog_tasks WHERE project = ?").all(project) as unknown as BacklogRow[];
+  const tasks = listBacklogTasks(project);
   
   // Query vault docs
-  const vaultDocs = db.prepare("SELECT * FROM vault_docs WHERE project = ?").all(project) as unknown as VaultDocRow[];
+  const vaultDocs = listVaultDocs(project);
 
   // Build project list — project_configs is the single source of truth for which projects exist
   const allConfigs = getAllProjectConfigs(500);
@@ -127,7 +138,7 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
     projects[pId] = {
       id: pId,
       name: pId,
-      hasWorkers: (db.prepare("SELECT COUNT(*) as c FROM workers WHERE project = ?").get(pId) as any).c > 0,
+      hasWorkers: countWorkers(pId) > 0,
       repo_url: repoUrl,
       repo: repoStatus,
     };
@@ -212,9 +223,8 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
  * List all workers for a project.
  */
 export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(project);
+  const workers = listWorkers(project);
   json(res, workers);
 }
 
@@ -223,7 +233,6 @@ export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse
  * Create a new worker.
  */
 export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { id: providedId, name, role, sprite, model, prompt, room, project, is_pm } = body;
 
@@ -234,12 +243,7 @@ export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse
 
   // Generate ID if not provided
   const id = providedId || `w${Date.now()}`;
-  const isPmValue = is_pm ? 1 : 0;
-
-  db.prepare(`
-    INSERT OR REPLACE INTO workers (id, name, role, sprite, model, prompt, room, project, is_pm)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", isPmValue);
+  addWorker(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", is_pm ? 1 : 0);
 
   json(res, { ok: true, worker: { id, name } });
 }
@@ -249,7 +253,6 @@ export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse
  * Edit an existing worker.
  */
 export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const id = url.pathname.split("/").pop();
   
@@ -259,24 +262,19 @@ export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse
   }
 
   const body = await parseBody(req);
-  const updates: string[] = [];
-  const values: any[] = [];
-
+  const updates: Record<string, any> = {};
   for (const [key, value] of Object.entries(body)) {
     if (["name", "role", "sprite", "model", "prompt", "room", "is_pm"].includes(key)) {
-      updates.push(`${key} = ?`);
-      values.push(key === "is_pm" ? (value ? 1 : 0) : value);
+      updates[key] = key === "is_pm" ? (value ? 1 : 0) : value;
     }
   }
 
-  if (updates.length === 0) {
+  if (Object.keys(updates).length === 0) {
     json(res, { error: "no valid fields to update" }, 400);
     return;
   }
 
-  values.push(id);
-  db.prepare(`UPDATE workers SET ${updates.join(", ")} WHERE id = ?`).run(...values);
-
+  updateWorker(id, updates as any);
   json(res, { ok: true, id });
 }
 
@@ -285,7 +283,6 @@ export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse
  * Fire a worker.
  */
 export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const id = url.pathname.split("/").pop();
 
@@ -294,7 +291,7 @@ export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  db.prepare("DELETE FROM workers WHERE id = ?").run(id);
+  deleteWorker(id);
   json(res, { ok: true, id });
 }
 
@@ -305,9 +302,8 @@ export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse
  * List all rooms for a project.
  */
 export async function handleRoomsGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const rooms = db.prepare("SELECT * FROM rooms WHERE project = ?").all(project);
+  const rooms = listRooms(project);
   json(res, rooms);
 }
 
@@ -316,7 +312,6 @@ export async function handleRoomsGet(req: IncomingMessage, res: ServerResponse):
  * Add a new room.
  */
 export async function handleRoomAdd(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { id: providedId, name, purpose, taskTypes, project } = body;
 
@@ -326,11 +321,7 @@ export async function handleRoomAdd(req: IncomingMessage, res: ServerResponse): 
   }
 
   const id = providedId || `room_${Date.now().toString(36)}`;
-
-  db.prepare(`
-    INSERT OR REPLACE INTO rooms (id, name, purpose, taskTypes, project)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, name, purpose || "", JSON.stringify(taskTypes || []), project || "genor-orchestrator-plugin");
+  addRoom(id, name, purpose || "", JSON.stringify(taskTypes || []), project || "genor-orchestrator-plugin");
 
   json(res, { ok: true, room: { id, name } });
 }
@@ -340,7 +331,6 @@ export async function handleRoomAdd(req: IncomingMessage, res: ServerResponse): 
  * Edit an existing room.
  */
 export async function handleRoomEdit(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const id = url.pathname.split("/").pop();
 
@@ -350,24 +340,19 @@ export async function handleRoomEdit(req: IncomingMessage, res: ServerResponse):
   }
 
   const body = await parseBody(req);
-  const updates: string[] = [];
-  const values: any[] = [];
-
+  const updates: Record<string, any> = {};
   for (const [key, value] of Object.entries(body)) {
     if (["name", "purpose", "taskTypes", "x", "y", "w", "h", "isCommand"].includes(key)) {
-      updates.push(`${key} = ?`);
-      values.push(key === "taskTypes" ? JSON.stringify(value) : value);
+      updates[key] = key === "taskTypes" ? JSON.stringify(value) : value;
     }
   }
 
-  if (updates.length === 0) {
+  if (Object.keys(updates).length === 0) {
     json(res, { error: "no valid fields to update" }, 400);
     return;
   }
 
-  values.push(id);
-  db.prepare(`UPDATE rooms SET ${updates.join(", ")} WHERE id = ?`).run(...values);
-
+  updateRoom(id, updates as any);
   json(res, { ok: true, id });
 }
 
@@ -376,7 +361,6 @@ export async function handleRoomEdit(req: IncomingMessage, res: ServerResponse):
  * Delete a room.
  */
 export async function handleRoomDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const id = url.pathname.split("/").pop();
 
@@ -385,7 +369,7 @@ export async function handleRoomDelete(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  db.prepare("DELETE FROM rooms WHERE id = ?").run(id);
+  deleteRoom(id);
   json(res, { ok: true, id });
 }
 
@@ -394,7 +378,6 @@ export async function handleRoomDelete(req: IncomingMessage, res: ServerResponse
  * Save room positions.
  */
 export async function handleLayoutSave(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { rooms } = body;
 
@@ -403,9 +386,8 @@ export async function handleLayoutSave(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  const stmt = db.prepare("UPDATE rooms SET x = ?, y = ?, w = ?, h = ? WHERE id = ?");
   for (const room of rooms) {
-    stmt.run(room.x || 0, room.y || 0, room.w || 0, room.h || 0, room.id);
+    updateRoom(room.id, { x: room.x || 0, y: room.y || 0, w: room.w || 0, h: room.h || 0 } as any);
   }
 
   json(res, { ok: true });
@@ -418,9 +400,8 @@ export async function handleLayoutSave(req: IncomingMessage, res: ServerResponse
  * List all tasks for a project.
  */
 export async function handleBacklogGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const tasks = db.prepare("SELECT * FROM backlog_tasks WHERE project = ?").all(project);
+  const tasks = listBacklogTasks(project);
   json(res, tasks);
 }
 
@@ -429,7 +410,6 @@ export async function handleBacklogGet(req: IncomingMessage, res: ServerResponse
  * Create a new task.
  */
 export async function handleBacklogCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { title, description, priority, labels, project } = body;
 
@@ -441,10 +421,20 @@ export async function handleBacklogCreate(req: IncomingMessage, res: ServerRespo
   const proj = project || "genor-orchestrator-plugin";
   const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
-  db.prepare(`
-    INSERT INTO backlog_tasks (id, project, title, description, priority, status, labels, created_ts, updated_ts)
-    VALUES (?, ?, ?, ?, ?, 'todo', ?, unixepoch(), unixepoch())
-  `).run(id, proj, title, description || '', priority || 'p2', JSON.stringify(labels || []));
+  addBacklogTask({
+    id,
+    project: proj,
+    title,
+    description: description || '',
+    priority: priority || 'p2',
+    status: 'todo',
+    labels: JSON.stringify(labels || []),
+    depends_on: '[]',
+    assigned_to: '',
+    session_refs: '[]',
+    created_ts: Math.floor(Date.now() / 1000),
+    updated_ts: Math.floor(Date.now() / 1000),
+  });
 
   json(res, { ok: true, id });
 }
@@ -454,7 +444,6 @@ export async function handleBacklogCreate(req: IncomingMessage, res: ServerRespo
  * Move a task to a different phase.
  */
 export async function handleBacklogMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { id, phase, worker_id } = body;
 
@@ -463,22 +452,11 @@ export async function handleBacklogMove(req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  const updates: string[] = ["updated_ts = ?"];
-  const values: any[] = [Math.floor(Date.now() / 1000)];
+  const updates: Record<string, any> = {};
+  if (phase) updates.status = phase;
+  if (worker_id !== undefined) updates.worker_id = worker_id;
 
-  if (phase) {
-    updates.push("status = ?");
-    values.push(phase);
-  }
-
-  if (worker_id !== undefined) {
-    updates.push("worker_id = ?");
-    values.push(worker_id);
-  }
-
-  values.push(id);
-  db.prepare(`UPDATE backlog_tasks SET ${updates.join(", ")} WHERE id = ?`).run(...values);
-
+  updateBacklogTask(id, updates);
   json(res, { ok: true, id });
 }
 
@@ -489,9 +467,8 @@ export async function handleBacklogMove(req: IncomingMessage, res: ServerRespons
  * Load chat history for a project.
  */
 export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const messages = db.prepare("SELECT * FROM pm_chat WHERE project = ? ORDER BY created_at DESC LIMIT 100").all(project);
+  const messages = listPmChat(project);
   json(res, { ok: true, messages: messages.reverse() });
 }
 
@@ -500,7 +477,6 @@ export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse)
  * Send a message. Generates a PM response based on keywords.
  */
 export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { message, sender, project } = body;
 
@@ -512,19 +488,16 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
   const proj = project || "genor-orchestrator-plugin";
 
   // Store user message
-  db.prepare(`
-    INSERT INTO pm_chat (message, sender, project)
-    VALUES (?, ?, ?)
-  `).run(message, sender || "user", proj);
+  addPmChat(message, sender || "user", proj);
 
   // Generate PM response based on keywords
   const lower = message.toLowerCase();
   let pmResponse = '';
 
   // Get project state for context
-  const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(proj) as any[];
-  const tasks = db.prepare("SELECT * FROM backlog_tasks WHERE project = ?").all(proj) as any[];
-  const rooms = db.prepare("SELECT * FROM rooms WHERE project = ?").all(proj) as any[];
+  const workers = listWorkers(proj) as any[];
+  const tasks = listBacklogTasks(proj) as any[];
+  const rooms = listRooms(proj) as any[];
 
   const workingCount = workers.filter(w => w.status === 'working').length;
   const sleepCount = workers.filter(w => w.status === 'idle' || w.status === 'sleep').length;
@@ -574,10 +547,7 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
 
   // Store PM response
   if (pmResponse) {
-    db.prepare(`
-      INSERT INTO pm_chat (message, sender, project)
-      VALUES (?, ?, ?)
-    `).run(pmResponse, 'pm', proj);
+    addPmChat(pmResponse, 'pm', proj);
   }
 
   json(res, { ok: true });
@@ -590,9 +560,8 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
  * List all documents for a project.
  */
 export async function handleVaultTree(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const docs = db.prepare("SELECT * FROM vault_docs WHERE project = ?").all(project);
+  const docs = listVaultDocs(project);
   const vault: Record<string, any> = {};
   for (const doc of docs as any[]) {
     vault[doc.path] = {
@@ -614,7 +583,6 @@ export async function handleVaultTree(req: IncomingMessage, res: ServerResponse)
  * Get a document by path.
  */
 export async function handleVaultDocGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const docPath = url.searchParams.get("path");
   const project = url.searchParams.get("project") || "genor-orchestrator-plugin";
@@ -624,7 +592,7 @@ export async function handleVaultDocGet(req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  const doc = db.prepare("SELECT * FROM vault_docs WHERE path = ? AND project = ?").get(docPath, project);
+  const doc = getVaultDoc(docPath, project);
   if (!doc) {
     json(res, { error: "document not found" }, 404);
     return;
@@ -638,7 +606,6 @@ export async function handleVaultDocGet(req: IncomingMessage, res: ServerRespons
  * Update a document.
  */
 export async function handleVaultDocPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { path, content, title, tags, status, links, project } = body;
 
@@ -647,20 +614,15 @@ export async function handleVaultDocPut(req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  const now = new Date().toISOString();
-  db.prepare(`
-    INSERT OR REPLACE INTO vault_docs (id, path, content, project, title, tags, status, links, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    path.replace(/[^a-zA-Z0-9]/g, "_"),
+  addVaultDoc(
     path,
-    content || "",
-    project || "genor-orchestrator-plugin",
     title || path,
+    content || "",
+    "",
+    project || "genor-orchestrator-plugin",
     JSON.stringify(tags || []),
     status || "",
-    JSON.stringify(links || []),
-    now
+    JSON.stringify(links || [])
   );
 
   json(res, { ok: true, path });
@@ -671,7 +633,6 @@ export async function handleVaultDocPut(req: IncomingMessage, res: ServerRespons
  * Inject a document into AI context.
  */
 export async function handleVaultInject(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { path, content, project } = body;
 
@@ -684,11 +645,7 @@ export async function handleVaultInject(req: IncomingMessage, res: ServerRespons
   const title = path.split('/').pop()?.replace(/\.md$/, '') || path;
   const folder = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '';
 
-  db.prepare(`
-    INSERT OR REPLACE INTO vault_docs (path, title, content, folder, project, status, tags, links, icon, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'active', '[]', '[]', '📄', datetime('now'))
-  `).run(path, title, content || '', folder, proj);
-
+  addVaultDoc(path, title, content || '', folder, proj, '[]', 'active', '[]', '📄');
   json(res, { ok: true, path });
 }
 
@@ -699,7 +656,6 @@ export async function handleVaultInject(req: IncomingMessage, res: ServerRespons
  * Start a worker on a task.
  */
 export async function handleWorkerStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { workerId, taskId } = body;
 
@@ -709,15 +665,13 @@ export async function handleWorkerStart(req: IncomingMessage, res: ServerRespons
   }
 
   // Update worker status
-  db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(workerId);
+  updateWorker(workerId, { status: 'working' } as any);
   
   // Update task
-  db.prepare("UPDATE backlog_tasks SET worker_id = ?, status = 'in-progress', updated_ts = ? WHERE id = ?")
-    .run(workerId, Math.floor(Date.now() / 1000), taskId);
+  updateBacklogTask(taskId, { worker_id: workerId, status: 'in-progress' });
 
   // Log to history
-  db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'started', ?)")
-    .run(workerId, taskId, JSON.stringify({ startedAt: new Date().toISOString() }));
+  addWorkerTaskHistory(workerId, taskId, 'started', JSON.stringify({ startedAt: new Date().toISOString() }));
 
   json(res, { ok: true, workerId, taskId });
 }
@@ -727,22 +681,15 @@ export async function handleWorkerStart(req: IncomingMessage, res: ServerRespons
  * Send message between workers.
  */
 export async function handleWorkerMessage(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
-  const { fromWorker, toWorker, type, content, project } = body;
+  const { fromWorker, toWorker, type, content } = body;
 
   if (!fromWorker || !toWorker || !content) {
     json(res, { error: "fromWorker, toWorker, and content required" }, 400);
     return;
   }
 
-  const proj = project || "genor-orchestrator-plugin";
-
-  db.prepare(`
-    INSERT INTO worker_messages (from_worker, to_worker, type, content)
-    VALUES (?, ?, ?, ?)
-  `).run(fromWorker, toWorker, type || 'chat', content);
-
+  addWorkerMessage(fromWorker, toWorker, type || 'chat', content);
   json(res, { ok: true });
 }
 
@@ -751,7 +698,6 @@ export async function handleWorkerMessage(req: IncomingMessage, res: ServerRespo
  * Check worker health.
  */
 export async function handleWorkerHealth(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const parts = url.pathname.split('/');
   const workerId = parts[parts.length - 1];
@@ -761,21 +707,17 @@ export async function handleWorkerHealth(req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(workerId) as any;
+  const worker = getWorker(workerId);
   if (!worker) {
     json(res, { error: "worker not found" }, 404);
     return;
   }
 
   // Check for stalled tasks
-  const stalledTasks = db.prepare(
-    "SELECT COUNT(*) as cnt FROM backlog_tasks WHERE worker_id = ? AND status = 'in-progress'"
-  ).get(workerId) as any;
+  const stalledTasks = getStalledTasksForWorker(workerId);
 
   // Check last activity
-  const lastHistory = db.prepare(
-    "SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY id DESC LIMIT 1"
-  ).get(workerId) as any;
+  const lastHistory = getWorkerLastActivity(workerId);
 
   let minutesSinceActive = null;
   if (lastHistory?.details) {
@@ -786,13 +728,13 @@ export async function handleWorkerHealth(req: IncomingMessage, res: ServerRespon
     } catch (_) {}
   }
 
-  const healthy = worker.status !== 'error' && (stalledTasks?.cnt || 0) < 3;
+  const healthy = worker.status !== 'error' && stalledTasks.length < 3;
 
   json(res, {
     ok: true,
     worker,
     healthy,
-    stalledTasks: stalledTasks?.cnt || 0,
+    stalledTasks: stalledTasks?.length || 0,
     minutesSinceActive,
   });
 }
@@ -802,7 +744,6 @@ export async function handleWorkerHealth(req: IncomingMessage, res: ServerRespon
  * Recover a stalled worker.
  */
 export async function handleWorkerRecover(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const db = getDb();
   const body = await parseBody(req);
   const { workerId } = body;
 
@@ -812,14 +753,15 @@ export async function handleWorkerRecover(req: IncomingMessage, res: ServerRespo
   }
 
   // Reset worker status
-  db.prepare("UPDATE workers SET status = 'idle' WHERE id = ?").run(workerId);
+  updateWorker(workerId, { status: 'idle' } as any);
 
   // Requeue stalled tasks
-  const result = db.prepare(
-    "UPDATE backlog_tasks SET worker_id = NULL, status = 'backlog' WHERE worker_id = ? AND status = 'in-progress'"
-  ).run(workerId);
+  const stalled = getStalledTasksForWorker(workerId);
+  for (const task of stalled) {
+    updateBacklogTask(task.id, { worker_id: null as any, status: 'backlog' });
+  }
 
-  json(res, { ok: true, tasksRequeued: result.changes });
+  json(res, { ok: true, tasksRequeued: stalled.length });
 }
 
 /**
@@ -1112,10 +1054,9 @@ export async function handleProjectList(_req: IncomingMessage, res: ServerRespon
       }
 
       // Count workers & tasks
-      const db = getDb();
-      const workerCount = (db.prepare("SELECT COUNT(*) as c FROM workers WHERE project = ?").get(name) as any)?.c || 0;
-      const taskCount = (db.prepare("SELECT COUNT(*) as c FROM backlog_tasks WHERE project = ?").get(name) as any)?.c || 0;
-      const sessionCount = (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE project = ?").get(name) as any)?.c || 0;
+      const workerCount = countWorkers(name);
+      const taskCount = countBacklogByProject(name);
+      const sessionCount = countSessions(name);
 
       projects.push({
         name,
@@ -1154,23 +1095,23 @@ export async function handleProjectDelete(req: IncomingMessage, res: ServerRespo
   const deleteFiles = url.searchParams.get("deleteFiles") === "true";
 
   try {
-    const db = getDb();
     const pc = getProjectConfig(projectName) as any;
     const location = pc?.location || path.join(getDataDir(), "projects", projectName);
 
     // Remove associated data (order matters for FK constraints)
     // 1. Delete child tables that reference workers/backlog first
-    db.prepare("DELETE FROM worker_task_history WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(projectName);
-    db.prepare("DELETE FROM worker_messages WHERE from_worker IN (SELECT id FROM workers WHERE project = ?) OR to_worker IN (SELECT id FROM workers WHERE project = ?)").run(projectName, projectName);
-    db.prepare("DELETE FROM worker_sessions WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(projectName);
+    deleteWorkerTaskHistoryByProject(projectName);
+    deleteWorkerMessagesByProject(projectName);
+    deleteWorkerSessionsByProject(projectName);
     // 2. Now delete the main tables
-    db.prepare("DELETE FROM backlog_tasks WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM workers WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM rooms WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM sessions WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM pm_chat WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM vault_docs WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM state_events WHERE project = ?").run(projectName);
+    deleteBacklogByProject(projectName);
+    deleteWorkersByProject(projectName);
+    const rooms = listRooms(projectName);
+    for (const room of rooms) deleteRoom(room.id);
+    deleteSessionsByProject(projectName);
+    clearPmChat(projectName);
+    deleteVaultDocsByProject(projectName);
+    deleteStateEventsByProject(projectName);
     // 3. Finally delete the project config itself
     deleteProjectConfig(projectName);
 
@@ -1295,7 +1236,6 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
     }
     // Backlog assign
     if (normalizedPathname === "/api/software-house/backlog/assign" && method === "POST") {
-      const db = getDb();
       const body = await parseBody(req);
       const { taskId, workerId } = body;
       
@@ -1304,9 +1244,9 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
         return true;
       }
       
-      db.prepare("UPDATE backlog_tasks SET worker_id = ? WHERE id = ?").run(workerId, taskId);
-      db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(workerId);
-      db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)").run(workerId, taskId, JSON.stringify({ assignedAt: new Date().toISOString() }));
+      updateBacklogTask(taskId, { worker_id: workerId });
+      updateWorker(workerId, { status: 'working' } as any);
+      addWorkerTaskHistory(workerId, taskId, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
       
       json(res, { ok: true, taskId, workerId });
       return true;
