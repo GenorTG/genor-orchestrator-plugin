@@ -1170,16 +1170,21 @@ export async function handleProjectDelete(req: IncomingMessage, res: ServerRespo
     const pc = getProjectConfig(projectName) as any;
     const location = pc?.location || path.join(getDataDir(), "projects", projectName);
 
-    // Remove from DB
-    deleteProjectConfig(projectName);
-
-    // Remove associated data
+    // Remove associated data (order matters for FK constraints)
+    // 1. Delete child tables that reference workers/backlog first
+    db.prepare("DELETE FROM worker_task_history WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(projectName);
+    db.prepare("DELETE FROM worker_messages WHERE from_worker IN (SELECT id FROM workers WHERE project = ?) OR to_worker IN (SELECT id FROM workers WHERE project = ?)").run(projectName, projectName);
+    db.prepare("DELETE FROM worker_sessions WHERE worker_id IN (SELECT id FROM workers WHERE project = ?)").run(projectName);
+    // 2. Now delete the main tables
     db.prepare("DELETE FROM backlog_tasks WHERE project = ?").run(projectName);
     db.prepare("DELETE FROM workers WHERE project = ?").run(projectName);
     db.prepare("DELETE FROM rooms WHERE project = ?").run(projectName);
     db.prepare("DELETE FROM sessions WHERE project = ?").run(projectName);
     db.prepare("DELETE FROM pm_chat WHERE project = ?").run(projectName);
-    db.prepare("DELETE FROM vault_docs WHERE project_id = ?").run(projectName);
+    db.prepare("DELETE FROM vault_docs WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM state_events WHERE project = ?").run(projectName);
+    // 3. Finally delete the project config itself
+    deleteProjectConfig(projectName);
 
     // Remove files if requested
     let filesDeleted = false;

@@ -141,7 +141,7 @@ td.center{text-align:center}
 
 <!-- Confirm dialog -->
 <div class="overlay" id="overlay" style="display:none" onclick="if(event.target===this)closeDialog()">
-  <div class="dialog">
+  <div class="dialog" onclick="event.stopPropagation()">
     <h3 id="dialog-title">Delete projects?</h3>
     <p id="dialog-desc"></p>
     <div class="projects-list" id="dialog-projects"></div>
@@ -150,8 +150,8 @@ td.center{text-align:center}
       <label><input type="radio" name="delete-scope" value="files"> Delete project files too</label>
     </div>
     <div class="dialog-actions">
-      <button class="btn" onclick="closeDialog()">Cancel</button>
-      <button class="btn danger-fill" id="dialog-confirm" onclick="executeDelete()">Delete</button>
+      <button class="btn" onclick="event.stopPropagation();closeDialog()">Cancel</button>
+      <button class="btn danger-fill" id="dialog-confirm" onclick="event.stopPropagation();executeDelete()">Delete</button>
     </div>
   </div>
 </div>
