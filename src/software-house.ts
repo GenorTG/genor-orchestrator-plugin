@@ -99,18 +99,6 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
   const db = getDb();
   const project = getProject(req) || "genor-orchestrator-plugin";
 
-  // Fetch all projects from orchestrator
-  let allProjects: string[] = [];
-  try {
-    const host = req.headers.host || "localhost:18789";
-    const proto = "http";
-    const prRes = await fetch(`${proto}://${host}/orchestrator/api/projects`);
-    if (prRes.ok) {
-      const prData = await prRes.json() as any;
-      allProjects = (prData.projects || []).map((p: any) => p.name);
-    }
-  } catch {}
-
   // Query workers
   const workers = db.prepare("SELECT * FROM workers WHERE project = ?").all(project) as unknown as WorkerRow[];
   
@@ -123,9 +111,9 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
   // Query vault docs
   const vaultDocs = db.prepare("SELECT * FROM vault_docs WHERE project = ?").all(project) as unknown as VaultDocRow[];
 
-  // Build project list — all orchestrator projects + any from software house DB
-  const dbProjects = db.prepare("SELECT DISTINCT project FROM workers UNION SELECT DISTINCT project FROM rooms").all() as any[];
-  const extraProjects = [...new Set([...allProjects, ...dbProjects.map((r: any) => r.project)])].filter(Boolean);
+  // Build project list — project_configs is the single source of truth for which projects exist
+  const allConfigs = getAllProjectConfigs(500);
+  const extraProjects = Object.keys(allConfigs);
 
   const projects: Record<string, any> = {};
   for (const pId of extraProjects) {
