@@ -14,7 +14,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
-import { getDb, listModels, setProjectConfig, getProjectConfig, updateProjectConfig, WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow } from "./db.js";
+import { getDb, listModels, setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs, WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow } from "./db.js";
 import { getDataDir } from "./shared.js";
 
 // ── HELPERS ──────────────────────────────────────────────────
@@ -1087,6 +1087,113 @@ export async function handleRepoPull(req: IncomingMessage, res: ServerResponse):
   }
 }
 
+/**
+ * GET /api/software-house/projects/list
+ * List all projects with details.
+ */
+export async function handleProjectList(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const dataDir = getDataDir();
+    const projectsDir = path.join(dataDir, "projects");
+    const allConfigs = getAllProjectConfigs(500);
+
+    const projects: any[] = [];
+    for (const [name, cfg] of Object.entries(allConfigs)) {
+      const location = (cfg as any).location || path.join(projectsDir, name);
+      const configJson = (cfg as any).config ? JSON.parse((cfg as any).config) : {};
+      const exists = fs.existsSync(location);
+      let fileCount = 0;
+      let repoUrl = configJson.repo_url || "";
+      let hasGit = false;
+      let branch = "";
+      let lastCommit = "";
+
+      if (exists) {
+        try {
+          // Count files (non-recursive, skip .git)
+          const entries = fs.readdirSync(location, { withFileTypes: true });
+          fileCount = entries.filter(e => e.name !== ".git").length;
+          hasGit = fs.existsSync(path.join(location, ".git"));
+          if (hasGit) {
+            try {
+              branch = execSync("git branch --show-current", { cwd: location, encoding: "utf-8", timeout: 5000 }).trim();
+              lastCommit = execSync("git log -1 --format=%s", { cwd: location, encoding: "utf-8", timeout: 5000 }).trim();
+            } catch { /* */ }
+          }
+        } catch { /* */ }
+      }
+
+      // Count workers & tasks
+      const db = getDb();
+      const workerCount = (db.prepare("SELECT COUNT(*) as c FROM workers WHERE project = ?").get(name) as any)?.c || 0;
+      const taskCount = (db.prepare("SELECT COUNT(*) as c FROM backlog_tasks WHERE project = ?").get(name) as any)?.c || 0;
+      const sessionCount = (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE project = ?").get(name) as any)?.c || 0;
+
+      projects.push({
+        name,
+        location,
+        exists,
+        fileCount,
+        repoUrl,
+        hasGit,
+        branch,
+        lastCommit,
+        workerCount,
+        taskCount,
+        sessionCount,
+      });
+    }
+
+    json(res, { ok: true, projects });
+  } catch (e: any) {
+    json(res, { error: e.message || "Failed to list projects" }, 500);
+  }
+}
+
+/**
+ * DELETE /api/software-house/projects/:name
+ * Delete a project. Query param: ?deleteFiles=true to also remove directory.
+ */
+export async function handleProjectDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const cleanPath = url.pathname.replace(/^\/orchestrator/, "");
+  const match = cleanPath.match(/^\/api\/software-house\/projects\/([^/]+)$/);
+  if (!match) {
+    json(res, { error: "invalid path" }, 400);
+    return;
+  }
+  const projectName = match[1];
+  const deleteFiles = url.searchParams.get("deleteFiles") === "true";
+
+  try {
+    const db = getDb();
+    const pc = getProjectConfig(projectName) as any;
+    const location = pc?.location || path.join(getDataDir(), "projects", projectName);
+
+    // Remove from DB
+    deleteProjectConfig(projectName);
+
+    // Remove associated data
+    db.prepare("DELETE FROM backlog_tasks WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM workers WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM rooms WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM sessions WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM pm_chat WHERE project = ?").run(projectName);
+    db.prepare("DELETE FROM vault_docs WHERE project_id = ?").run(projectName);
+
+    // Remove files if requested
+    let filesDeleted = false;
+    if (deleteFiles && fs.existsSync(location)) {
+      fs.rmSync(location, { recursive: true, force: true });
+      filesDeleted = true;
+    }
+
+    json(res, { ok: true, project: projectName, filesDeleted });
+  } catch (e: any) {
+    json(res, { error: e.message || "Failed to delete project" }, 500);
+  }
+}
+
 // ── ROUTER ───────────────────────────────────────────────────
 
 /**
@@ -1255,6 +1362,17 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
     }
     if (normalizedPathname === "/api/software-house/worker/recover" && method === "POST") {
       await handleWorkerRecover(req, res);
+      return true;
+    }
+
+    // Project list
+    if (normalizedPathname === "/api/software-house/projects/list" && method === "GET") {
+      await handleProjectList(req, res);
+      return true;
+    }
+    // Project delete
+    if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+$/) && method === "DELETE") {
+      await handleProjectDelete(req, res);
       return true;
     }
 

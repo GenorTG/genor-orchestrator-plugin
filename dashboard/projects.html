@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Genor Orchestrator — Projects</title>
+<style>
+:root {
+  --bg:#0a0e14; --bg-floor:#11161d; --bg-desk:#1a1f2b; --bg-panel:#131820;
+  --border:#252b36; --text:#b4c0d4; --text-dim:#6b7394; --text-bright:#e2e8f4;
+  --blue:#5e9cff; --green:#3fb950; --red:#f85149; --yellow:#e5b83f; --orange:#f0883e;
+  --purple:#a78bfa; --cyan:#22d3ee; --accent:#5e9cff; --radius:8px;
+  --font:'JetBrains Mono','Cascadia Code',monospace;
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);font-size:14px;overflow:hidden}
+button,input,select{font-family:inherit;cursor:pointer}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* HEADER */
+.header{height:48px;background:var(--bg-panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:14px}
+.header h1{font-size:15px;font-weight:700;color:var(--text-bright);display:flex;align-items:center;gap:8px}
+.header h1 span{color:var(--accent)}
+.header-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.back{font-size:11px;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text-dim);text-decoration:none}
+.back:hover{border-color:var(--accent);color:var(--accent)}
+
+/* TOOLBAR */
+.toolbar{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.search{flex:1;min-width:200px;padding:7px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text-bright);font-size:13px;outline:none}
+.search:focus{border-color:var(--accent)}
+.search::placeholder{color:var(--text-dim)}
+.btn{font-size:11px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text);transition:150ms;white-space:nowrap}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.danger{border-color:var(--red);color:var(--red)}
+.btn.danger:hover{background:var(--red);color:#fff}
+.btn.danger-fill{background:var(--red);color:#fff;border-color:var(--red)}
+.btn.danger-fill:hover{opacity:.85}
+.btn.primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.count-badge{font-size:10px;color:var(--text-dim);padding:0 6px}
+select{padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text);font-size:12px;outline:none}
+
+/* TABLE */
+.table-wrap{flex:1;overflow:auto;padding:0 20px 20px}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th{text-align:left;padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:1}
+td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle}
+tr:hover{background:rgba(94,156,255,.04)}
+tr.selected{background:rgba(94,156,255,.08)}
+tr.selected td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+td.name{font-weight:700;color:var(--text-bright)}
+td.mono{font-family:var(--font);font-size:11px;color:var(--text-dim)}
+td.center{text-align:center}
+
+/* CHECKBOX */
+.chk{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+
+/* BADGES */
+.badge{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:700;display:inline-block}
+.badge.green{background:var(--green);color:#000}
+.badge.red{background:var(--red);color:#fff}
+.badge.yellow{background:var(--yellow);color:#000}
+.badge.blue{background:var(--blue);color:#000}
+.badge.gray{background:var(--border);color:var(--text-dim)}
+.badge.purple{background:var(--purple);color:#000}
+
+/* EMPTY STATE */
+.empty{text-align:center;padding:60px 20px;color:var(--text-dim)}
+.empty h3{color:var(--text);margin-bottom:8px}
+
+/* CONFIRM DIALOG */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100}
+.dialog{background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.dialog h3{color:var(--text-bright);margin-bottom:12px;font-size:16px}
+.dialog p{color:var(--text);font-size:13px;line-height:1.5;margin-bottom:16px}
+.dialog .projects-list{background:var(--bg-desk);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:16px;max-height:120px;overflow:auto;font-size:12px;font-family:var(--font);color:var(--text-dim)}
+.dialog .projects-list div{padding:2px 0}
+.dialog-actions{display:flex;gap:8px;justify-content:flex-end}
+.radio-group{display:flex;gap:16px;margin:12px 0;padding:10px;background:var(--bg-desk);border-radius:6px;border:1px solid var(--border)}
+.radio-group label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);cursor:pointer}
+.radio-group input[type=radio]{accent-color:var(--accent)}
+
+/* TOAST */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:12px;z-index:200;animation:slideIn .2s}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+@keyframes slideIn{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* LOADING */
+.loading{text-align:center;padding:40px;color:var(--text-dim)}
+.spinner{display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-right:8px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>⚙</span> Projects</h1>
+  <div class="header-right">
+    <a href="/orchestrator/software-house" class="back">← Dashboard</a>
+  </div>
+</div>
+
+<div class="toolbar" id="toolbar">
+  <input type="text" class="search" id="search" placeholder="Search projects by name, path, or branch…" autofocus>
+  <select id="filter">
+    <option value="all">All</option>
+    <option value="with-repo">With repo</option>
+    <option value="local-only">Local only</option>
+    <option value="has-workers">Has workers</option>
+    <option value="empty">Empty (0 files)</option>
+  </select>
+  <span class="count-badge" id="count"></span>
+  <button class="btn danger" id="btn-delete" disabled onclick="confirmDelete(false)">🗑 Remove from orchestrator</button>
+  <button class="btn danger-fill" id="btn-delete-files" disabled onclick="confirmDelete(true)">💣 Delete + files</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:32px"><input type="checkbox" class="chk" id="select-all"></th>
+        <th>Project</th>
+        <th>Files</th>
+        <th>Workers</th>
+        <th>Tasks</th>
+        <th>Sessions</th>
+        <th>Git</th>
+        <th>Branch</th>
+        <th>Last Commit</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="10"><div class="loading"><span class="spinner"></span> Loading projects…</div></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Confirm dialog -->
+<div class="overlay" id="overlay" style="display:none" onclick="if(event.target===this)closeDialog()">
+  <div class="dialog">
+    <h3 id="dialog-title">Delete projects?</h3>
+    <p id="dialog-desc"></p>
+    <div class="projects-list" id="dialog-projects"></div>
+    <div class="radio-group" id="dialog-scope" style="display:none">
+      <label><input type="radio" name="delete-scope" value="orchestrator" checked> Remove from orchestrator only</label>
+      <label><input type="radio" name="delete-scope" value="files"> Delete project files too</label>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn" onclick="closeDialog()">Cancel</button>
+      <button class="btn danger-fill" id="dialog-confirm" onclick="executeDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/orchestrator/api/software-house';
+let projects = [];
+let selected = new Set();
+let pendingDelete = [];
+let pendingDeleteFiles = false;
+
+async function loadProjects() {
+  try {
+    const r = await fetch(`${API}/projects/list`);
+    const data = await r.json();
+    projects = data.projects || [];
+    render();
+  } catch (e) {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="10"><div class="empty"><h3>Failed to load projects</h3>${e.message}</div></td></tr>`;
+  }
+}
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const filter = document.getElementById('filter').value;
+  const filtered = projects.filter(p => {
+    if (q && !p.name.toLowerCase().includes(q) && !p.location.toLowerCase().includes(q) && !p.branch.toLowerCase().includes(q)) return false;
+    if (filter === 'with-repo' && !p.repoUrl) return false;
+    if (filter === 'local-only' && p.repoUrl) return false;
+    if (filter === 'has-workers' && p.workerCount === 0) return false;
+    if (filter === 'empty' && p.fileCount > 0) return false;
+    return true;
+  });
+
+  document.getElementById('count').textContent = `${filtered.length} / ${projects.length}`;
+
+  if (filtered.length === 0) {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="10"><div class="empty"><h3>No projects found</h3></div></td></tr>`;
+    return;
+  }
+
+  document.getElementById('tbody').innerHTML = filtered.map(p => {
+    const sel = selected.has(p.name) ? 'selected' : '';
+    const chk = selected.has(p.name) ? 'checked' : '';
+    const repoBadge = p.repoUrl
+      ? `<span class="badge green">repo</span>`
+      : `<span class="badge gray">local</span>`;
+    const gitBadge = p.hasGit
+      ? `<span class="badge blue">git</span>`
+      : '';
+    const statusBadges = p.exists ? '' : `<span class="badge red">missing</span>`;
+    const branch = p.branch || '—';
+    const commit = p.lastCommit ? (p.lastCommit.length > 40 ? p.lastCommit.slice(0, 40) + '…' : p.lastCommit) : '—';
+    const loc = p.location.length > 50 ? '…' + p.location.slice(-48) : p.location;
+    return `<tr class="${sel}" data-name="${p.name}">
+      <td><input type="checkbox" class="chk" ${chk} onchange="toggleSelect('${p.name}',this.checked)"></td>
+      <td class="name">${esc(p.name)} ${statusBadges}</td>
+      <td class="center">${p.fileCount}</td>
+      <td class="center">${p.workerCount}</td>
+      <td class="center">${p.taskCount}</td>
+      <td class="center">${p.sessionCount}</td>
+      <td>${repoBadge} ${gitBadge}</td>
+      <td class="mono">${esc(branch)}</td>
+      <td class="mono" title="${esc(p.lastCommit || '')}">${esc(commit)}</td>
+      <td class="mono" title="${esc(p.location)}">${esc(loc)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function toggleSelect(name, checked) {
+  if (checked) selected.add(name); else selected.delete(name);
+  updateButtons();
+  render();
+}
+
+document.getElementById('select-all').addEventListener('change', function() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const filter = document.getElementById('filter').value;
+  const filtered = projects.filter(p => {
+    if (q && !p.name.toLowerCase().includes(q) && !p.location.toLowerCase().includes(q)) return false;
+    if (filter === 'with-repo' && !p.repoUrl) return false;
+    if (filter === 'local-only' && p.repoUrl) return false;
+    if (filter === 'has-workers' && p.workerCount === 0) return false;
+    if (filter === 'empty' && p.fileCount > 0) return false;
+    return true;
+  });
+  if (this.checked) filtered.forEach(p => selected.add(p.name));
+  else filtered.forEach(p => selected.delete(p.name));
+  updateButtons();
+  render();
+});
+
+function updateButtons() {
+  const n = selected.size;
+  document.getElementById('btn-delete').disabled = n === 0;
+  document.getElementById('btn-delete-files').disabled = n === 0;
+}
+
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('filter').addEventListener('change', render);
+
+function confirmDelete(withFiles) {
+  if (selected.size === 0) return;
+  pendingDelete = [...selected];
+  pendingDeleteFiles = withFiles;
+
+  document.getElementById('dialog-title').textContent = withFiles
+    ? `Delete ${pendingDelete.length} project(s) AND their files?`
+    : `Remove ${pendingDelete.length} project(s) from orchestrator?`;
+  document.getElementById('dialog-desc').textContent = withFiles
+    ? 'This will permanently delete the project directories and all their files. This cannot be undone.'
+    : 'This will only remove the projects from the orchestrator. Local files will be kept.';
+  document.getElementById('dialog-projects').innerHTML = pendingDelete.map(n => `<div>📁 ${esc(n)}</div>`).join('');
+
+  // For "remove from orchestrator only" mode, show scope picker
+  const scopeEl = document.getElementById('dialog-scope');
+  if (!withFiles) {
+    scopeEl.style.display = 'flex';
+    scopeEl.querySelector('input[value="orchestrator"]').checked = true;
+  } else {
+    scopeEl.style.display = 'none';
+  }
+
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function closeDialog() {
+  document.getElementById('overlay').style.display = 'none';
+}
+
+async function executeDelete() {
+  const scopeEl = document.getElementById('dialog-scope');
+  const deleteFiles = pendingDeleteFiles ||
+    (scopeEl.style.display !== 'none' && scopeEl.querySelector('input[value="files"]')?.checked);
+
+  closeDialog();
+  const btn = document.getElementById('dialog-confirm');
+  btn.disabled = true;
+
+  let ok = 0, fail = 0;
+  for (const name of pendingDelete) {
+    try {
+      const url = `${API}/projects/${encodeURIComponent(name)}${deleteFiles ? '?deleteFiles=true' : ''}`;
+      const r = await fetch(url, { method: 'DELETE' });
+      const d = await r.json();
+      if (d.ok) ok++; else fail++;
+    } catch { fail++; }
+  }
+
+  selected.clear();
+  updateButtons();
+  await loadProjects();
+  toast(fail === 0 ? `Deleted ${ok} project(s)` : `${ok} deleted, ${fail} failed`, fail === 0 ? 'ok' : 'err');
+}
+
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// Init
+loadProjects();
+</script>
+</body>
+</html>
