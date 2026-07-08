@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { Type } from "typebox";
-import { getDb, WorkerRow } from "./db.js";
+import { getWorker, getBacklogTask, updateBacklogTask, updateWorker, addWorkerTaskHistory, listWorkerTaskHistory, getWorkerCurrentTask, getStalledTasksForWorker, getWorkerLastActivity, addWorkerMessage, listWorkerMessages, WorkerRow } from "./db.js";
 import { getWorkerEngine } from "./worker-engine.js";
 
 function txt(data: any): { content: Array<{ type: "text"; text: string }>; details: any } {
@@ -23,16 +23,15 @@ export const assignTaskTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { workerId: string; taskId: number };
-    const db = getDb();
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.workerId) as WorkerRow | undefined;
+    const worker = getWorker(args.workerId);
     if (!worker) return txt({ error: `Worker not found: ${args.workerId}` });
     
-    const task = db.prepare("SELECT * FROM backlog_tasks WHERE id = ?").get(args.taskId);
+    const task = getBacklogTask(args.taskId.toString());
     if (!task) return txt({ error: `Task not found: ${args.taskId}` });
     
-    db.prepare("UPDATE backlog_tasks SET worker_id = ? WHERE id = ?").run(args.workerId, args.taskId);
-    db.prepare("UPDATE workers SET status = 'working' WHERE id = ?").run(args.workerId);
-    db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, ?, 'assigned', ?)").run(args.workerId, args.taskId, JSON.stringify({ assignedAt: new Date().toISOString() }));
+    updateBacklogTask(args.taskId.toString(), { worker_id: args.workerId });
+    updateWorker(args.workerId, { status: 'working' } as any);
+    addWorkerTaskHistory(args.workerId, args.taskId, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
     
     return txt({ ok: true, message: `Task ${args.taskId} assigned to ${args.workerId}`, worker: { id: worker.id, name: worker.name, status: "working" } });
   },
@@ -63,12 +62,11 @@ export const workerStatusTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { workerId: string };
-    const db = getDb();
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.workerId) as WorkerRow | undefined;
+    const worker = getWorker(args.workerId);
     if (!worker) return txt({ error: `Worker not found: ${args.workerId}` });
     
-    const recentTasks = db.prepare("SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT 5").all(args.workerId) as any[];
-    const currentTask = db.prepare("SELECT * FROM backlog_tasks WHERE worker_id = ? AND status != 'done' LIMIT 1").get(args.workerId);
+    const recentTasks = listWorkerTaskHistory(args.workerId, 5);
+    const currentTask = getWorkerCurrentTask(args.workerId);
     
     return txt({
       worker: { id: worker.id, name: worker.name, role: worker.role, status: worker.status, model: worker.model },
@@ -91,13 +89,12 @@ export const sendMessageTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { fromWorker: string; toWorker: string; type: string; content: string; taskId?: number };
-    const db = getDb();
-    const from = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.fromWorker);
-    const to = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.toWorker);
+    const from = getWorker(args.fromWorker);
+    const to = getWorker(args.toWorker);
     if (!from) return txt({ error: `Sender not found: ${args.fromWorker}` });
     if (!to) return txt({ error: `Recipient not found: ${args.toWorker}` });
     
-    db.prepare("INSERT INTO worker_messages (from_worker, to_worker, type, content, task_id) VALUES (?, ?, ?, ?, ?)").run(args.fromWorker, args.toWorker, args.type, args.content, args.taskId || null);
+    addWorkerMessage(args.fromWorker, args.toWorker, args.type, args.content, args.taskId);
     return txt({ ok: true, message: `Message sent from ${args.fromWorker} to ${args.toWorker}` });
   },
 };
@@ -112,12 +109,7 @@ export const getMessagesTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { workerId: string; unreadOnly?: boolean };
-    const db = getDb();
-    let query = "SELECT * FROM worker_messages WHERE to_worker = ?";
-    if (args.unreadOnly) query += " AND read_at IS NULL";
-    query += " ORDER BY created_at DESC LIMIT 50";
-    
-    const messages = db.prepare(query).all(args.workerId) as any[];
+    const messages = listWorkerMessages(args.workerId, args.unreadOnly);
     return txt({
       workerId: args.workerId,
       messageCount: messages.length,
@@ -135,12 +127,11 @@ export const workerHealthTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { workerId: string };
-    const db = getDb();
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.workerId) as WorkerRow | undefined;
+    const worker = getWorker(args.workerId);
     if (!worker) return txt({ error: `Worker not found: ${args.workerId}` });
     
-    const stalledTasks = db.prepare("SELECT * FROM backlog_tasks WHERE worker_id = ? AND status IN ('in_progress', 'testing')").all(args.workerId) as any[];
-    const lastActivity = db.prepare("SELECT created_at FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT 1").get(args.workerId) as any;
+    const stalledTasks = getStalledTasksForWorker(args.workerId);
+    const lastActivity = getWorkerLastActivity(args.workerId);
     
     const lastActive = lastActivity?.created_at ? new Date(lastActivity.created_at) : null;
     const minutesSinceActive = lastActive ? Math.floor((Date.now() - lastActive.getTime()) / 60000) : null;
@@ -164,15 +155,17 @@ export const recoverWorkerTool = {
   }),
   async execute(_id: string, _params: any) {
     const args = _params as { workerId: string };
-    const db = getDb();
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(args.workerId) as WorkerRow | undefined;
+    const worker = getWorker(args.workerId);
     if (!worker) return txt({ error: `Worker not found: ${args.workerId}` });
     
-    db.prepare("UPDATE workers SET status = 'sleep' WHERE id = ?").run(args.workerId);
-    const stalledTasks = db.prepare("UPDATE backlog_tasks SET worker_id = NULL WHERE worker_id = ? AND status IN ('in_progress', 'testing')").run(args.workerId);
-    db.prepare("INSERT INTO worker_task_history (worker_id, task_id, action, details) VALUES (?, NULL, 'recovered', ?)").run(args.workerId, JSON.stringify({ recoveredAt: new Date().toISOString() }));
+    updateWorker(args.workerId, { status: 'sleep' } as any);
+    const stalledTasks = getStalledTasksForWorker(args.workerId);
+    for (const task of stalledTasks) {
+      updateBacklogTask(task.id, { worker_id: null as any });
+    }
+    addWorkerTaskHistory(args.workerId, null, 'recovered', JSON.stringify({ recoveredAt: new Date().toISOString() }));
     
-    return txt({ ok: true, message: `Worker ${args.workerId} recovered`, tasksRequeued: stalledTasks.changes });
+    return txt({ ok: true, message: `Worker ${args.workerId} recovered`, tasksRequeued: stalledTasks.length });
   },
 };
 

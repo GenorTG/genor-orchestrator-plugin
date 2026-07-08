@@ -5,7 +5,7 @@
 // Workers are persistent AI personas that execute tasks using
 // OpenClaw's agent sessions with full tool access.
 
-import { getDb, WorkerRow, BacklogRow } from "./db.js";
+import { getWorker, getBacklogTask, listWorkerTaskHistory, addWorkerTaskHistory, listVaultDocs, WorkerRow, BacklogRow } from "./db.js";
 
 // ═══════════════════════════════════════════════════════════════
 //  TYPES
@@ -89,14 +89,13 @@ export class WorkerEngine {
     }
 
     // 2. Load worker from database
-    const db = getDb();
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(workerId) as WorkerRow | undefined;
+    const worker = getWorker(workerId);
     if (!worker) {
       return { success: false, error: `Worker not found: ${workerId}` };
     }
 
     // 3. Load task from database
-    const task = db.prepare("SELECT * FROM backlog_tasks WHERE id = ?").get(taskId) as BacklogRow | undefined;
+    const task = getBacklogTask(taskId.toString());
     if (!task) {
       return { success: false, error: `Task not found: ${taskId}` };
     }
@@ -161,12 +160,11 @@ Return a summary of what you did when complete.`;
   // ═══════════════════════════════════════════════════════════════
 
   private async loadContext(worker: WorkerRow, task: BacklogRow): Promise<string> {
-    const db = getDb();
     const contextParts: string[] = [];
 
     // Load vault docs for the project
     try {
-      const vaultDocs = db.prepare("SELECT * FROM vault_docs WHERE project_id = ?").all(task.project || "genor-orchestrator-plugin") as any[];
+      const vaultDocs = listVaultDocs(task.project || "genor-orchestrator-plugin");
       if (vaultDocs.length > 0) {
         contextParts.push("### Project Documentation");
         for (const doc of vaultDocs.slice(0, 5)) { // Limit to 5 docs
@@ -180,9 +178,7 @@ Return a summary of what you did when complete.`;
 
     // Load worker's previous tasks for context
     try {
-      const previousTasks = db.prepare(
-        "SELECT * FROM worker_task_history WHERE worker_id = ? ORDER BY created_at DESC LIMIT 3"
-      ).all(worker.id) as any[];
+      const previousTasks = listWorkerTaskHistory(worker.id, 3);
       if (previousTasks.length > 0) {
         contextParts.push("### Your Recent Work");
         for (const pt of previousTasks) {
@@ -489,11 +485,7 @@ Return a summary of what you did when complete.`;
 
   private logTaskResult(workerId: string, taskId: number, result: TaskResult): void {
     try {
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO worker_task_history (worker_id, task_id, action, details)
-        VALUES (?, ?, ?, ?)
-      `).run(
+      addWorkerTaskHistory(
         workerId,
         taskId,
         result.success ? "completed" : "failed",

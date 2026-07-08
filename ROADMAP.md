@@ -2,6 +2,20 @@
 
 > **Project-level roadmap.** See `~/.openclaw/workspace/orchestrator-data/projects/genor-orchestrator-plugin/ROADMAP.md` for the canonical version with full detail.
 
+## ✅ v1.1.0-alpha — Current
+
+- **PM Integration** — PM is now a required worker role
+- **Avatar Messages** — PM avatar shown in chat bubble UI
+- **CI Fixes** — removed openclaw plugins validate, trigger tests on main pushes
+
+## ✅ v1.0.0-alpha — Completed
+
+- **Software House Merger** — full integration with V4 database schema
+- **Dashboard redesign** — 1428-line SPA, 9 tabs, left sidebar nav
+- **QA Workflow** — 3 tools for quality assurance
+- **Handoff system** — generate recovery documents
+- **Test infrastructure** — 4 tools for unit and E2E test creation
+
 ## ✅ v0.9.0 — Completed
 
 - **OpenAI Endpoint Session Spawn** — Dashboard spawns sessions via direct POST to `/v1/chat/completions` with `x-openclaw-session-key`

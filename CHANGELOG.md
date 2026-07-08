@@ -4,6 +4,36 @@ All notable changes to **Genor's Orchestrator Plugin** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0-alpha] — 2026-06-26
+
+### Added
+- **PM jako wymagany pracownik** — PM (Project Manager) is now a required worker role
+- **PM avatar to chat messages** — bubble UI shows PM avatar in messages
+- **CI improvements** — removed openclaw plugins validate (not available in CI), trigger tests on main pushes
+
+### Fixed
+- **Unregistered tools removed from manifest** — CI build now passes
+- **Version mismatch** — synced openclaw.plugin.json and README.md badge to match package.json (1.1.0-alpha)
+
+## [1.0.0-alpha] — 2026-06-24
+
+### Added
+- **Software House Merger** — full integration of worker system with V4 database schema
+- **Dashboard redesign** — 1428-line SPA with 9 tabs and left sidebar navigation
+- **QA Workflow** — 3 tools for quality assurance (submit, approve, reject)
+- **Handoff system** — generate recovery documents for session continuity
+- **Deep-dive analysis** — project documentation analysis tools
+- **Doc maintenance tools** — auto-clean and organize project documentation
+- **Test infrastructure** — 4 tools for unit and E2E test creation
+
+### Changed
+- **Migrated to SQLite** — replaced flat JSON files with orchestrator.db
+- **Project model routing** — per-project allowlist and category-based routing chains
+- **Free-only routing preset** — automatic fallback to free models
+
+### Removed
+- **PM2 bridge** — no longer needed for process management
+
 ## [Unreleased]
 
 ### Fixed

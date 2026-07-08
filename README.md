@@ -1,6 +1,6 @@
 # Genor Orchestrator — Software House
 
-> **v0.1.0-alpha** — AI-powered software house with persistent worker sessions, task execution, inter-worker collaboration, and full project lifecycle management.
+> **v1.1.0-alpha** — AI-powered software house with persistent worker sessions, task execution, inter-worker collaboration, and full project lifecycle management.
 
 An OpenClaw plugin that turns your AI agent into a software house manager with:
 - **Project management** — create, bind, track projects with full context injection
@@ -348,7 +348,7 @@ Features:
 
 ---
 
-## What's New in Alpha (v0.1.0-alpha)
+## What's New in Alpha (v1.1.0-alpha)
 
 This is the first alpha release. Key features:
 
