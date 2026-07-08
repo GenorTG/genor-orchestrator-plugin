@@ -52,15 +52,27 @@ describe('Browser E2E Tests', () => {
   beforeAll(async () => {
     up = await gatewayUp();
     if (!up) console.log('⚠️  Gateway not running — skipping browser tests');
+    // Clean up any stale test projects from previous failed runs
+    if (up) {
+      try {
+        const list = await getJson(`${BASE}/orchestrator/api/software-house/projects/list`);
+        for (const p of list.projects || []) {
+          if (p.name.startsWith('e2e-test-')) {
+            await fetch(`${BASE}/orchestrator/api/software-house/projects/${encodeURIComponent(p.name)}?deleteFiles=true`, { method: 'DELETE' }).catch(() => {});
+          }
+        }
+      } catch { /* best-effort */ }
+    }
   });
 
   afterAll(async () => {
     if (!up) return;
     for (const proj of testProjectsCreated) {
       try {
-        await getText(`${BASE}/orchestrator/api/software-house/project/delete?project=${encodeURIComponent(proj)}`);
+        await fetch(`${BASE}/orchestrator/api/software-house/projects/${encodeURIComponent(proj)}?deleteFiles=true`, { method: 'DELETE' });
       } catch { /* best-effort */ }
     }
+    testProjectsCreated.length = 0;
   });
 
   // ── Health ────────────────────────────────────────────────
@@ -193,11 +205,11 @@ describe('Browser E2E Tests', () => {
     expect(Array.isArray(backlog)).toBe(true);
     expect(backlog.length).toBeGreaterThanOrEqual(1);
 
-    // 4. Cleanup: remove from tracking and delete project
+    // 4. Cleanup: delete project with cascade + filesystem
     const idx = testProjectsCreated.indexOf(projName);
     if (idx !== -1) testProjectsCreated.splice(idx, 1);
     try {
-      await getText(`${BASE}/orchestrator/api/software-house/project/delete?project=${projName}`);
+      await fetch(`${BASE}/orchestrator/api/software-house/projects/${encodeURIComponent(projName)}?deleteFiles=true`, { method: 'DELETE' });
     } catch { /* best-effort */ }
   });
 });
