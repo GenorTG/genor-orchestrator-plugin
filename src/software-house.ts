@@ -1086,8 +1086,13 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
       updateBacklogTask(taskId, { worker_id: workerId });
       updateWorker(workerId, { status: 'working' } as any);
       addWorkerTaskHistory(workerId, taskId, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
-      
+
       json(res, { ok: true, taskId, workerId });
+      return true;
+    }
+    // Backlog move (kanban drag)
+    if (normalizedPathname === "/api/software-house/backlog/move" && method === "POST") {
+      await handleBacklogMove(req, res);
       return true;
     }
 

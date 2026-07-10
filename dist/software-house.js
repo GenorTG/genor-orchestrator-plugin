@@ -939,6 +939,11 @@ export async function handleSoftwareHouseRoute(req, res) {
             json(res, { ok: true, taskId, workerId });
             return true;
         }
+        // Backlog move (kanban drag)
+        if (normalizedPathname === "/api/software-house/backlog/move" && method === "POST") {
+            await handleBacklogMove(req, res);
+            return true;
+        }
         // PM Chat
         if (normalizedPathname === "/api/software-house/pm/chat" && method === "GET") {
             await handlePmChatGet(req, res);

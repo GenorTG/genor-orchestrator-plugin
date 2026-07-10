@@ -153,8 +153,8 @@ class DataStore extends EventTarget {
     return result;
   }
 
-  async moveTask(taskId, status, workerId) {
-    const body = { id: taskId, status };
+  async moveTask(taskId, phase, workerId) {
+    const body = { id: taskId, phase };
     if (workerId !== undefined) body.worker_id = workerId;
     await this.fetch(`/software-house/backlog/move?project=${this.currentProjectId}`, {
       method: 'POST',
