@@ -924,22 +924,32 @@ function renderKanbanFull() {
   document.getElementById('kanbanProjectName').textContent = project.name;
   document.getElementById('kanbanTaskCount').textContent = `${tasks.length} tasków`;
   document.getElementById('kanbanFullBoard').innerHTML = phases.map(p => {
-    // Map task.status → phase.id (DB has 'todo', 'in_progress', 'review', 'done')
+    // Map task.status → phase.id.
+    // Backlog tasks in DB have status='todo'; in_progress='in_progress'; review; done.
     const items = tasks.filter(t => {
-      const s = t.phase || t.status;
-      if (!s) return false;
-      const normalized = String(s).toLowerCase().replace(/_/g, '-');
-      return normalized === p.id;
+      const s = String(t.phase || t.status || '').toLowerCase().replace(/_/g, '-');
+      // Map common aliases
+      if (p.id === 'backlog' && (s === 'todo' || s === 'backlog')) return true;
+      if (p.id === 'in-progress' && (s === 'in-progress' || s === 'in_progress' || s === 'doing' || s === 'active')) return true;
+      if (p.id === 'review' && (s === 'review' || s === 'reviewing')) return true;
+      if (p.id === 'done' && (s === 'done' || s === 'complete' || s === 'completed' || s === 'closed')) return true;
+      return false;
     });
     return `<div class="kanban-col"><h4 style="color:${p.color}">${p.label} (${items.length})</h4>
       ${items.map(t => {
-        const ag = agents.find(a => a.id === t.agent);
+        const wid = taskWorkerId(t);
+        const ag = agents.find(a => a.id === wid);
         return `<div class="kanban-card" style="border-left-color:${p.color}" onclick="openTaskPanel('${t.id}')">
           <div><span class="pri">${t.pri}</span> ${t.title}</div>
           ${ag ? `<div class="who">👤 ${ag.name}</div>` : '<div class="who">— nieprzypisany</div>'}
         </div>`;
       }).join('')}</div>`;
   }).join('');
+}
+
+// Backlog task objects may use either 'agent' or 'worker' id; normalize.
+function taskWorkerId(t) {
+  return t.agent || t.worker || t.worker_id || null;
 }
 
 function renderAll() {
