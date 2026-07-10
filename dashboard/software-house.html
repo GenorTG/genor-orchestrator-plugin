@@ -604,14 +604,13 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 
 <div class="toast" id="toast"></div>
 
+<script src="/orchestrator/store.js"></script>
 <script>
-const BOOTSTRAP_URL = '/orchestrator/api/software-house/bootstrap';
-let projectsCatalog = {};
+// ── Data Store — centralized data provider ──
+// Use store.bootstrap(), store.loadModels(), etc. instead of direct fetch().
+// Subscribe: store.addEventListener('change', renderAll);
+
 let currentProjectId = new URLSearchParams(window.location.search).get('project') || 'genor-orchestrator-plugin';
-let project = projectsCatalog[currentProjectId];
-let rooms = [];
-let agents = [];
-let tasks = [];
 let availableModels = [];
 
 const STATUS = {
@@ -681,26 +680,44 @@ const MIN_ROOM_H = DESK_H + ROOM_PAD_Y + 56;
 
 async function loadModels() {
   try {
-    const res = await fetch('/orchestrator/api/software-house/models');
-    if (!res.ok) return;
-    availableModels = await res.json();
+    await store.loadModels();
+    availableModels = store.models;
   } catch (e) {}
 }
 
-function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+function syncFromStore() {
+  if (!store.bootstrapData) return;
+  const p = store.project;
+  if (!p) return;
+  project = p;
+  rooms = store.rooms || [];
+  agents = store.workers || [];
+  tasks = store.tasks || [];
+  project.vault = store.vault || {};
+  // Populate project catalog from bootstrap's full response
+  const data = store.bootstrapData;
+  if (data && data.projects) {
+    window.__projectsCatalog = data.projects;
+  }
+  applyTransform();
+  focusRoom('command');
+  initProjectSelect();
+  updateRepoStatus();
+  renderAll();
+  const ws = document.getElementById('chatWorkerSelect');
+  if (ws) {
+    ws.innerHTML = '<option value="">🧠 Wybierz pracownika…</option>' + 
+      agents.map(a => `<option value="${a.id}">${a.isOrchestrator ? '🧠' : '👤'} ${a.name} (${a.role})</option>`).join('');
+  }
+}
 
 async function loadData() {
   try {
-    const res = await fetch(BOOTSTRAP_URL + '?project=' + currentProjectId);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+    store.addEventListener('change', syncFromStore);
+    const data = await store.bootstrap(currentProjectId);
     if (!data.ok) throw new Error(data.error || 'Bootstrap failed');
-    projectsCatalog = data.projects || {};
-    currentProjectId = data.defaultProjectId || Object.keys(projectsCatalog)[0];
-    loadProject(currentProjectId, true);
-    applyTransform();
-    focusRoom('command');
-    initProjectSelect();
+    currentProjectId = data.defaultProjectId || currentProjectId;
+    syncFromStore();
     loadModels();
   } catch (e) {
     console.error('Bootstrap load failed:', e);
@@ -708,17 +725,12 @@ async function loadData() {
   }
 }
 
+function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+
 function loadProject(id, skipSave) {
-  const p = projectsCatalog[id];
+  // Use the bootstrap data's projects catalog
+  const p = window.__projectsCatalog ? window.__projectsCatalog[id] : null;
   if (!p) return;
-  if (!skipSave && rooms.length) {
-    projectsCatalog[currentProjectId] = {
-      ...projectsCatalog[currentProjectId],
-      rooms: deepClone(rooms),
-      agents: deepClone(agents),
-      tasks: deepClone(tasks),
-    };
-  }
   currentProjectId = id;
   project = p;
   rooms = deepClone(p.rooms || []);
@@ -754,7 +766,8 @@ function loadProject(id, skipSave) {
 
 function initProjectSelect() {
   const sel = document.getElementById('projectSelect');
-  sel.innerHTML = Object.values(projectsCatalog).map(p =>
+  const catalog = window.__projectsCatalog || {};
+  sel.innerHTML = Object.values(catalog).map(p =>
     `<option value="${p.id}"${!p.hasWorkers ? ' style="color:var(--text-dim)"' : ''}>${p.name}${!p.hasWorkers ? ' (empty)' : ''}</option>`).join('') +
     `<option value="__new__" style="color:var(--green);font-weight:700">➕ Nowy projekt…</option>`;
   sel.value = currentProjectId;
@@ -764,13 +777,8 @@ async function createNewProject(name, repoUrl) {
   try {
     const body = { name };
     if (repoUrl) body.repo_url = repoUrl;
-    const res = await fetch('/orchestrator/api/software-house/projects/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Create failed');
+    const data = await store.createProject(name, repoUrl);
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Create failed');
     const tag = repoUrl ? 'cloned from repo' : 'utworzony';
     toast(`✅ Projekt "${name}" ${tag}`);
     window.location.href = '/orchestrator/software-house?project=' + encodeURIComponent(name);
@@ -990,14 +998,9 @@ function updateRepoStatus() {
 
 async function repoPull() {
   try {
-    const res = await fetch('/orchestrator/api/software-house/projects/' + encodeURIComponent(currentProjectId) + '/repo/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Pull failed');
+    const data = await store.gitPull();
     toast('⬇ Pull OK — zmieniono ' + (data.filesChanged || 0) + ' plików');
-    refreshRepoStatus();
+    syncFromStore();
   } catch (e) {
     toast('⚠️ ' + e.message);
   }
@@ -1007,18 +1010,12 @@ async function repoPush() {
   var msg = prompt('Komentarz do commitu:');
   if (!msg || !msg.trim()) return;
   try {
-    const res = await fetch('/orchestrator/api/software-house/projects/' + encodeURIComponent(currentProjectId) + '/repo/push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg.trim() }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Push failed');
+    const data = await store.gitPush(msg.trim());
     const parts = [];
     if (data.committed) parts.push('committed');
     if (data.pushed) parts.push('pushed');
     toast('⬆ Push OK — ' + (parts.join(' + ') || 'nothing to do'));
-    refreshRepoStatus();
+    syncFromStore();
   } catch (e) {
     toast('⚠️ ' + e.message);
   }
@@ -1026,8 +1023,7 @@ async function repoPush() {
 
 async function refreshRepoStatus() {
   try {
-    const res = await fetch('/orchestrator/api/software-house/projects/' + encodeURIComponent(currentProjectId) + '/repo');
-    const data = await res.json();
+    const data = await store.refreshRepoStatus();
     if (data.ok && project) {
       project.repo = data;
       updateRepoStatus();
@@ -1068,12 +1064,8 @@ function saveLayoutToAPI() {
     h: r.h
   }));
   
-  fetch(`/orchestrator/api/software-house/layout/save?project=${currentProjectId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rooms: layoutData })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  store.saveLayout({ rooms: layoutData }).then(data => {
+    if (data && data.ok) {
       console.log('Layout saved to API');
     } else {
       console.error('Layout save failed:', data.error);
@@ -1530,12 +1522,12 @@ function saveAgent() {
   };
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/workers/${a.id}?project=${currentProjectId}`, {
+  store.api(`/software-house/workers/${a.id}?project=${currentProjectId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates)
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       Object.assign(a, updates);
       a.isOrchestrator = isPm;
       // Re-populate worker selector
@@ -1559,10 +1551,10 @@ function fireAgent() {
   if (!a || a.isOrchestrator || !confirm(`Zwolnić ${a.name}?`)) return;
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/workers/${a.id}?project=${currentProjectId}`, {
+  store.api(`/software-house/workers/${a.id}?project=${currentProjectId}`, {
     method: 'DELETE'
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       agents = agents.filter(x => x.id !== selectedAgent);
       tasks.forEach(t => { if (t.agent === selectedAgent) t.agent = null; });
       closeDetailPanel();
@@ -1617,12 +1609,12 @@ function moveTask(taskId) {
   if (!nextPhase) return;
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/backlog/move?project=${currentProjectId}`, {
+  store.api(`/software-house/backlog/move?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: t.id, phase: nextPhase })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       t.phase = nextPhase;
       renderAll();
       renderTaskPanel(t.id);
@@ -1642,12 +1634,12 @@ function startTaskExecution(taskId, workerId) {
   toast(`🤖 Rozpoczynam zadanie: ${t.title}`);
   
   // Call worker_start tool
-  fetch(`/orchestrator/api/software-house/worker/start`, {
+  store.api(`/software-house/worker/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workerId, taskId: parseInt(taskId) })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       toast(`✅ Zadanie wykonane: ${t.title}`);
       // Refresh tasks
       loadData();
@@ -1668,12 +1660,12 @@ function assignAndStartTask(taskId) {
   }
   
   // First assign the task
-  fetch(`/orchestrator/api/software-house/backlog/assign?project=${currentProjectId}`, {
+  store.api(`/software-house/backlog/assign?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ taskId, workerId: availableWorker.id })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       // Then start execution
       startTaskExecution(taskId, availableWorker.id);
     } else {
@@ -1758,12 +1750,12 @@ function saveRoomPanel() {
   };
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/rooms/${r.id}?project=${currentProjectId}`, {
+  store.api(`/software-house/rooms/${r.id}?project=${currentProjectId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates)
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       Object.assign(r, updates);
       renderAll();
       renderRoomPanel(r.id);
@@ -1783,10 +1775,10 @@ function deleteRoom() {
   if (inRoom.length && !confirm(`Pokój ma ${inRoom.length} agentów. Przenieść na Open Floor?`)) return;
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/rooms/${r.id}?project=${currentProjectId}`, {
+  store.api(`/software-house/rooms/${r.id}?project=${currentProjectId}`, {
     method: 'DELETE'
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       const fallback = rooms.find(x => x.isOpenFloor) || rooms.find(x => !x.isCommand && x.id !== r.id);
       inRoom.forEach(a => { if (fallback) a.room = fallback.id; });
       rooms = rooms.filter(x => x.id !== editingRoomId);
@@ -1811,12 +1803,12 @@ function addRoom() {
   };
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/rooms?project=${currentProjectId}`, {
+  store.api(`/software-house/rooms?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(roomData)
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       const id = data.room.id;
       rooms.push({
         id, name: roomData.name, tag: 'custom', color: '#22d3ee',
@@ -1859,12 +1851,12 @@ function confirmHire() {
   };
   
   // Call real API
-  fetch(`/orchestrator/api/software-house/workers/hire?project=${currentProjectId}`, {
+  store.api(`/software-house/workers/hire?project=${currentProjectId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(workerData)
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  }).then(data => {
+    if (data && data.ok) {
       const a = {
         id: data.worker.id,
         ...workerData,
@@ -1930,14 +1922,10 @@ function sendChat() {
   input.value = '';
   
   // Send to real API, then fetch updated chat history (includes PM response)
-  fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: text, sender: 'user', workerId: workerId })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  store.sendPmChat(text, 'user', workerId).then(data => {
+    if (data && data.ok) {
       // Fetch chat history to get PM response from backend
-      return fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
+      return store.loadPmChat();
     } else {
       addBotMsg('Coś poszło nie tak. Spróbuj ponownie.', worker);
     }
@@ -2021,7 +2009,7 @@ function sendWorkerMessage() {
     return;
   }
   
-  fetch(`/orchestrator/api/software-house/worker/message`, {
+  store.api(`/software-house/worker/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2031,7 +2019,7 @@ function sendWorkerMessage() {
       content,
       project: currentProjectId
     })
-  }).then(res => res.json()).then(data => {
+  }).then(data => {
     if (data.ok) {
       toast(`✅ Wiadomość wysłana do ${agents.find(a => a.id === workerMessageTarget)?.name}`);
       closeWorkerMessageModal();
@@ -2045,8 +2033,7 @@ function sendWorkerMessage() {
 
 // WORKER HEALTH & RECOVERY
 function checkWorkerHealth(workerId) {
-  fetch(`/orchestrator/api/software-house/worker/health/${workerId}`)
-    .then(res => res.json())
+  store.api(`/software-house/worker/health/${workerId}`)
     .then(data => {
       if (data.error) {
         toast(`❌ Błąd: ${data.error}`);
@@ -2201,14 +2188,10 @@ function sendPmBubble() {
   document.getElementById('chatMsgs').innerHTML += `<div class="msg user">${text}<div class="time">teraz</div></div>`;
   
   // Send to real API, then fetch updated chat history (includes PM/worker response)
-  fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: text, sender: 'user', workerId: selectedAgent })
-  }).then(res => res.json()).then(data => {
-    if (data.ok) {
+  store.sendPmChat(text, 'user', selectedAgent).then(data => {
+    if (data && data.ok) {
       // Fetch chat history to get PM response from backend
-      return fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
+      return store.loadPmChat();
     }
   }).then(res => res?.json()).then(data => {
     if (data?.ok && data.messages && data.messages.length) {
@@ -2301,11 +2284,7 @@ function renderVaultTreeActive(path) {
 
 // Vault inject function
 function injectVaultDoc(path) {
-  fetch(`/orchestrator/api/software-house/vault/inject?project=${currentProjectId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: path })
-  }).then(res => res.json()).then(data => {
+  store.injectVaultDoc(path).then(data => {
     if (data.ok) {
       toast(`📥 Dokument "${path}" wstrzyknięty do kontekstu`);
     } else {
@@ -2325,10 +2304,8 @@ function toast(msg) {
 // Load chat history from API
 async function loadChatHistory() {
   try {
-    const res = await fetch(`/orchestrator/api/software-house/pm/chat?project=${currentProjectId}`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (data.ok && data.messages) {
+    const data = await store.loadPmChat();
+    if (data && data.ok && data.messages) {
       const chatMsgs = document.getElementById('chatMsgs');
       chatMsgs.innerHTML = '';
       data.messages.forEach(msg => {

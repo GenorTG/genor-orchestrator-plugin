@@ -14,9 +14,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
+import * as store from "./store.js";
 import {
-  listModels, setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs,
   WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow,
+  setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs,
   listWorkers, countWorkers, getWorker, addWorker, updateWorker, deleteWorker, deleteWorkersByProject,
   listRooms, addRoom, updateRoom, deleteRoom,
   listVaultDocs, getVaultDoc, addVaultDoc, deleteVaultDocsByProject,
@@ -106,115 +107,12 @@ function getRepoStatus(location: string): any {
 
 /**
  * GET /api/software-house/bootstrap
- * Returns full project state matching mock JSON shape exactly.
+ * Returns full project state from store.
  */
 export async function handleBootstrap(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-
-  // Query workers
-  const workers = listWorkers(project);
-  
-  // Query rooms
-  const rooms = listRooms(project);
-  
-  // Query tasks
-  const tasks = listBacklogTasks(project);
-  
-  // Query vault docs
-  const vaultDocs = listVaultDocs(project);
-
-  // Build project list — project_configs is the single source of truth for which projects exist
-  const allConfigs = getAllProjectConfigs(500);
-  const extraProjects = Object.keys(allConfigs);
-
-  const projects: Record<string, any> = {};
-  for (const pId of extraProjects) {
-    const pc = getProjectConfig(pId) as any;
-    const repoUrl = pc?.repo_url || "";
-    const location = pc?.location || "";
-    let repoStatus: any = null;
-    if (location && fs.existsSync(location)) {
-      repoStatus = getRepoStatus(location);
-    }
-    projects[pId] = {
-      id: pId,
-      name: pId,
-      hasWorkers: countWorkers(pId) > 0,
-      repo_url: repoUrl,
-      repo: repoStatus,
-    };
-  }
-
-  // Fill current project with full detail
-  const pc = getProjectConfig(project) as any;
-  const repoUrl = pc?.repo_url || "";
-  const location = pc?.location || "";
-  let repoStatus: any = null;
-  if (location && fs.existsSync(location)) {
-    repoStatus = getRepoStatus(location);
-  }
-  projects[project] = {
-    id: project,
-    name: project,
-    hasWorkers: workers.length > 0,
-    repo_url: repoUrl,
-    repo: repoStatus,
-    rooms: rooms.map(r => ({
-      id: r.id,
-      name: r.name,
-      tag: r.id,
-      color: "#5e9cff",
-      isCommand: r.isCommand === 1,
-      purpose: r.purpose,
-      taskTypes: JSON.parse(r.taskTypes || "[]"),
-      layout: "auto",
-      x: r.x,
-      y: r.y,
-      w: r.w,
-      h: r.h,
-    })),
-    workers: workers.map(w => ({
-      id: w.id,
-      name: w.name,
-      role: w.role,
-      sprite: w.sprite,
-      model: w.model,
-      status: w.status,
-      task: null,
-      progress: 0,
-      room: w.room,
-      isOrchestrator: w.is_pm === 1 || w.role.toLowerCase().includes("project manager"),
-      is_pm: w.is_pm === 1,
-      prompt: w.prompt,
-      ctx: "—",
-    })),
-    tasks: tasks.map(t => ({
-      id: t.id,
-      title: t.title,
-      desc: t.description,
-      worker: t.worker_id || null,
-      phase: t.status,
-      pri: t.priority,
-      type: JSON.parse(t.labels || "[]")[0] || "dev",
-    })),
-    vault: Object.fromEntries(
-      vaultDocs.map(d => [
-        d.path,
-        {
-          folder: d.folder || null,
-          icon: d.icon,
-          title: d.title,
-          updated: d.updated_at,
-          tags: JSON.parse(d.tags || "[]"),
-          status: d.status,
-          links: JSON.parse(d.links || "[]"),
-          html: d.content,
-        },
-      ])
-    ),
-  };
-
-  json(res, { ok: true, defaultProjectId: project, projects });
+  const data = store.getProjectBootstrap(project);
+  json(res, { ok: true, ...data });
 }
 
 // ── WORKERS ──────────────────────────────────────────────────
@@ -225,7 +123,7 @@ export async function handleBootstrap(req: IncomingMessage, res: ServerResponse)
  */
 export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const workers = listWorkers(project);
+  const workers = store.listWorkers(project);
   json(res, workers);
 }
 
@@ -304,7 +202,7 @@ export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse
  */
 export async function handleRoomsGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const rooms = listRooms(project);
+  const rooms = store.listRooms(project);
   json(res, rooms);
 }
 
@@ -402,7 +300,7 @@ export async function handleLayoutSave(req: IncomingMessage, res: ServerResponse
  */
 export async function handleBacklogGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const tasks = listBacklogTasks(project);
+  const tasks = store.listBacklog(project);
   json(res, tasks);
 }
 
@@ -469,7 +367,7 @@ export async function handleBacklogMove(req: IncomingMessage, res: ServerRespons
  */
 export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const messages = listPmChat(project);
+  const messages = store.listPmChat(project);
   json(res, { ok: true, messages: messages.reverse() });
 }
 
@@ -562,20 +460,7 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
  */
 export async function handleVaultTree(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const project = getProject(req) || "genor-orchestrator-plugin";
-  const docs = listVaultDocs(project);
-  const vault: Record<string, any> = {};
-  for (const doc of docs as any[]) {
-    vault[doc.path] = {
-      folder: doc.folder,
-      icon: doc.icon,
-      title: doc.title,
-      updated: doc.updated_at,
-      tags: JSON.parse(doc.tags || "[]"),
-      status: doc.status,
-      links: JSON.parse(doc.links || "[]"),
-      html: doc.content,
-    };
-  }
+  const vault = store.listVaultDocs(project);
   json(res, { ok: true, vault });
 }
 
@@ -767,11 +652,11 @@ export async function handleWorkerRecover(req: IncomingMessage, res: ServerRespo
 
 /**
  * GET /api/software-house/models
- * List available agent-ready models from OpenClaw registry.
+ * List available agent-ready models from store.
  */
 export async function handleModels(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const models = listModels(true); // agent_ready only
+    const models = store.listModels(true);
     json(res, models.map((m: any) => ({
       id: m.id || m.name,
       name: m.name || m.id,
@@ -1024,56 +909,7 @@ export async function handleRepoPull(req: IncomingMessage, res: ServerResponse):
  */
 export async function handleProjectList(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const dataDir = getDataDir();
-    const projectsDir = path.join(dataDir, "projects");
-    const allConfigs = getAllProjectConfigs(500);
-
-    const projects: any[] = [];
-    for (const [name, cfg] of Object.entries(allConfigs)) {
-      const location = (cfg as any).location || path.join(projectsDir, name);
-      const configJson = (cfg as any).config ? JSON.parse((cfg as any).config) : {};
-      const exists = fs.existsSync(location);
-      let fileCount = 0;
-      let repoUrl = configJson.repo_url || "";
-      let hasGit = false;
-      let branch = "";
-      let lastCommit = "";
-
-      if (exists) {
-        try {
-          // Count files (non-recursive, skip .git)
-          const entries = fs.readdirSync(location, { withFileTypes: true });
-          fileCount = entries.filter(e => e.name !== ".git").length;
-          hasGit = fs.existsSync(path.join(location, ".git"));
-          if (hasGit) {
-            try {
-              branch = execSync("git branch --show-current", { cwd: location, encoding: "utf-8", timeout: 5000 }).trim();
-              lastCommit = execSync("git log -1 --format=%s", { cwd: location, encoding: "utf-8", timeout: 5000 }).trim();
-            } catch { /* */ }
-          }
-        } catch { /* */ }
-      }
-
-      // Count workers & tasks
-      const workerCount = countWorkers(name);
-      const taskCount = countBacklogByProject(name);
-      const sessionCount = countSessions(name);
-
-      projects.push({
-        name,
-        location,
-        exists,
-        fileCount,
-        repoUrl,
-        hasGit,
-        branch,
-        lastCommit,
-        workerCount,
-        taskCount,
-        sessionCount,
-      });
-    }
-
+    const projects = store.listProjects();
     json(res, { ok: true, projects });
   } catch (e: any) {
     json(res, { error: e.message || "Failed to list projects" }, 500);

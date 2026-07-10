@@ -1055,6 +1055,11 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "software-house.html"));
           return true;
         }
+        // store.js — centralized frontend data store
+        if (pathname === "/store.js") {
+          sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "store.js"));
+          return true;
+        }
         // Static assets for dashboard pages (sprites, images)
         if (pathname.startsWith("/assets/") || pathname.startsWith("/data/")) {
           const assetFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));

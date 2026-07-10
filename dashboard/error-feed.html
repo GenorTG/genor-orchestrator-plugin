@@ -65,8 +65,8 @@
   <div class="loading">Loading errors...</div>
 </div>
 
+<script src="/orchestrator/store.js"></script>
 <script>
-const BASE = window.location.origin + '/orchestrator';
 const errorList = document.getElementById('errorList');
 const totalCount = document.getElementById('totalCount');
 const projectCount = document.getElementById('projectCount');
@@ -84,16 +84,15 @@ async function loadErrors() {
   let url;
 
   if (view === 'global') {
-    url = `${BASE}/api/global-errors?limit=${limit}`;
+    url = `/global-errors?limit=${limit}`;
   } else {
     const project = projectSelect.value;
     if (!project) { errorList.innerHTML = '<div class="empty">Select a project to view errors</div>'; return; }
-    url = `${BASE}/api/project-errors?project=${encodeURIComponent(project)}&limit=${limit}`;
+    url = `/project-errors?project=${encodeURIComponent(project)}&limit=${limit}`;
   }
 
   try {
-    const resp = await fetch(url);
-    const data = await resp.json();
+    const data = await store.api(url);
     renderErrors(data);
   } catch (err) {
     errorList.innerHTML = `<div class="empty">Failed to load: ${err.message}</div>`;
@@ -102,8 +101,7 @@ async function loadErrors() {
 
 async function loadProjects() {
   try {
-    const resp = await fetch(`${BASE}/api/projects`);
-    const data = await resp.json();
+    const data = await store.api('/projects');
     const sel = projectSelect;
     sel.innerHTML = '<option value="">Select project...</option>';
     for (const p of (data.projects || [])) {

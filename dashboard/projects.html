@@ -156,8 +156,8 @@ td.center{text-align:center}
   </div>
 </div>
 
+<script src="/orchestrator/store.js"></script>
 <script>
-const API = '/orchestrator/api/software-house';
 let projects = [];
 let selected = new Set();
 let pendingDelete = [];
@@ -165,9 +165,8 @@ let pendingDeleteFiles = false;
 
 async function loadProjects() {
   try {
-    const r = await fetch(`${API}/projects/list`);
-    const data = await r.json();
-    projects = data.projects || [];
+    const list = await store.loadProjects();
+    projects = list;
     render();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
@@ -298,10 +297,8 @@ async function executeDelete() {
   let ok = 0, fail = 0;
   for (const name of pendingDelete) {
     try {
-      const url = `${API}/projects/${encodeURIComponent(name)}${deleteFiles ? '?deleteFiles=true' : ''}`;
-      const r = await fetch(url, { method: 'DELETE' });
-      const d = await r.json();
-      if (d.ok) ok++; else fail++;
+      await store.deleteProject(name, deleteFiles);
+      ok++;
     } catch { fail++; }
   }
 
