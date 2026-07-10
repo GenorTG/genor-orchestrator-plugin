@@ -594,4 +594,44 @@ describe('E2E Direct Database Tests', () => {
       expect(testProjectsRemaining.length).toBe(0);
     });
   });
+
+  // ── Regression tests for lint fixes ─────────────────────────
+
+  describe('clearStateForProject', () => {
+    it('clears global state when it references the deleted project', async () => {
+      const { setGlobalConfig, getGlobalConfig, clearStateForProject } = await import('../src/db.js');
+      const testProj = `test-state-cleanup-${Date.now()}`;
+      setGlobalConfig('state', { project: testProj, task: 'do something' });
+      expect(getGlobalConfig('state')?.project).toBe(testProj);
+
+      clearStateForProject(testProj);
+      // State should be gone
+      const after = getGlobalConfig('state');
+      expect(after).toBeUndefined();
+    });
+
+    it('does NOT clear state when it references a different project', async () => {
+      const { setGlobalConfig, getGlobalConfig, clearStateForProject } = await import('../src/db.js');
+      setGlobalConfig('state', { project: 'other-project', task: 'do something' });
+
+      clearStateForProject('some-unrelated-project');
+      // State should be untouched
+      expect(getGlobalConfig('state')?.project).toBe('other-project');
+    });
+  });
+
+  describe('Project delete cascade', () => {
+    it('clears stale state on project delete', async () => {
+      const { setGlobalConfig, getGlobalConfig, clearStateForProject } = await import('../src/db.js');
+      const proj = `test-cascade-${Date.now()}`;
+      setProjectConfig(proj, { location: '/tmp/nonexistent' });
+      setGlobalConfig('state', { project: proj });
+
+      // Simulate the cleanup done by handleProjectDelete
+      deleteProjectConfig(proj);
+      clearStateForProject(proj);
+
+      expect(getGlobalConfig('state')).toBeUndefined();
+    });
+  });
 });

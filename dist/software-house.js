@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
-import { listModels, setProjectConfig, getProjectConfig, deleteProjectConfig, getAllProjectConfigs, listWorkers, countWorkers, getWorker, addWorker, updateWorker, deleteWorker, deleteWorkersByProject, listRooms, addRoom, updateRoom, deleteRoom, listVaultDocs, getVaultDoc, addVaultDoc, deleteVaultDocsByProject, listPmChat, addPmChat, clearPmChat, addBacklogTask, updateBacklogTask, listBacklogTasks, countBacklogByProject, deleteBacklogByProject, countSessions, deleteSessionsByProject, deleteStateEventsByProject, addWorkerTaskHistory, getWorkerLastActivity, getStalledTasksForWorker, addWorkerMessage, deleteWorkerMessagesByProject, deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject } from "./db.js";
+import { listModels, setProjectConfig, getProjectConfig, deleteProjectConfig, getAllProjectConfigs, listWorkers, countWorkers, getWorker, addWorker, updateWorker, deleteWorker, deleteWorkersByProject, listRooms, addRoom, updateRoom, deleteRoom, listVaultDocs, getVaultDoc, addVaultDoc, deleteVaultDocsByProject, listPmChat, addPmChat, clearPmChat, addBacklogTask, updateBacklogTask, listBacklogTasks, countBacklogByProject, deleteBacklogByProject, countSessions, deleteSessionsByProject, deleteStateEventsByProject, addWorkerTaskHistory, getWorkerLastActivity, getStalledTasksForWorker, addWorkerMessage, deleteWorkerMessagesByProject, deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject, clearStateForProject } from "./db.js";
 import { getDataDir } from "./shared.js";
 // ── HELPERS ──────────────────────────────────────────────────
 function json(res, data, status = 200) {
@@ -966,6 +966,8 @@ export async function handleProjectDelete(req, res) {
         deleteStateEventsByProject(projectName);
         // 3. Finally delete the project config itself
         deleteProjectConfig(projectName);
+        // 4. Clear stale global state if it referenced this project
+        clearStateForProject(projectName);
         // Remove files if requested
         let filesDeleted = false;
         if (deleteFiles && fs.existsSync(location)) {

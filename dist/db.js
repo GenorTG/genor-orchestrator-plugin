@@ -762,6 +762,16 @@ export function setGlobalConfig(key, value) {
 export function deleteGlobalConfig(key) {
     getDb().prepare("DELETE FROM global_config WHERE key = ?").run(key);
 }
+/**
+ * Clear global state if it references the given project.
+ * Called when a project is deleted to avoid stale state pointing at non-existent projects.
+ */
+export function clearStateForProject(project) {
+    const state = getGlobalConfig("state");
+    if (state && typeof state === "object" && state.project === project) {
+        deleteGlobalConfig("state");
+    }
+}
 // ── PROJECT CONFIG ─────────────────────────────────────────────
 export function getProjectConfig(project) {
     const row = getDb().prepare("SELECT config, location FROM project_configs WHERE project = ?").get(project);

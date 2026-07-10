@@ -25,7 +25,8 @@ import {
   countSessions, deleteSessionsByProject, deleteStateEventsByProject,
   addWorkerTaskHistory, listWorkerTaskHistory, getWorkerCurrentTask, getWorkerLastActivity, getStalledTasksForWorker,
   addWorkerMessage, deleteWorkerMessagesByWorker, deleteWorkerMessagesByProject,
-  deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject
+  deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject,
+  clearStateForProject
 } from "./db.js";
 import { getDataDir } from "./shared.js";
 
@@ -1114,6 +1115,8 @@ export async function handleProjectDelete(req: IncomingMessage, res: ServerRespo
     deleteStateEventsByProject(projectName);
     // 3. Finally delete the project config itself
     deleteProjectConfig(projectName);
+    // 4. Clear stale global state if it referenced this project
+    clearStateForProject(projectName);
 
     // Remove files if requested
     let filesDeleted = false;

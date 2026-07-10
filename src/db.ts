@@ -917,6 +917,17 @@ export function deleteGlobalConfig(key: string): void {
   getDb().prepare("DELETE FROM global_config WHERE key = ?").run(key);
 }
 
+/**
+ * Clear global state if it references the given project.
+ * Called when a project is deleted to avoid stale state pointing at non-existent projects.
+ */
+export function clearStateForProject(project: string): void {
+  const state = getGlobalConfig("state");
+  if (state && typeof state === "object" && state.project === project) {
+    deleteGlobalConfig("state");
+  }
+}
+
 // ── PROJECT CONFIG ─────────────────────────────────────────────
 
 export function getProjectConfig(project: string): any {

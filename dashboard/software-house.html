@@ -728,7 +728,17 @@ function loadProject(id, skipSave) {
   manualRoomLayout = false;
   roomEditEnabled = false;
   document.getElementById('layoutToggle').textContent = '✥ Edycja pokoi: OFF';
-  document.getElementById('projectName').textContent = project.name;
+  // Derive display name: if no separate friendly name, use the project id
+  // and hide the duplicate span to avoid showing it twice.
+  const projectNameEl = document.getElementById('projectName');
+  const displayName = (project.displayName || project.friendlyName || '').trim();
+  if (displayName && displayName !== project.id) {
+    projectNameEl.textContent = displayName;
+    projectNameEl.style.display = '';
+  } else {
+    projectNameEl.textContent = project.id;
+    projectNameEl.style.display = 'none';
+  }
   document.getElementById('projectId').textContent = project.id;
   document.getElementById('panelProjectId').textContent = project.id;
   document.getElementById('projectSelect').value = id;
@@ -914,7 +924,13 @@ function renderKanbanFull() {
   document.getElementById('kanbanProjectName').textContent = project.name;
   document.getElementById('kanbanTaskCount').textContent = `${tasks.length} tasków`;
   document.getElementById('kanbanFullBoard').innerHTML = phases.map(p => {
-    const items = tasks.filter(t => t.phase === p.id);
+    // Map task.status → phase.id (DB has 'todo', 'in_progress', 'review', 'done')
+    const items = tasks.filter(t => {
+      const s = t.phase || t.status;
+      if (!s) return false;
+      const normalized = String(s).toLowerCase().replace(/_/g, '-');
+      return normalized === p.id;
+    });
     return `<div class="kanban-col"><h4 style="color:${p.color}">${p.label} (${items.length})</h4>
       ${items.map(t => {
         const ag = agents.find(a => a.id === t.agent);
@@ -1884,7 +1900,7 @@ function orchSay(key) {
   const replies = {
     status: () => `📊 <b>${project.name}</b><br>${agents.map(a=>`• ${a.name}${a.isOrchestrator?' 🧠':''}: ${STATUS[visualState(a)]?.label}${a.task?' — '+a.task:''}`).join('<br>')}`,
     plan: () => `📋 Plan dla <b>${project.name}</b>:<br>1. API Gateway (Alex 64%)<br>2. Dashboard UI (Maya 72%)<br>3. Fix CI (Bob — ERROR)<br><button class="act" onclick="toast('Plan OK')">Zatwierdź</button>`,
-    help: () => `Kliknij agenta → dymek czatu. Kanban → klik task. Vault → 📚 kontekst projektu.`,
+    help: () => `ℹ️ <b>Pomoc</b><br>• <b>Klik agenta</b> → dymki czatu<br>• <b>Kanban</b> → klik task → panel edycji<br>• <b>Vault</b> → 📚 kontekst projektu<br>• <b>+ Wolne biurko</b> → zatrudnij<br>• <b>⚙️</b> → ustawienia, edycja pokoi`,
     hire: () => `Kliknij <b>+ Wolne biurko</b> — bez limitu miejsc w pokoju.`,
   };
   orchSay._reply = k => replies[k] ? replies[k]() : '';
