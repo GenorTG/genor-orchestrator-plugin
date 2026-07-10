@@ -607,7 +607,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 <script src="/orchestrator/store.js"></script>
 <script>
 // ── Data Store — centralized data provider ──
-// Use store.bootstrap(), store.loadModels(), etc. instead of direct fetch().
+// Use store.loadBootstrap(), store.loadModels(), etc. instead of direct fetch().
 // Subscribe: store.addEventListener('change', renderAll);
 
 let currentProjectId = new URLSearchParams(window.location.search).get('project') || 'genor-orchestrator-plugin';
@@ -686,7 +686,7 @@ async function loadModels() {
 }
 
 function syncFromStore() {
-  if (!store.bootstrapData) return;
+  if (!store.currentBootstrap) return;
   const p = store.project;
   if (!p) return;
   project = p;
@@ -695,7 +695,7 @@ function syncFromStore() {
   tasks = store.tasks || [];
   project.vault = store.vault || {};
   // Populate project catalog from bootstrap's full response
-  const data = store.bootstrapData;
+  const data = store.currentBootstrap;
   if (data && data.projects) {
     window.__projectsCatalog = data.projects;
   }
@@ -714,7 +714,7 @@ function syncFromStore() {
 async function loadData() {
   try {
     store.addEventListener('change', syncFromStore);
-    const data = await store.bootstrap(currentProjectId);
+    const data = await store.loadBootstrap(currentProjectId);
     if (!data.ok) throw new Error(data.error || 'Bootstrap failed');
     currentProjectId = data.defaultProjectId || currentProjectId;
     syncFromStore();

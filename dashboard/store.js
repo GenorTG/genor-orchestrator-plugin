@@ -20,7 +20,7 @@ class DataStore extends EventTarget {
       vault: {},
       bootstrap: null,
     };
-    this.api = '/orchestrator/api';
+    this.apiBase = '/orchestrator/api';
     this.currentProjectId = null;
   }
 
@@ -28,7 +28,7 @@ class DataStore extends EventTarget {
    * Single fetch wrapper — all HTTP calls go through here.
    */
   async fetch(path, options = {}) {
-    const url = path.startsWith(this.api) ? path : `${this.api}${path}`;
+    const url = path.startsWith(this.apiBase) ? path : `${this.apiBase}${path}`;
     const res = await fetch(url, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
@@ -44,7 +44,7 @@ class DataStore extends EventTarget {
   //  BOOTSTRAP — full project state
   // ═══════════════════════════════════════════════════
 
-  async bootstrap(projectId) {
+  async loadBootstrap(projectId) {
     this.currentProjectId = projectId;
     const data = await this.fetch(`/software-house/bootstrap?project=${projectId}`);
     this.state.bootstrap = data;
@@ -97,7 +97,7 @@ class DataStore extends EventTarget {
 
   async loadSessions() {
     if (!this.currentProjectId) return [];
-    const data = await this.fetch(`/software-house/sessions?project=${this.currentProjectId}`);
+    const data = await this.fetch(`/sessions?project=${this.currentProjectId}`);
     this.state.sessions = data.sessions || [];
     this.emit('change');
     return this.state.sessions;
@@ -121,8 +121,8 @@ class DataStore extends EventTarget {
 
   async loadVault() {
     if (!this.currentProjectId) return {};
-    const data = await this.fetch(`/software-house/vault?project=${this.currentProjectId}`);
-    this.state.vault = data.vault || {};
+    const data = await this.fetch(`/software-house/vault/tree?project=${this.currentProjectId}`);
+    this.state.vault = data.vault || data.tree || data.docs || {};
     this.emit('change');
     return this.state.vault;
   }
@@ -177,12 +177,12 @@ class DataStore extends EventTarget {
       body: JSON.stringify(worker)
     });
     // Reload full bootstrap to refresh all state
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
   }
 
   async fireWorker(workerId) {
     await this.fetch(`/software-house/workers/${workerId}?project=${this.currentProjectId}`, { method: 'DELETE' });
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
   }
 
   async updateRoom(roomId, updates) {
@@ -190,17 +190,17 @@ class DataStore extends EventTarget {
       method: 'PATCH',
       body: JSON.stringify(updates)
     });
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
   }
 
   async deleteRoom(roomId) {
     await this.fetch(`/software-house/rooms/${roomId}?project=${this.currentProjectId}`, { method: 'DELETE' });
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
   }
 
   async gitPull() {
     const data = await this.fetch(`/software-house/projects/${encodeURIComponent(this.currentProjectId)}/repo/pull`, { method: 'POST' });
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
     return data;
   }
 
@@ -209,7 +209,7 @@ class DataStore extends EventTarget {
       method: 'POST',
       body: JSON.stringify({ message })
     });
-    await this.bootstrap(this.currentProjectId);
+    await this.loadBootstrap(this.currentProjectId);
     return data;
   }
 
@@ -270,12 +270,11 @@ class DataStore extends EventTarget {
   get sessions() { return this.state.sessions; }
   get pmChat() { return this.state.pmChat; }
   get vault() { return this.state.vault; }
-  get bootstrap() { return this.state.bootstrap; }
-  get bootstrapData() { return this.state.bootstrap; }
+  get currentBootstrap() { return this.state.bootstrap; }
 
   /** General-purpose fetch — extends api path, returns JSON. */
   async api(path, options = {}) {
-    const url = path.startsWith('http') ? path : `${this.api}${path}`;
+    const url = path.startsWith('http') ? path : `${this.apiBase}${path}`;
     const res = await fetch(url, options);
     const data = await res.json();
     if (!data.ok && !data.error) data.ok = res.ok;
