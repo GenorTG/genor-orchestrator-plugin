@@ -361,7 +361,7 @@ export async function handleBacklogMoveV2(req, res) {
                     messageChannel: "orchestrator-software-house",
                     // No backendModel here — let the default agent pick its model
                 });
-                addWorkerTaskHistory(wid, parseInt(id.replace(/[^0-9]/g, ""), 10) || null, "reported", JSON.stringify({ message: response, ts: new Date().toISOString() }));
+                addWorkerTaskHistory(wid, parseInt(id.replace(/[^0-9]/g, ""), 10) || null, "reported", JSON.stringify({ message: response.content, ts: new Date().toISOString() }));
                 updateWorker(wid, { status: "working" });
             }
             catch {
@@ -461,6 +461,8 @@ export async function handlePmChatPost(req, res) {
     // Find a PM worker
     const pmWorker = workers.find(w => w.is_pm === 1) || workers[0];
     let pmResponse = null;
+    // _pmLlmUsed signals whether the response came from a real LLM call.
+    let _pmLlmUsed = false;
     // Try real LLM first
     if (pmWorker) {
         try {
@@ -486,7 +488,7 @@ export async function handlePmChatPost(req, res) {
                 `Reference workers, tasks, and project state naturally.`,
                 `If you cannot answer something, be honest.`,
             ].join('\n');
-            pmResponse = await callLLM({
+            const llmResult = await callLLM({
                 systemPrompt,
                 userMessage: userPrompt,
                 maxTokens: 512,
@@ -495,8 +497,9 @@ export async function handlePmChatPost(req, res) {
                 sessionKey: `agent:main:pm:${pmWorker.id}`,
                 messageChannel: "orchestrator-software-house",
             });
-            addPmChat(pmResponse, 'pm', proj);
-            json(res, { ok: true });
+            addPmChat(llmResult.content || "", 'pm', proj);
+            pmResponse = llmResult.content || null;
+            json(res, { ok: true, llm: true });
             return;
         }
         catch {
@@ -668,9 +671,9 @@ export async function handleWorkerInvoke(req, res) {
             sessionKey: workerId ? `agent:main:worker:${workerId}` : undefined,
             messageChannel: "orchestrator-software-house",
         });
-        addWorkerTaskHistory(workerId, taskId || null, taskId ? "reported" : "status_update", JSON.stringify({ message: response, ts: new Date().toISOString() }));
+        addWorkerTaskHistory(workerId, taskId || null, taskId ? "reported" : "status_update", JSON.stringify({ message: response.content, ts: new Date().toISOString() }));
         updateWorker(workerId, { status: "working" });
-        json(res, { ok: true, workerId, taskId, response });
+        json(res, { ok: true, workerId, taskId, response: response.content });
     }
     catch (err) {
         updateWorker(workerId, { status: "error" });

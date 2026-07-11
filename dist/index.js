@@ -10,6 +10,7 @@ import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createDashboardHandler } from "./dashboard-handler.js";
 import { getDataDir } from "./shared.js";
+import { configureLLM } from "./worker-runtime.js";
 import { initDb, getAllGlobalConfig, getAllProjectConfigs, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, getAllSessions, addSession, countSessions, listBacklogTasks, getBacklogTask, addBacklogTask, updateBacklogTask, listModels, countModels, getLiveAgents, setLiveAgents, addLog, addStateEvent, getStateEvents, addVerificationRun, getVerificationRun, updateVerificationRun, getDb, addWorker, updateWorker, deleteWorker, getWorker, getStalledTasksForWorker, addRoom, updateRoom, deleteRoom, addWorkerMessage, addWorkerTaskHistory, deleteWorkerMessagesByWorker, deleteWorkerSessionsByWorker, deleteWorkerTaskHistoryByWorker, } from "./db.js";
 //  PLUGIN ROOT — all paths resolve from here (no skill dir dependency!)
 // ═══════════════════════════════════════════════════════════════
@@ -2445,6 +2446,40 @@ const _plugin = definePluginEntry({
         const logLevel = cfg.logLevel || "info";
         const logRetention = cfg.logRetentionDays || 30;
         const logger = new OrchestratorLogger(dataDir, logLevel, logRetention);
+        // ═══ Auto-configure LLM endpoint on install ═══
+        // Default to the local OpenClaw gateway. The plugin user can override
+        // any of these via plugin config:
+        //   llmEndpoint       full chat completions URL
+        //   llmAuthToken      bearer token (or read from OpenClaw gateway)
+        //   llmDefaultModel   model field (agent target like "openclaw")
+        //   llmMessageChannel synthetic ingress channel
+        // The endpoint is fully generic — any OpenAI-compatible server with
+        // tool call support works (OpenClaw, LM Studio, vLLM, OpenRouter, etc.).
+        const openclawCfg = api.config || {};
+        const gw = openclawCfg?.gateway || {};
+        const gwPort = gw.port || 18789;
+        const gwAuth = gw.auth || {};
+        const gwToken = gwAuth.token || gwAuth.password || "";
+        const llmEndpoint = cfg.llmEndpoint
+            || process.env.LLM_ENDPOINT
+            || `http://127.0.0.1:${gwPort}/v1/chat/completions`;
+        const llmToken = cfg.llmAuthToken
+            || process.env.LLM_AUTH_TOKEN
+            || gwToken;
+        const llmDefaultModel = cfg.llmDefaultModel
+            || process.env.LLM_DEFAULT_MODEL
+            || "openclaw";
+        const llmMessageChannel = cfg.llmMessageChannel
+            || process.env.LLM_MESSAGE_CHANNEL
+            || "orchestrator-software-house";
+        configureLLM({
+            endpoint: llmEndpoint,
+            token: llmToken,
+            defaultModel: llmDefaultModel,
+            defaultMessageChannel: llmMessageChannel,
+            timeoutMs: 60_000,
+        });
+        logger.info("llm", `LLM endpoint configured: ${llmEndpoint} (model: ${llmDefaultModel})`);
         // ═══ Initialize SQLite database ═══
         // Replaces all ad-hoc JSON file I/O with a single orchestrator.db
         initDb(dataDir);

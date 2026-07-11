@@ -1,94 +1,86 @@
 /**
  * Worker Runtime — AI-powered worker execution engine.
  *
- * Workers call an OpenAI-compatible chat completions endpoint.
- * Default backend: OpenClaw gateway's `/v1/chat/completions` (same process,
- * same port, OpenAI-compatible, full session tracking via x-openclaw-* headers
- * and the `user` field for stable per-worker session derivation).
+ * Generic OpenAI-compatible chat completions client. Works with any
+ * endpoint that exposes `/v1/chat/completions` and supports tool calls.
+ * The plugin auto-configures to use the local OpenClaw gateway on install,
+ * but the endpoint and auth can be pointed at any compatible service.
  *
- * Alternative backend: LM Studio (http://localhost:1234/v1) — set
- * `WORKER_LLM_BACKEND=lmstudio`. Kept for dev/testing when no OpenClaw
- * gateway is reachable.
+ * Per-worker session tracking:
+ *   - `user` field in the OpenAI request body → server derives a stable
+ *     session key (when the server supports it, like OpenClaw does)
+ *   - `x-openclaw-session-key` header → explicit session routing
+ *   - `x-openclaw-model` header → backend model override (premium burning)
+ *   - `x-openclaw-message-channel` header → synthetic ingress context
  *
- * No additional npm dependencies. Everything uses native fetch.
+ * No npm dependencies. Native fetch only.
  */
 
 import { WorkerRow, BacklogRow } from "./db.js";
 import { addVaultDoc, addWorkerTaskHistory, updateWorker, updateBacklogTask } from "./db.js";
 
-import { readFileSync } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+// ── Configuration ─────────────────────────────────────────────
 
-// ── Backend configuration ─────────────────────────────────────
-
-export type LLMBackend = "openclaw" | "lmstudio";
-
-// ponytail: lazy env read so tests can set the env var before first call.
-function resolveBackend(): LLMBackend {
-  return (process.env.WORKER_LLM_BACKEND as LLMBackend) || "openclaw";
+export interface LLMConfig {
+  /** Full URL to the chat completions endpoint, e.g. "http://127.0.0.1:18789/v1/chat/completions". */
+  endpoint: string;
+  /** Bearer token. May be empty for unauthenticated endpoints. */
+  token: string;
+  /** Default `model` field for the request body (the agent target like "openclaw"). */
+  defaultModel: string;
+  /** Default value for the x-openclaw-message-channel header. */
+  defaultMessageChannel: string;
+  /** Request timeout in milliseconds. */
+  timeoutMs: number;
 }
 
-const LMSTUDIO_BASE = process.env.LMSTUDIO_BASE || "http://localhost:1234/v1";
-const LMSTUDIO_DEFAULT_MODEL = process.env.WORKER_MODEL || "local-model";
+let _config: LLMConfig = {
+  endpoint: process.env.LLM_ENDPOINT || "http://127.0.0.1:18789/v1/chat/completions",
+  token: process.env.LLM_AUTH_TOKEN || "",
+  defaultModel: process.env.LLM_DEFAULT_MODEL || "openclaw",
+  defaultMessageChannel: process.env.LLM_MESSAGE_CHANNEL || "orchestrator-software-house",
+  timeoutMs: 60_000,
+};
 
-// OpenClaw gateway endpoint. The plugin runs inside the same process, so this
-// is the local gateway at its configured port. Override via env if needed.
-const OPENCLAW_BASE = process.env.OPENCLAW_GATEWAY_BASE
-  || (() => {
-    // Read gateway port from OpenClaw config, fall back to env or default.
-    try {
-      const cfgPath = process.env.OPENCLAW_CONFIG || path.join(os.homedir(), ".openclaw", "openclaw.json");
-      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
-      const port = cfg?.gateway?.port
-        || process.env.OPENCLAW_GATEWAY_PORT
-        || 18789;
-      return `http://127.0.0.1:${port}`;
-    } catch (_) {
-      const port = process.env.OPENCLAW_GATEWAY_PORT || 18789;
-      return `http://127.0.0.1:${port}`;
-    }
-  })();
-
-// ponytail: cached at module load. Token is stable for the gateway lifetime.
-let _openclawToken: string | null = null;
-function getOpenClawToken(): string {
-  if (_openclawToken) return _openclawToken;
-  // Same lookup logic as base URL.
-  const candidates = [
-    process.env.OPENCLAW_GATEWAY_TOKEN,
-    process.env.OPENCLAW_GATEWAY_PASSWORD,
-  ];
-  for (const c of candidates) if (c) { _openclawToken = c; return c; }
-  try {
-    const cfgPath = process.env.OPENCLAW_CONFIG || path.join(os.homedir(), ".openclaw", "openclaw.json");
-    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
-    const auth = cfg?.gateway?.auth;
-    const t = auth?.token || auth?.password;
-    if (t) { _openclawToken = t; return t; }
-  } catch (_) {}
-  throw new Error(
-    "OpenClaw gateway token not found. Set OPENCLAW_GATEWAY_TOKEN env var " +
-    "or ensure ~/.openclaw/openclaw.json has gateway.auth.token"
-  );
+/**
+ * Set the LLM endpoint configuration. Called once at plugin register.
+ * Any field can be omitted to keep the current value.
+ */
+export function configureLLM(patch: Partial<LLMConfig>): void {
+  _config = { ..._config, ...patch };
 }
 
-// ponytail: prefer non-embedding chat models; gemma/qwen prefixes are usually chat.
+/** Get the active LLM config (read-only snapshot). */
+export function getLLMConfig(): Readonly<LLMConfig> {
+  return { ..._config };
+}
+
+// ponytail: prefer non-embedding chat model names for fallback selection.
 const CHAT_MODEL_HINTS = ["gemma", "qwen", "llama", "mistral", "minimax", "deepseek", "command"];
 
+/**
+ * Pick an available model from the endpoint's /v1/models list.
+ * Honors the preferred name if loaded. Otherwise returns the first
+ * non-embedding chat model. Used as a fallback when no explicit model
+ * is given in the request.
+ */
 export async function pickAvailableModel(preferred?: string): Promise<string> {
-  const health = await checkLmStudioHealth();
-  if (!health.reachable || !health.models?.length) {
-    throw new Error("LM Studio unreachable — cannot pick a model");
+  const base = _config.endpoint.replace(/\/chat\/completions$/, "");
+  const headers: Record<string, string> = {};
+  if (_config.token) headers.Authorization = `Bearer ${_config.token}`;
+  const response = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(5000) });
+  if (!response.ok) {
+    throw new Error(`LLM endpoint /v1/models error ${response.status}`);
   }
-  // Honor the preferred name if it's actually loaded
-  if (preferred && health.models.includes(preferred)) return preferred;
-  // Otherwise pick the first non-embedding chat model
-  const candidate = health.models.find((m) => {
+  const data = (await response.json()) as any;
+  const models: string[] = (data?.data || []).map((m: any) => m.id || m.name || "");
+  if (!models.length) throw new Error("LLM endpoint reports no models");
+  if (preferred && models.includes(preferred)) return preferred;
+  const candidate = models.find((m) => {
     if (m.includes("embed")) return false;
     return CHAT_MODEL_HINTS.some((hint) => m.toLowerCase().includes(hint));
   });
-  return candidate || health.models[0];
+  return candidate || models[0];
 }
 
 // ── Role-based system prompts ──
@@ -185,76 +177,98 @@ export function buildSystemPrompt(
  *
  * Uses native fetch — zero npm deps.
  */
+/**
+ * Call an OpenAI-compatible chat completions endpoint.
+ *
+ * Talks to whatever endpoint was set via `configureLLM()` (or env vars
+ * LLM_ENDPOINT, LLM_AUTH_TOKEN, LLM_DEFAULT_MODEL, LLM_MESSAGE_CHANNEL).
+ * The plugin auto-configures to use the local OpenClaw gateway on install.
+ *
+ * Per-worker session tracking (OpenClaw-style extensions; ignored by other
+ * servers that don't read them):
+ *   - `user` field → server derives a stable session key
+ *   - `x-openclaw-session-key` → explicit session routing
+ *   - `x-openclaw-model` → backend model override (e.g. "openai/gpt-5.4")
+ *   - `x-openclaw-message-channel` → synthetic ingress context
+ *
+ * Tool calls: pass `tools` as the standard OpenAI tools array. The endpoint
+ * must support function calling. If `tools` is set and the response contains
+ * `tool_calls`, those are returned via the `CallLLMResult` shape.
+ *
+ * History: if the server supports session derivation from `user` (OpenClaw
+ * does), you don't need to ship the history array — the server has it. For
+ * stateless endpoints, pass `history` explicitly.
+ */
+export interface CallLLMResult {
+  /** Assistant text (may be empty if the response is only tool calls). */
+  content: string;
+  /** Tool calls requested by the model (when tools were provided). */
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
+  /** Raw response for callers that need more. */
+  raw: any;
+}
+
 export async function callLLM(opts: {
   systemPrompt: string;
   userMessage: string;
-  /** Per-worker stable identifier. Used as the `user` field in the OpenAI
-   *  request, which OpenClaw uses to derive a stable session key. This gives
-   *  us free per-worker session tracking without explicit session_key wiring. */
+  /** Per-worker stable identifier. Used as the `user` field; the server
+   *  uses it to derive a session key when supported. */
   user?: string;
-  /** Optional explicit session routing. Overrides `user`-derived session. */
+  /** Optional explicit session routing (x-openclaw-session-key header). */
   sessionKey?: string;
-  /** Optional message channel context (sets x-openclaw-message-channel). */
+  /** Optional ingress context (x-openclaw-message-channel header). */
   messageChannel?: string;
-  /** Optional backend model override (sets x-openclaw-model).
-   *  Use this to pin premium models for the 5h free-sub burn. */
+  /** Optional backend model override (x-openclaw-model header). */
   backendModel?: string;
-  /** Per-call backend override. Defaults to `BACKEND` env / module default. */
-  backend?: LLMBackend;
-  /** Optional raw chat history. OpenClaw tracks server-side, so this is
-   *  only needed for non-OpenClaw backends (LM Studio). */
+  /** OpenAI-style tools array. When set, the server may respond with tool_calls. */
+  tools?: Array<Record<string, any>>;
+  /** Force tool use: "auto" | "none" | "required" | { type: "function", function: { name } }. */
+  toolChoice?: string | Record<string, any>;
+  /** Optional chat history (for stateless endpoints that don't derive sessions). */
   history?: Array<{ role: string; content: string }>;
   maxTokens?: number;
-  /** Legacy: preferred LM Studio model name. Ignored for OpenClaw backend. */
-  preferredModel?: string;
-}): Promise<string> {
-  const backend: LLMBackend = opts.backend || resolveBackend();
-  if (backend === "openclaw") return callOpenClaw(opts);
-  return callLmStudio(opts);
-}
-
-/**
- * Call OpenClaw gateway with OpenClaw-syntax extensions.
- *
- * OpenClaw syntax:
- *   - `model: "openclaw"` → routes to default agent
- *   - `model: "openclaw/<agentId>"` → routes to specific agent
- *   - `user: "<stable-id>"` → OpenClaw derives a session key from this
- *   - `x-openclaw-session-key: <key>` → explicit session routing
- *   - `x-openclaw-model: <provider/model>` → backend model override (owner-level)
- *   - `x-openclaw-message-channel: <ch>` → synthetic ingress channel
- */
-async function callOpenClaw(opts: Parameters<typeof callLLM>[0]): Promise<string> {
-  // ponytail: system prompt goes in the first message per OpenAI spec.
-  // OpenClaw already tracks session history from previous calls with the
-  // same `user` value, so we don't need to send the history array.
+}): Promise<CallLLMResult> {
   const messages: Array<{ role: string; content: string }> = [
     { role: "system", content: opts.systemPrompt },
-    { role: "user", content: opts.userMessage },
   ];
+  if (opts.history?.length) {
+    for (const m of opts.history.slice(-20)) {
+      if (m.role !== "system") messages.push(m);
+    }
+  }
+  messages.push({ role: "user", content: opts.userMessage });
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${getOpenClawToken()}`,
   };
+  if (_config.token) headers.Authorization = `Bearer ${_config.token}`;
   if (opts.sessionKey) headers["x-openclaw-session-key"] = opts.sessionKey;
   if (opts.backendModel) headers["x-openclaw-model"] = opts.backendModel;
   if (opts.messageChannel) headers["x-openclaw-message-channel"] = opts.messageChannel;
+  else if (_config.defaultMessageChannel) headers["x-openclaw-message-channel"] = _config.defaultMessageChannel;
 
   const body: Record<string, any> = {
-    model: "openclaw", // default agent
+    model: _config.defaultModel,
     messages,
     max_completion_tokens: opts.maxTokens ?? 1024,
     temperature: 0.7,
     stream: false,
   };
-  // `user` field drives session derivation; reuse the same value per worker.
   if (opts.user) body.user = opts.user;
+  if (opts.tools?.length) {
+    body.tools = opts.tools;
+    if (opts.toolChoice) body.tool_choice = opts.toolChoice;
+    else body.tool_choice = "auto";
+  }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000); // 60s — OpenClaw may do tool calls
+  const timeout = setTimeout(() => controller.abort(), _config.timeoutMs);
   try {
-    const response = await fetch(`${OPENCLAW_BASE}/v1/chat/completions`, {
+    const response = await fetch(_config.endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -263,87 +277,30 @@ async function callOpenClaw(opts: Parameters<typeof callLLM>[0]): Promise<string
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`OpenClaw error ${response.status}: ${errorText.slice(0, 300)}`);
+      throw new Error(`LLM endpoint error ${response.status} at ${_config.endpoint}: ${errorText.slice(0, 300)}`);
     }
 
     const data = (await response.json()) as any;
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error("OpenClaw returned empty response");
+    const msg = data?.choices?.[0]?.message || {};
+    const content = (msg.content || "").trim();
+    const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls.map((tc: any) => ({
+      id: tc.id,
+      name: tc.function?.name || "",
+      arguments: tc.function?.arguments || "{}",
+    })) : undefined;
+
+    if (!content && !toolCalls?.length) {
+      throw new Error("LLM endpoint returned empty response");
     }
-    return content.trim();
+    return { content, toolCalls, raw: data };
   } catch (err: any) {
     if (err.name === "AbortError") {
-      throw new Error("OpenClaw request timed out after 60s");
+      throw new Error(`LLM endpoint request timed out after ${_config.timeoutMs / 1000}s`);
     }
     if (err.message?.includes("fetch") || err.code === "ECONNREFUSED" || err.cause?.code === "ECONNREFUSED") {
       throw new Error(
-        `Cannot reach OpenClaw gateway at ${OPENCLAW_BASE}. ` +
-        `Is the gateway running? Error: ${err.message}`
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-/**
- * Call LM Studio (legacy backend). Same OpenAI-compatible format, no auth.
- */
-async function callLmStudio(opts: Parameters<typeof callLLM>[0]): Promise<string> {
-  const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: opts.systemPrompt },
-  ];
-
-  if (opts.history && opts.history.length > 0) {
-    const recent = opts.history.slice(-10);
-    for (const msg of recent) {
-      if (msg.role !== "system") {
-        messages.push({ role: msg.role, content: msg.content });
-      }
-    }
-  }
-
-  messages.push({ role: "user", content: opts.userMessage });
-
-  const model = await pickAvailableModel(opts.preferredModel).catch(() => LMSTUDIO_DEFAULT_MODEL);
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  try {
-    const response = await fetch(`${LMSTUDIO_BASE}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: opts.maxTokens ?? 1024,
-        temperature: 0.7,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`LM Studio error ${response.status}: ${errorText.slice(0, 200)}`);
-    }
-
-    const data = (await response.json()) as any;
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error("LM Studio returned empty response");
-    }
-    return content.trim();
-  } catch (err: any) {
-    if (err.name === "AbortError") {
-      throw new Error("LM Studio request timed out after 30s");
-    }
-    if (err.message?.includes("fetch") || err.code === "ECONNREFUSED" || err.cause?.code === "ECONNREFUSED") {
-      throw new Error(
-        `Cannot reach LM Studio at ${LMSTUDIO_BASE}. ` +
-        `Make sure LM Studio is running and a model is loaded. Error: ${err.message}`
+        `Cannot reach LLM endpoint at ${_config.endpoint}. ` +
+        `Check the URL, network, and auth. Error: ${err.message}`
       );
     }
     throw err;
@@ -393,11 +350,12 @@ Create a report with these sections (markdown):
     "You generate concise, structured job reports for a software house. " +
     "Each report is factual, specific to the work done, and actionable for the next iteration.";
 
-  return callLLM({
+  const result = await callLLM({
     systemPrompt,
     userMessage: prompt,
     maxTokens: 1536,
   });
+  return result.content;
 }
 
 /**
@@ -432,36 +390,37 @@ export async function reportWorkerActivity(opts: {
 }
 
 /**
- * Health check for the active backend.
- * For OpenClaw: GETs /v1/models (lists agent targets).
- * For LM Studio: GETs /v1/models (lists loaded models).
+ * Health check for the configured LLM endpoint.
+ * GETs /v1/models (lists agent targets for OpenClaw, loaded models for
+ * LM Studio / vLLM, or empty list for opaque servers).
  */
-export async function checkLmStudioHealth(): Promise<{
+export async function checkLLMHealth(): Promise<{
   reachable: boolean;
-  backend: LLMBackend;
+  endpoint: string;
   error?: string;
   models?: string[];
 }> {
-  const base = resolveBackend() === "openclaw" ? OPENCLAW_BASE : LMSTUDIO_BASE;
+  const base = _config.endpoint.replace(/\/chat\/completions$/, "");
   const headers: Record<string, string> = {};
-  if (resolveBackend() === "openclaw") {
-    try { headers.Authorization = `Bearer ${getOpenClawToken()}`; } catch (_) {}
-  }
+  if (_config.token) headers.Authorization = `Bearer ${_config.token}`;
   try {
-    const response = await fetch(`${base}/v1/models`, {
+    const response = await fetch(`${base}/models`, {
       headers,
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      return { reachable: false, backend: resolveBackend(), error: `HTTP ${response.status}` };
+      return { reachable: false, endpoint: _config.endpoint, error: `HTTP ${response.status}` };
     }
     const data = (await response.json()) as any;
     const models = (data?.data || []).map((m: any) => m.id || m.name || "");
-    return { reachable: true, backend: resolveBackend(), models };
+    return { reachable: true, endpoint: _config.endpoint, models };
   } catch (err: any) {
-    return { reachable: false, backend: resolveBackend(), error: err.message };
+    return { reachable: false, endpoint: _config.endpoint, error: err.message };
   }
 }
+
+/** Backward-compat alias. */
+export const checkLmStudioHealth = checkLLMHealth;
 
 /**
  * Save a job report as a vault document.

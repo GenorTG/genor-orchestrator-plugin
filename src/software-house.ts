@@ -446,7 +446,7 @@ export async function handleBacklogMoveV2(req: IncomingMessage, res: ServerRespo
           wid,
           parseInt(id.replace(/[^0-9]/g, ""), 10) || null,
           "reported",
-          JSON.stringify({ message: response, ts: new Date().toISOString() }),
+          JSON.stringify({ message: response.content, ts: new Date().toISOString() }),
         );
 
         updateWorker(wid, { status: "working" } as any);
@@ -569,6 +569,8 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
   const pmWorker = workers.find(w => w.is_pm === 1) || workers[0];
 
   let pmResponse: string | null = null;
+  // _pmLlmUsed signals whether the response came from a real LLM call.
+  let _pmLlmUsed = false;
 
   // Try real LLM first
   if (pmWorker) {
@@ -602,7 +604,7 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
         `If you cannot answer something, be honest.`,
       ].join('\n');
 
-      pmResponse = await callLLM({
+      const llmResult = await callLLM({
         systemPrompt,
         userMessage: userPrompt,
         maxTokens: 512,
@@ -612,8 +614,9 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
         messageChannel: "orchestrator-software-house",
       });
 
-      addPmChat(pmResponse, 'pm', proj);
-      json(res, { ok: true });
+      addPmChat(llmResult.content || "", 'pm', proj);
+      pmResponse = llmResult.content || null;
+      json(res, { ok: true, llm: true });
       return;
     } catch {
       // LLM failed — fall through to keyword response
@@ -817,12 +820,12 @@ export async function handleWorkerInvoke(req: IncomingMessage, res: ServerRespon
       workerId,
       taskId || null,
       taskId ? "reported" : "status_update",
-      JSON.stringify({ message: response, ts: new Date().toISOString() }),
+      JSON.stringify({ message: response.content, ts: new Date().toISOString() }),
     );
 
     updateWorker(workerId, { status: "working" } as any);
 
-    json(res, { ok: true, workerId, taskId, response });
+    json(res, { ok: true, workerId, taskId, response: response.content });
   } catch (err: any) {
     updateWorker(workerId, { status: "error" } as any);
     addWorkerTaskHistory(

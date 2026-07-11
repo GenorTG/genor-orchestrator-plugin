@@ -1,18 +1,22 @@
 /**
- * Tests for worker-runtime.ts
+ * Tests for worker-runtime.ts — the generic OpenAI-compatible LLM client.
  *
- * Tests the core LLM utilities: buildSystemPrompt, callLLM, generateJobReport,
- * reportWorkerActivity, and checkLmStudioHealth.
- *
- * Uses a mock fetch for callLLM tests to avoid actual LM Studio dependency.
+ * Uses a mock fetch for callLLM tests. The tests configure the LLM
+ * endpoint explicitly via configureLLM(), so they don't depend on any
+ * real backend (OpenClaw, LM Studio, etc.).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { configureLLM, getLLMConfig } from "../src/worker-runtime.js";
 
-// Force LM Studio backend for the legacy tests in this file.
-// The OpenClaw-specific tests set `backend: "openclaw"` per call.
-process.env.WORKER_LLM_BACKEND = "lmstudio";
-process.env.LMSTUDIO_BASE = "http://localhost:1234/v1";
+// ── Configure the mock endpoint before any tests run ──
+configureLLM({
+  endpoint: "http://mock-llm:9999/v1/chat/completions",
+  token: "test-token-123",
+  defaultModel: "test-model",
+  defaultMessageChannel: "test-channel",
+  timeoutMs: 5_000,
+});
 
 // ── Mock fetch before importing the module ──
 
@@ -47,7 +51,7 @@ import {
   callLLM,
   generateJobReport,
   reportWorkerActivity,
-  checkLmStudioHealth,
+  checkLLMHealth,
   saveJobReportAsVaultDoc,
   pickAvailableModel,
 } from "../src/worker-runtime.js";
@@ -141,14 +145,11 @@ describe("callLLM", () => {
     mockFetch.mockReset();
   });
 
-  it("calls LM Studio and returns the response text", async () => {
-    // pickAvailableModel -> /v1/models
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
-    // callLLM -> /v1/chat/completions
+  it("posts to the configured endpoint and returns the result", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: "Hello, I am an AI worker!" } }],
+        choices: [{ message: { content: "Hello from the test endpoint" } }],
       }),
     });
 
@@ -157,29 +158,99 @@ describe("callLLM", () => {
       userMessage: "Say hello.",
     });
 
-    expect(result).toBe("Hello, I am an AI worker!");
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.content).toBe("Hello from the test endpoint");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
 
-    // Verify the chat completion request format
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    expect(chatCall[0]).toContain("localhost:1234/v1/chat/completions");
-    const callBody = JSON.parse(chatCall[1].body);
-    expect(callBody.messages[0].role).toBe("system");
-    expect(callBody.messages[0].content).toBe("You are a test worker.");
-    expect(callBody.messages[1].role).toBe("user");
-    expect(callBody.messages[1].content).toBe("Say hello.");
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("http://mock-llm:9999/v1/chat/completions");
+    const body = JSON.parse(opts.body);
+    expect(body.model).toBe("test-model");
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[0].content).toBe("You are a test worker.");
+    expect(body.messages[1].role).toBe("user");
+    expect(body.messages[1].content).toBe("Say hello.");
+    expect(opts.headers.Authorization).toBe("Bearer test-token-123");
+  });
+
+  it("sends bearer auth header when token is set", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({ systemPrompt: "x", userMessage: "y" });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers.Authorization).toBe("Bearer test-token-123");
+  });
+
+  it("omits auth header when no token is configured", async () => {
+    configureLLM({ token: "" });
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({ systemPrompt: "x", userMessage: "y" });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers.Authorization).toBeUndefined();
+    configureLLM({ token: "test-token-123" }); // restore
+  });
+
+  it("sends x-openclaw-session-key when sessionKey is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y",
+      sessionKey: "agent:main:worker:w123",
+    });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-openclaw-session-key"]).toBe("agent:main:worker:w123");
+  });
+
+  it("sends x-openclaw-model when backendModel is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y",
+      backendModel: "openai/gpt-5.4",
+    });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-openclaw-model"]).toBe("openai/gpt-5.4");
+  });
+
+  it("sends x-openclaw-message-channel when messageChannel is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y",
+      messageChannel: "custom-channel",
+    });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-openclaw-message-channel"]).toBe("custom-channel");
+  });
+
+  it("uses default message channel from config when not specified", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({ systemPrompt: "x", userMessage: "y" });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-openclaw-message-channel"]).toBe("test-channel");
+  });
+
+  it("includes user field for per-worker session tracking", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({ systemPrompt: "x", userMessage: "y", user: "worker-w123" });
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(JSON.parse(opts.body).user).toBe("worker-w123");
   });
 
   it("includes history messages when provided", async () => {
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        choices: [{ message: { content: "Based on our conversation..." } }],
-      }),
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-
-    const result = await callLLM({
+    await callLLM({
       systemPrompt: "You are a worker.",
       userMessage: "What did we discuss?",
       history: [
@@ -187,65 +258,87 @@ describe("callLLM", () => {
         { role: "assistant", content: "Hi there!" },
       ],
     });
-
-    expect(result).toBe("Based on our conversation...");
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    const callBody = JSON.parse(chatCall[1].body);
-    // Should have: system, user, assistant, user (4 messages total)
-    expect(callBody.messages.length).toBe(4);
+    const [, opts] = mockFetch.mock.calls[0];
+    const body = JSON.parse(opts.body);
+    expect(body.messages.length).toBe(4); // system + 2 history + new user
   });
 
-  it("throws on HTTP error from LM Studio", async () => {
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
+  it("passes tools array for function calling", async () => {
     mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      text: async () => "Internal Server Error",
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y",
+      tools: [{ type: "function", function: { name: "test_tool" } }],
+    });
+    const [, opts] = mockFetch.mock.calls[0];
+    const body = JSON.parse(opts.body);
+    expect(body.tools).toEqual([{ type: "function", function: { name: "test_tool" } }]);
+    expect(body.tool_choice).toBe("auto");
+  });
 
+  it("returns tool calls when present in response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, json: async () => ({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call_1",
+              function: { name: "test_tool", arguments: '{"x":1}' },
+            }],
+          },
+        }],
+      }),
+    });
+    const result = await callLLM({ systemPrompt: "x", userMessage: "y" });
+    expect(result.toolCalls).toEqual([{
+      id: "call_1",
+      name: "test_tool",
+      arguments: '{"x":1}',
+    }]);
+  });
+
+  it("throws on HTTP error", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 500, text: async () => "Internal Server Error",
+    });
     await expect(
-      callLLM({ systemPrompt: "test", userMessage: "test" })
-    ).rejects.toThrow("LM Studio error 500");
+      callLLM({ systemPrompt: "x", userMessage: "y" })
+    ).rejects.toThrow(/LLM endpoint error 500/);
   });
 
   it("throws on empty response", async () => {
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [] }),
+      ok: true, json: async () => ({ choices: [] }),
     });
-
     await expect(
-      callLLM({ systemPrompt: "test", userMessage: "test" })
-    ).rejects.toThrow("empty response");
+      callLLM({ systemPrompt: "x", userMessage: "y" })
+    ).rejects.toThrow(/empty response/);
   });
 
-  it("throws descriptive error when LM Studio is unreachable", async () => {
-    // Both pickAvailableModel and callLLM fail to reach LM Studio
+  it("throws descriptive error when endpoint is unreachable", async () => {
     mockFetch.mockRejectedValue(new TypeError("fetch failed"));
-
     await expect(
-      callLLM({ systemPrompt: "test", userMessage: "test" })
-    ).rejects.toThrow(/Cannot reach LM Studio/);
+      callLLM({ systemPrompt: "x", userMessage: "y" })
+    ).rejects.toThrow(/Cannot reach LLM endpoint/);
   });
 
   it("throws on request timeout", async () => {
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     const abortError = new DOMException("The operation was aborted", "AbortError");
     mockFetch.mockRejectedValueOnce(abortError);
-
     await expect(
-      callLLM({ systemPrompt: "test", userMessage: "test" })
+      callLLM({ systemPrompt: "x", userMessage: "y" })
     ).rejects.toThrow(/timed out/);
   });
 });
 
-describe("checkLmStudioHealth", () => {
+describe("checkLLMHealth", () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  it("returns reachable=true when LM Studio responds", async () => {
+  it("returns reachable=true when endpoint responds", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -256,16 +349,17 @@ describe("checkLmStudioHealth", () => {
       }),
     });
 
-    const result = await checkLmStudioHealth();
+    const result = await checkLLMHealth();
     expect(result.reachable).toBe(true);
     expect(result.models).toContain("model-1");
     expect(result.models).toContain("model-2");
+    expect(result.endpoint).toBe("http://mock-llm:9999/v1/chat/completions");
   });
 
-  it("returns reachable=false with error when LM Studio is down", async () => {
+  it("returns reachable=false with error when endpoint is down", async () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
-    const result = await checkLmStudioHealth();
+    const result = await checkLLMHealth();
     expect(result.reachable).toBe(false);
     expect(result.error).toBeTruthy();
   });
@@ -277,7 +371,6 @@ describe("generateJobReport", () => {
   });
 
   it("generates a structured report via LLM", async () => {
-    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -396,6 +489,8 @@ describe("saveJobReportAsVaultDoc", () => {
 });
 
 describe("pickAvailableModel", () => {
+  beforeEach(() => { mockFetch.mockReset(); });
+
   it("returns the preferred model if it is loaded", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -429,122 +524,22 @@ describe("pickAvailableModel", () => {
     expect(model).toBe("text-embedding-x"); // last resort
   });
 
-  it("throws when LM Studio is unreachable", async () => {
+  it("throws when endpoint is unreachable", async () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    await expect(pickAvailableModel()).rejects.toThrow("LM Studio unreachable");
+    await expect(pickAvailableModel()).rejects.toThrow();
   });
 });
 
-// ── OpenClaw backend tests ─────────────────────────────────────
-
-describe("callLLM (OpenClaw backend)", () => {
-  beforeEach(() => {
-    mockFetch.mockReset();
-  });
-
-  it("POSTs to /v1/chat/completions with bearer auth", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "Hi from OpenClaw" } }] }),
+describe("configureLLM", () => {
+  it("overrides endpoint and token", () => {
+    configureLLM({ endpoint: "http://other:1234/v1/chat/completions", token: "new-token" });
+    const cfg = getLLMConfig();
+    expect(cfg.endpoint).toBe("http://other:1234/v1/chat/completions");
+    expect(cfg.token).toBe("new-token");
+    // Restore for subsequent tests
+    configureLLM({
+      endpoint: "http://mock-llm:9999/v1/chat/completions",
+      token: "test-token-123",
     });
-    const result = await callLLM({
-      systemPrompt: "You are a worker.",
-      userMessage: "Say hi.",
-      backend: "openclaw",
-      user: "worker-w123",
-    });
-    expect(result).toBe("Hi from OpenClaw");
-
-    // The chat/completions call
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    expect(chatCall).toBeTruthy();
-    const headers = chatCall[1].headers;
-    expect(headers.Authorization).toMatch(/^Bearer /);
-    expect(headers["Content-Type"]).toBe("application/json");
-
-    const body = JSON.parse(chatCall[1].body);
-    expect(body.model).toBe("openclaw");
-    expect(body.messages[0].role).toBe("system");
-    expect(body.messages[1].role).toBe("user");
-    expect(body.user).toBe("worker-w123");
-  });
-
-  it("sends x-openclaw-session-key when sessionKey is provided", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "ack" } }] }),
-    });
-    await callLLM({
-      systemPrompt: "x", userMessage: "y", backend: "openclaw",
-      sessionKey: "agent:main:worker:w123",
-    });
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    expect(chatCall[1].headers["x-openclaw-session-key"]).toBe("agent:main:worker:w123");
-  });
-
-  it("sends x-openclaw-model when backendModel is provided", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "premium response" } }] }),
-    });
-    await callLLM({
-      systemPrompt: "x", userMessage: "y", backend: "openclaw",
-      backendModel: "openai/gpt-5.4",
-    });
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    expect(chatCall[1].headers["x-openclaw-model"]).toBe("openai/gpt-5.4");
-  });
-
-  it("sends x-openclaw-message-channel when messageChannel is provided", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "x" } }] }),
-    });
-    await callLLM({
-      systemPrompt: "x", userMessage: "y", backend: "openclaw",
-      messageChannel: "orchestrator-software-house",
-    });
-    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
-    expect(chatCall[1].headers["x-openclaw-message-channel"]).toBe("orchestrator-software-house");
-  });
-
-  it("uses 60s timeout for OpenClaw (vs 30s for LM Studio)", async () => {
-    // Just verify the call succeeds; timeout is exercised in a separate test
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
-    });
-    const result = await callLLM({
-      systemPrompt: "x", userMessage: "y", backend: "openclaw",
-    });
-    expect(result).toBe("ok");
-  });
-
-  it("throws descriptive error when OpenClaw is unreachable", async () => {
-    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
-    await expect(
-      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
-    ).rejects.toThrow(/Cannot reach OpenClaw gateway/);
-  });
-
-  it("throws on HTTP error from OpenClaw", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: async () => "Unauthorized",
-    });
-    await expect(
-      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
-    ).rejects.toThrow(/OpenClaw error 401/);
-  });
-
-  it("throws on empty response from OpenClaw", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [] }),
-    });
-    await expect(
-      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
-    ).rejects.toThrow(/empty response/);
   });
 });
