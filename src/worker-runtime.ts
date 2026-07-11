@@ -39,7 +39,7 @@ let _config: LLMConfig = {
   token: process.env.LLM_AUTH_TOKEN || "",
   defaultModel: process.env.LLM_DEFAULT_MODEL || "openclaw",
   defaultMessageChannel: process.env.LLM_MESSAGE_CHANNEL || "orchestrator-software-house",
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
 };
 
 /**
