@@ -355,7 +355,11 @@ export async function handleBacklogMoveV2(req, res) {
                     systemPrompt,
                     userMessage: `You've been assigned this task: "${task.title}". ${task.description ? `Details: ${task.description}` : ""}\n\nAcknowledge the task, outline your approach, and start working. Keep it concise.`,
                     maxTokens: 512,
-                    preferredModel: worker.model || undefined,
+                    // OpenClaw session tracking: same worker = same session.
+                    user: `worker-${wid}`,
+                    sessionKey: `agent:main:worker:${wid}`,
+                    messageChannel: "orchestrator-software-house",
+                    // No backendModel here — let the default agent pick its model
                 });
                 addWorkerTaskHistory(wid, parseInt(id.replace(/[^0-9]/g, ""), 10) || null, "reported", JSON.stringify({ message: response, ts: new Date().toISOString() }));
                 updateWorker(wid, { status: "working" });
@@ -485,9 +489,11 @@ export async function handlePmChatPost(req, res) {
             pmResponse = await callLLM({
                 systemPrompt,
                 userMessage: userPrompt,
-                history: recentMessages,
                 maxTokens: 512,
-                preferredModel: pmWorker.model || undefined,
+                // OpenClaw session tracking: PM worker has its own session.
+                user: `pm-${pmWorker.id}`,
+                sessionKey: `agent:main:pm:${pmWorker.id}`,
+                messageChannel: "orchestrator-software-house",
             });
             addPmChat(pmResponse, 'pm', proj);
             json(res, { ok: true });
@@ -658,7 +664,9 @@ export async function handleWorkerInvoke(req, res) {
             systemPrompt,
             userMessage: userMsg,
             maxTokens: 1024,
-            preferredModel: worker?.model || undefined,
+            user: workerId ? `worker-${workerId}` : undefined,
+            sessionKey: workerId ? `agent:main:worker:${workerId}` : undefined,
+            messageChannel: "orchestrator-software-house",
         });
         addWorkerTaskHistory(workerId, taskId || null, taskId ? "reported" : "status_update", JSON.stringify({ message: response, ts: new Date().toISOString() }));
         updateWorker(workerId, { status: "working" });
@@ -732,8 +740,9 @@ export async function handleTaskReport(req, res) {
     json(res, { error: "report not found for this task" }, 404);
 }
 /**
- * GET /api/software-house/lmstudio/health
- * Check if LM Studio is reachable.
+ * GET /api/software-house/backend/health
+ * Check if the active LLM backend is reachable.
+ * Returns backend type, reachability, and available models/agents.
  */
 export async function handleLmStudioHealth(_req, res) {
     const health = await checkLmStudioHealth();
@@ -1127,6 +1136,11 @@ export async function handleSoftwareHouseRoute(req, res) {
             return true;
         }
         // ── LM Studio health ──
+        if (normalizedPathname === "/api/software-house/backend/health" && method === "GET") {
+            await handleLmStudioHealth(req, res);
+            return true;
+        }
+        // Backward compat
         if (normalizedPathname === "/api/software-house/lmstudio/health" && method === "GET") {
             await handleLmStudioHealth(req, res);
             return true;

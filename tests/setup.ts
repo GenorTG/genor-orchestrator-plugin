@@ -11,6 +11,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
+// Force LM Studio backend in tests to avoid real OpenClaw HTTP calls.
+// Tests that exercise the OpenClaw path pass `backend: "openclaw"` per call.
+process.env.WORKER_LLM_BACKEND = "lmstudio";
+process.env.LMSTUDIO_BASE = "http://localhost:1234/v1";
+
 // ── Global execSync mock ──────────────────────────────────────
 // Must be at top-level so vi.mock hoisting works in setup files.
 vi.mock("node:child_process", async (importOriginal) => {
@@ -300,6 +305,10 @@ export async function registerPlugin(
   api: MockApiType,
 ): Promise<void> {
   process.env.ORCHESTRATOR_DATA_DIR = dataDir;
+  // Force LM Studio backend in tests to avoid real OpenClaw HTTP calls.
+  // Tests that exercise the OpenClaw path pass `backend: "openclaw"` per call.
+  process.env.WORKER_LLM_BACKEND = "lmstudio";
+  process.env.LMSTUDIO_BASE = "http://localhost:1234/v1";
   plugin.register(api);
 }
 

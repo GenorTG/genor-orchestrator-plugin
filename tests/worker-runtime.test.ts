@@ -9,6 +9,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// Force LM Studio backend for the legacy tests in this file.
+// The OpenClaw-specific tests set `backend: "openclaw"` per call.
+process.env.WORKER_LLM_BACKEND = "lmstudio";
+process.env.LMSTUDIO_BASE = "http://localhost:1234/v1";
+
 // ── Mock fetch before importing the module ──
 
 const mockFetch = vi.fn();
@@ -427,5 +432,119 @@ describe("pickAvailableModel", () => {
   it("throws when LM Studio is unreachable", async () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
     await expect(pickAvailableModel()).rejects.toThrow("LM Studio unreachable");
+  });
+});
+
+// ── OpenClaw backend tests ─────────────────────────────────────
+
+describe("callLLM (OpenClaw backend)", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("POSTs to /v1/chat/completions with bearer auth", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "Hi from OpenClaw" } }] }),
+    });
+    const result = await callLLM({
+      systemPrompt: "You are a worker.",
+      userMessage: "Say hi.",
+      backend: "openclaw",
+      user: "worker-w123",
+    });
+    expect(result).toBe("Hi from OpenClaw");
+
+    // The chat/completions call
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    expect(chatCall).toBeTruthy();
+    const headers = chatCall[1].headers;
+    expect(headers.Authorization).toMatch(/^Bearer /);
+    expect(headers["Content-Type"]).toBe("application/json");
+
+    const body = JSON.parse(chatCall[1].body);
+    expect(body.model).toBe("openclaw");
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[1].role).toBe("user");
+    expect(body.user).toBe("worker-w123");
+  });
+
+  it("sends x-openclaw-session-key when sessionKey is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "ack" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y", backend: "openclaw",
+      sessionKey: "agent:main:worker:w123",
+    });
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    expect(chatCall[1].headers["x-openclaw-session-key"]).toBe("agent:main:worker:w123");
+  });
+
+  it("sends x-openclaw-model when backendModel is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "premium response" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y", backend: "openclaw",
+      backendModel: "openai/gpt-5.4",
+    });
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    expect(chatCall[1].headers["x-openclaw-model"]).toBe("openai/gpt-5.4");
+  });
+
+  it("sends x-openclaw-message-channel when messageChannel is provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await callLLM({
+      systemPrompt: "x", userMessage: "y", backend: "openclaw",
+      messageChannel: "orchestrator-software-house",
+    });
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    expect(chatCall[1].headers["x-openclaw-message-channel"]).toBe("orchestrator-software-house");
+  });
+
+  it("uses 60s timeout for OpenClaw (vs 30s for LM Studio)", async () => {
+    // Just verify the call succeeds; timeout is exercised in a separate test
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+    });
+    const result = await callLLM({
+      systemPrompt: "x", userMessage: "y", backend: "openclaw",
+    });
+    expect(result).toBe("ok");
+  });
+
+  it("throws descriptive error when OpenClaw is unreachable", async () => {
+    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
+    await expect(
+      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
+    ).rejects.toThrow(/Cannot reach OpenClaw gateway/);
+  });
+
+  it("throws on HTTP error from OpenClaw", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: async () => "Unauthorized",
+    });
+    await expect(
+      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
+    ).rejects.toThrow(/OpenClaw error 401/);
+  });
+
+  it("throws on empty response from OpenClaw", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [] }),
+    });
+    await expect(
+      callLLM({ systemPrompt: "x", userMessage: "y", backend: "openclaw" })
+    ).rejects.toThrow(/empty response/);
   });
 });
