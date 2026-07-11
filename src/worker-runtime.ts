@@ -263,6 +263,15 @@ export async function callLLM(opts: {
     body.tools = opts.tools;
     if (opts.toolChoice) body.tool_choice = opts.toolChoice;
     else body.tool_choice = "auto";
+  } else if (opts.toolChoice) {
+    body.tool_choice = opts.toolChoice;
+  } else {
+    // No tools requested — force the model to respond in plain text.
+    // The default for session-based backends (e.g. openclaw) is to attempt
+    // tool calls when the session has tools attached, which returns an
+    // "Agent couldn't generate a response" error on a plain chat completions
+    // endpoint that has no tool runtime. See dogfood run 2026-07-11.
+    body.tool_choice = "none";
   }
 
   const controller = new AbortController();

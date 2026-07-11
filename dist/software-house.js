@@ -269,7 +269,10 @@ export async function handleBacklogGet(req, res) {
  */
 export async function handleBacklogCreate(req, res) {
     const body = await parseBody(req);
-    const { title, description, priority, labels, project } = body;
+    const { title, description, priority, labels } = body;
+    // Read project from body OR URL query — both are common. Body wins.
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const project = body?.project || url.searchParams.get("project") || undefined;
     if (!title) {
         json(res, { error: "title required" }, 400);
         return;
