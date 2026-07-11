@@ -16,9 +16,10 @@ import { txt, writeJSON } from "./utils.js";
 import { WORKFLOW_ORDER } from "./workflow.js";
 import { sessionTracker } from "./session-tracker.js";
 import { queueLiveAgents } from "./live-agents.js";
-import { _toolCount, incrementToolCount } from "./plugin-state.js";
-import { isPaid, projDir, logOrchestratorError, backlogAdd, backlogList, backlogUpdate, getStatus, getConfig, getModels, checkModels, autoPopulate, logSession, logDecision, getLogs, requireRegistration, requireBinding, getProjectDocsFn, getProjectLocation, generateRecoveryDoc, writeStateEvent, buildProjectDocContext, initProjectDocs, setContext, clearContextFn, syncProject, generateStateFromEvents, snapshotState, tryFixDocsDrift } from "./legacy-helpers.js";
-import { initDb, getAllGlobalConfig, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, countSessions, listBacklogTasks, addBacklogTask, updateBacklogTask, listModels, countModels, addLog, addVerificationRun, getVerificationRun, updateVerificationRun, getDb, addWorker, updateWorker, deleteWorker, getWorker, getStalledTasksForWorker, addRoom, updateRoom, deleteRoom, addWorkerMessage, addWorkerTaskHistory, deleteWorkerMessagesByWorker, deleteWorkerSessionsByWorker, deleteWorkerTaskHistoryByWorker, } from "./db.js";
+import { _toolCount, incrementToolCount, _collectedToolMeta, _staticToolNames } from "./plugin-state.js";
+import { isPaid, projDir, logOrchestratorError, backlogAdd, backlogList, backlogUpdate, getStatus, getConfig, getModels, checkModels, autoPopulate, logSession, logDecision, getLogs, requireRegistration, requireBinding, getProjectDocsFn, getProjectLocation, generateRecoveryDoc, writeStateEvent, buildProjectDocContext, initProjectDocs, setContext, clearContextFn, syncProject, generateStateFromEvents, snapshotState, tryFixDocsDrift, _resolveBacklogCandidates } from "./legacy-helpers.js";
+import { initDb, getAllGlobalConfig, setGlobalConfig, getProjectConfig, setProjectConfig, listSessions, countSessions, listBacklogTasks, addBacklogTask, updateBacklogTask, listModels, countModels, addLog, addVerificationRun, getVerificationRun, updateVerificationRun, getDb, addWorker, updateWorker, deleteWorker, getWorker, getStalledTasksForWorker, addRoom, updateRoom, deleteRoom, addWorkerTaskHistory, deleteWorkerMessagesByWorker, deleteWorkerSessionsByWorker, deleteWorkerTaskHistoryByWorker, } from "./db.js";
+// ProjectBacklogTask is now imported from legacy-helpers.ts
 // ═══════════════════════════════════════════════════════════════
 //  PLUGIN ENTRY
 // ═══════════════════════════════════════════════════════════════
@@ -28,126 +29,8 @@ let maintenanceSvc = null;
 //  SHARED BACKLOG HELPERS — extracted to eliminate duplicate code
 //  between backlog_dispatch and backlog_dispatch_all
 // ═══════════════════════════════════════════════════════════════
-function _parseTaskField(val) {
-    if (typeof val === "string") {
-        try {
-            const p = JSON.parse(val);
-            return Array.isArray(p) ? p : [];
-        }
-        catch {
-            return [];
-        }
-    }
-    return Array.isArray(val) ? val : [];
-}
-function _resolveBacklogCandidates(project, tasks, filterLabels, maxCount = 10) {
-    let candidates = tasks.filter((t) => t.status === "todo" || t.status === "backlog");
-    if (filterLabels) {
-        const fl = filterLabels.split(",").map((l) => l.trim().toLowerCase());
-        candidates = candidates.filter((t) => _parseTaskField(t.labels).some((l) => fl.includes(l.toLowerCase())));
-    }
-    const doneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => t.id));
-    candidates = candidates.filter((t) => _parseTaskField(t.depends_on).every((d) => doneIds.has(d)));
-    const priO = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
-    candidates.sort((a, b) => {
-        const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
-        if (pa !== pb)
-            return pa - pb;
-        return (a.created || "").localeCompare(b.created || "");
-    });
-    const selected = candidates.slice(0, maxCount);
-    const dispatchList = selected.map((task) => {
-        const taskLabels = _parseTaskField(task.labels);
-        const taskDeps = _parseTaskField(task.depends_on);
-        const labels = taskLabels.join(", ");
-        const deps = taskDeps.map((d) => {
-            const dt = tasks.find((t2) => t2.id === d);
-            return dt ? `${d} — ${dt.title}` : d;
-        });
-        return {
-            task_id: task.id,
-            title: task.title,
-            description: task.description || "",
-            priority: task.priority || "p2",
-            labels,
-            depends_on: deps,
-            spawn: [
-                `🎯 Task: ${task.title}`,
-                `ID: ${task.id}`,
-                task.description ? `Description: ${task.description}` : "",
-                `Priority: ${task.priority || "p2"}`,
-                labels ? `Labels: ${labels}` : "",
-                deps.length ? `Dependencies: ${deps.join("; ")}` : "",
-            ].filter(Boolean).join("\n"),
-        };
-    });
-    return { candidates, selected, dispatchList };
-}
-// ── Tool metadata collector ────────────────────────────────────
-// Automatically populated by the registerTool wrapper inside register().
-// Used by the module-level manifest export. Inlined to avoid duplication
-// between TOOL_METADATA and api.registerTool calls.
-const _collectedToolMeta = [];
-// Static tool name array for metadata reflection at import time.
-// openclaw plugins build evaluates the module before register() is called,
-// so _collectedToolMeta would be empty. This static list ensures
-// contracts.tools is properly populated in openclaw.plugin.json.
-// Must be kept in sync with the actual api.registerTool calls below.
-const _staticToolNames = [
-    "genorch_workflow_advance_phase",
-    "genorch_models_auto_discover",
-    "genorch_backlog_add",
-    "genorch_backlog_dispatch",
-    "genorch_backlog_dispatch_all",
-    "genorch_backlog_list",
-    "genorch_backlog_update",
-    "genorch_models_check_routing",
-    "genorch_project_tidy_docs",
-    "genorch_session_clear_work",
-    "genorch_feature_design",
-    "genorch_project_create",
-    "genorch_issue_debug",
-    "genorch_system_diagnose",
-    "genorch_project_sync_docs",
-    "genorch_handoff_create",
-    "genorch_config_show_routing",
-    "genorch_logs_query",
-    "genorch_models_list",
-    "genorch_project_docs_list",
-    "genorch_session_list",
-    "genorch_models_recommend",
-    "genorch_status",
-    "genorch_knowledge_quiz",
-    "genorch_project_join",
-    "genorch_project_list_active",
-    "genorch_adr_log",
-    "genorch_session_log",
-    "genorch_qa_approve",
-    "genorch_qa_reject",
-    "genorch_qa_submit",
-    "genorch_project_rebuild_state",
-    "genorch_session_register",
-    "genorch_project_leave",
-    "genorch_session_start_work",
-    "genorch_test_create_e2e",
-    "genorch_test_create_unit",
-    "genorch_task_delegate",
-    "genorch_project_sync_files",
-    "genorch_session_unregister",
-    "genorch_verify_pipeline_check",
-    "genorch_verify_pipeline_guide",
-    "genorch_verify_pipeline_start",
-    "genorch_worker_hire",
-    "genorch_worker_edit",
-    "genorch_worker_fire",
-    "genorch_room_create",
-    "genorch_room_edit",
-    "genorch_room_delete",
-    "genorch_task_create",
-    "genorch_task_move",
-    "genorch_task_assign",
-    "genorch_worker_message",
-];
+// _parseTaskField + _resolveBacklogCandidates are now imported from legacy-helpers.ts
+// _collectedToolMeta + _staticToolNames are now imported from plugin-state.ts
 // _toolCount is now imported from plugin-state.ts (shared with legacy-helpers.ts)
 const PLUGIN_ID = "genor-orchestrator-software-house";
 const _plugin = definePluginEntry({
@@ -3997,22 +3880,6 @@ Focus specifically on: ${params.topic}` : "";
                 updateBacklogTask(params.task_id, { worker_id: params.worker_id });
                 updateWorker(params.worker_id, { status: 'working' });
                 addWorkerTaskHistory(params.worker_id, params.task_id, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
-                return txt({ ok: true });
-            },
-        });
-        api.registerTool({
-            name: "genorch_worker_message",
-            label: "Worker Message",
-            description: "Send message between workers.",
-            parameters: Type.Object({
-                from_worker_id: Type.String({ description: "Sender worker ID." }),
-                to_worker_id: Type.String({ description: "Recipient worker ID." }),
-                type: Type.Optional(Type.String({ description: "Message type (default: chat)." })),
-                content: Type.String({ description: "Message content." }),
-                project: Type.Optional(Type.String({ description: "Project name (default: genor-orchestrator-plugin)." })),
-            }),
-            async execute(_id, params) {
-                addWorkerMessage(params.from_worker_id, params.to_worker_id, params.type || "chat", params.content);
                 return txt({ ok: true });
             },
         });

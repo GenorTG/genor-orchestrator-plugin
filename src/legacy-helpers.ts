@@ -16,6 +16,80 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { PLUGIN_ROOT, txt, getDashboardDir, readJSON, writeJSON, extractTags, readFileContent } from "./utils.js";
+
+// ═══════════════════════════════════════════════════════════════
+//  SHARED BACKLOG HELPERS
+//  _parseTaskField + _resolveBacklogCandidates — used by
+//  backlog_dispatch / backlog_dispatch_all / register() tools.
+// ═══════════════════════════════════════════════════════════════
+
+export interface ProjectBacklogTask {
+  id: string;
+  title: string;
+  description: string;
+  status: "todo" | "in_progress" | "done" | "blocked" | "cancelled";
+  priority: "low" | "medium" | "high" | "critical";
+  created: string;
+  completed: string | null;
+  session_refs: string[];
+  tags: string[];
+}
+
+export function _parseTaskField(val: any): any[] {
+  if (typeof val === "string") {
+    try { const p = JSON.parse(val); return Array.isArray(p) ? p : []; } catch { return []; }
+  }
+  return Array.isArray(val) ? val : [];
+}
+
+export function _resolveBacklogCandidates(project: string, tasks: any[], filterLabels?: string, maxCount = 10): {
+  candidates: any[];
+  selected: any[];
+  dispatchList: any[];
+} {
+  let candidates = tasks.filter((t: any) => t.status === "todo" || t.status === "backlog");
+  if (filterLabels) {
+    const fl = filterLabels.split(",").map((l: string) => l.trim().toLowerCase());
+    candidates = candidates.filter((t: any) => _parseTaskField(t.labels).some((l: string) => fl.includes(l.toLowerCase())));
+  }
+  const doneIds = new Set(tasks.filter((t: any) => t.status === "done").map((t: any) => t.id));
+  candidates = candidates.filter((t: any) => _parseTaskField(t.depends_on).every((d: string) => doneIds.has(d)));
+  const priO: Record<string, number> = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+  candidates.sort((a: any, b: any) => {
+    const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return (a.created || "").localeCompare(b.created || "");
+  });
+  const selected = candidates.slice(0, maxCount);
+  const dispatchList = selected.map((task: any) => {
+    const taskLabels = _parseTaskField(task.labels);
+    const taskDeps = _parseTaskField(task.depends_on);
+    const labels = taskLabels.join(", ");
+    const deps = taskDeps.map((d: string) => {
+      const dt = tasks.find((t2: any) => t2.id === d);
+      return dt ? `${d} — ${dt.title}` : d;
+    });
+    return {
+      task_id: task.id,
+      title: task.title,
+      description: task.description || "",
+      priority: task.priority || "p2",
+      labels,
+      depends_on: deps,
+      spawn: [
+        `🎯 Task: ${task.title}`,
+        `ID: ${task.id}`,
+        task.description ? `Description: ${task.description}` : "",
+        `Priority: ${task.priority || "p2"}`,
+        labels ? `Labels: ${labels}` : "",
+        deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+      ].filter(Boolean).join("\n"),
+    };
+  });
+  return { candidates, selected, dispatchList };
+}
+
+
 import { OrchestratorLogger } from "./logger.js";
 import { SessionTracker, sessionTracker } from "./session-tracker.js";
 import { queueLiveAgents } from "./live-agents.js";

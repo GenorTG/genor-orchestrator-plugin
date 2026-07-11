@@ -15,6 +15,61 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { PLUGIN_ROOT, readJSON, writeJSON, extractTags, readFileContent } from "./utils.js";
+export function _parseTaskField(val) {
+    if (typeof val === "string") {
+        try {
+            const p = JSON.parse(val);
+            return Array.isArray(p) ? p : [];
+        }
+        catch {
+            return [];
+        }
+    }
+    return Array.isArray(val) ? val : [];
+}
+export function _resolveBacklogCandidates(project, tasks, filterLabels, maxCount = 10) {
+    let candidates = tasks.filter((t) => t.status === "todo" || t.status === "backlog");
+    if (filterLabels) {
+        const fl = filterLabels.split(",").map((l) => l.trim().toLowerCase());
+        candidates = candidates.filter((t) => _parseTaskField(t.labels).some((l) => fl.includes(l.toLowerCase())));
+    }
+    const doneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => t.id));
+    candidates = candidates.filter((t) => _parseTaskField(t.depends_on).every((d) => doneIds.has(d)));
+    const priO = { p0: 0, p1: 1, high: 0.5, medium: 1.5, p2: 2, p3: 3, low: 3.5 };
+    candidates.sort((a, b) => {
+        const pa = priO[a.priority] ?? 2, pb = priO[b.priority] ?? 2;
+        if (pa !== pb)
+            return pa - pb;
+        return (a.created || "").localeCompare(b.created || "");
+    });
+    const selected = candidates.slice(0, maxCount);
+    const dispatchList = selected.map((task) => {
+        const taskLabels = _parseTaskField(task.labels);
+        const taskDeps = _parseTaskField(task.depends_on);
+        const labels = taskLabels.join(", ");
+        const deps = taskDeps.map((d) => {
+            const dt = tasks.find((t2) => t2.id === d);
+            return dt ? `${d} — ${dt.title}` : d;
+        });
+        return {
+            task_id: task.id,
+            title: task.title,
+            description: task.description || "",
+            priority: task.priority || "p2",
+            labels,
+            depends_on: deps,
+            spawn: [
+                `🎯 Task: ${task.title}`,
+                `ID: ${task.id}`,
+                task.description ? `Description: ${task.description}` : "",
+                `Priority: ${task.priority || "p2"}`,
+                labels ? `Labels: ${labels}` : "",
+                deps.length ? `Dependencies: ${deps.join("; ")}` : "",
+            ].filter(Boolean).join("\n"),
+        };
+    });
+    return { candidates, selected, dispatchList };
+}
 import { sessionTracker } from "./session-tracker.js";
 import { queueLiveAgents } from "./live-agents.js";
 import { _toolCount } from "./plugin-state.js";
