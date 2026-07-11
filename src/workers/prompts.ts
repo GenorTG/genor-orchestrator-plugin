@@ -17,12 +17,14 @@ const ROLE_HEADER = (worker: Pick<WorkerRow, "name" | "role">, project: string):
 Your work goes into a real git repository. Real files, real tests, real commits. No mocks, no placeholders.`;
 
 const ROLE_RULES = `## Rules
+- You are on a **task branch** (created automatically). All commits go to this branch.
 - Always start by listing the project files to understand the codebase.
 - Make small, focused changes. Commit after each meaningful step.
 - Run tests after every change. If they fail, fix the code, don't suppress the test.
 - Do not add comments to code that restate what the code does.
 - Prefer editing existing files over creating new ones.
-- When the task is complete and tests pass, call \`report_done\` with a markdown summary.`;
+- When the task is complete and tests pass, call \`report_done\` with a markdown summary.
+- The branch will be automatically merged back to main when you report done.`;
 
 const ROLE_LIFECYCLE = `## Lifecycle
 1. **Read** the task description carefully.

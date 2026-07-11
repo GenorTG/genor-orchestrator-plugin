@@ -21,7 +21,7 @@ let _config = {
     token: process.env.LLM_AUTH_TOKEN || "",
     defaultModel: process.env.LLM_DEFAULT_MODEL || "openclaw",
     defaultMessageChannel: process.env.LLM_MESSAGE_CHANNEL || "orchestrator-software-house",
-    timeoutMs: 60_000,
+    timeoutMs: 120_000,
 };
 /**
  * Set the LLM endpoint configuration. Called once at plugin register.

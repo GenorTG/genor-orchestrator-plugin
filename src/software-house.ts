@@ -942,7 +942,7 @@ export async function handleWorkerStart(req: IncomingMessage, res: ServerRespons
   // Run the engine in the background. The HTTP response returns immediately;
   // when the engine finishes, it updates task state and writes a worklog entry.
   import("./workers/engine.js").then(({ executeWorkerTask }) => {
-    executeWorkerTask(workerId, taskId, { maxIterations: 20, maxTokens: 2048 })
+    executeWorkerTask(workerId, taskId, { maxIterations: 30, maxTokens: 2048 })
       .then((result) => {
         // Engine already wrote worklog + updated task state.
         // Log a final summary line for observability.

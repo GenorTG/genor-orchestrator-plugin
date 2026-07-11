@@ -130,6 +130,17 @@ const TOOL_DEFS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "git_branch",
+            description: "Show the current git branch and status. Use to verify you are on the correct task branch.",
+            parameters: {
+                type: "object",
+                properties: {},
+            },
+        },
+    },
 ];
 // ═══════════════════════════════════════════════════════════════
 //  TOOL EXECUTION
@@ -228,6 +239,23 @@ function toolRunCommand(workspaceDir, args) {
         return `[exit ${err.status ?? "?"}]\n${out || err.message}`;
     }
 }
+function toolGitBranch(workspaceDir) {
+    try {
+        const branch = execSync(`git rev-parse --abbrev-ref HEAD`, {
+            cwd: workspaceDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        const status = execSync(`git status --short`, {
+            cwd: workspaceDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        const log = execSync(`git log --oneline -5`, {
+            cwd: workspaceDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        return `Branch: ${branch}\nStatus: ${status || "clean"}\nRecent commits:\n${log}`;
+    }
+    catch (err) {
+        return `git branch info failed: ${err.message}`;
+    }
+}
 function toolGitCommit(workspaceDir, args, filesChanged) {
     try {
         // Stage only the files the engine has touched, plus any untracked that
@@ -281,6 +309,7 @@ async function executeTool(toolName, rawArgs, workspaceDir, filesChanged) {
             case "list_files": return { result: toolListFiles(workspaceDir, args), isError: false };
             case "run_command": return { result: toolRunCommand(workspaceDir, args), isError: false };
             case "git_commit": return { result: toolGitCommit(workspaceDir, args, filesChanged), isError: false };
+            case "git_branch": return { result: toolGitBranch(workspaceDir), isError: false };
             case "report_done": return { result: JSON.stringify({ acknowledged: true, summary: args.summary }), isError: false };
             default: return { result: `unknown tool: ${toolName}`, isError: true };
         }
@@ -398,8 +427,32 @@ export async function executeWorkerTask(workerId, taskId, config = {}) {
             ...history,
         ];
     }
+    // ── Branch-per-task: create a feature branch so parallel workers don't collide ──
+    const branchName = `task/${taskId}`;
+    let originalBranch = "main";
+    try {
+        originalBranch = execSync(`git rev-parse --abbrev-ref HEAD`, {
+            cwd: workspaceDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+    }
+    catch { /* not a git repo yet */ }
+    try {
+        // Create and checkout the task branch from the current HEAD
+        execSync(`git checkout -b ${branchName}`, {
+            cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+        });
+    }
+    catch {
+        // Branch may already exist — just switch to it
+        try {
+            execSync(`git checkout ${branchName}`, {
+                cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+            });
+        }
+        catch { /* best effort */ }
+    }
     updateWorker(workerId, { status: "working" });
-    addWorkerTaskHistory(workerId, Number(taskId), "started", JSON.stringify({ startedAt }));
+    addWorkerTaskHistory(workerId, Number(taskId), "started", JSON.stringify({ startedAt, branch: branchName }));
     // ── Tool-call loop ──
     for (let i = 0; i < cfg.maxIterations; i++) {
         if (cfg.abortSignal?.aborted) {
@@ -489,11 +542,57 @@ export async function executeWorkerTask(workerId, taskId, config = {}) {
             break;
         }
     }
-    if (stopReason === "error" && i_or_j(stopReason)) {
-        // No-op, just check
-    }
     if (stopReason !== "done" && stopReason !== "aborted" && stopReason !== "error") {
         stopReason = "max_iterations";
+    }
+    // ── Branch merge: on success, merge task branch back to original branch ──
+    if (stopReason === "done") {
+        try {
+            // Commit any remaining uncommitted changes on the task branch
+            const status = execSync(`git status --short`, { cwd: workspaceDir, encoding: "utf-8" });
+            if (status.trim()) {
+                execSync(`git add -A`, { cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"] });
+                execSync(`git commit -m "chore: final changes for ${taskId}"`, {
+                    cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+                });
+            }
+            // Switch back to original branch and merge
+            execSync(`git checkout ${originalBranch}`, {
+                cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+            });
+            const mergeOut = execSync(`git merge ${branchName} --no-edit`, {
+                cwd: workspaceDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+            });
+            // Clean up the task branch
+            execSync(`git branch -d ${branchName}`, {
+                cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+            });
+            steps.push({
+                iteration: steps.length,
+                role: "assistant",
+                content: `Merged ${branchName} → ${originalBranch}`,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (mergeErr) {
+            // Merge conflict or other issue — leave the branch for manual resolution
+            steps.push({
+                iteration: steps.length,
+                role: "assistant",
+                content: `Merge failed: ${mergeErr.message}. Branch ${branchName} left for manual resolution.`,
+                timestamp: new Date().toISOString(),
+            });
+            error = `Merge failed: ${mergeErr.message}`;
+        }
+    }
+    else {
+        // On failure/abort — switch back to original branch, leave task branch for inspection
+        try {
+            execSync(`git checkout ${originalBranch}`, {
+                cwd: workspaceDir, stdio: ["ignore", "pipe", "pipe"],
+            });
+        }
+        catch { /* best effort */ }
     }
     // Persist
     const result = {
@@ -541,4 +640,3 @@ function safeJsonParse(s) {
         return undefined;
     }
 }
-function i_or_j(s) { return false; } // placeholder to silence linter
