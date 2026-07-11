@@ -1929,11 +1929,11 @@ function sendChat() {
     } else {
       addBotMsg('Coś poszło nie tak. Spróbuj ponownie.', worker);
     }
-  }).then(res => res?.json()).then(data => {
-    if (data?.ok && data.messages) {
+  }).then(messages => {
+    if (Array.isArray(messages)) {
       const chatMsgs = document.getElementById('chatMsgs');
       chatMsgs.innerHTML = '';
-      data.messages.forEach(msg => {
+      messages.forEach(msg => {
         if (msg.sender === 'user') {
           chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         } else {
@@ -2193,10 +2193,10 @@ function sendPmBubble() {
       // Fetch chat history to get PM response from backend
       return store.loadPmChat();
     }
-  }).then(res => res?.json()).then(data => {
-    if (data?.ok && data.messages && data.messages.length) {
+  }).then(messages => {
+    if (Array.isArray(messages) && messages.length) {
       // Get the last PM response
-      const lastPmMsg = [...data.messages].reverse().find(m => m.sender === 'pm');
+      const lastPmMsg = [...messages].reverse().find(m => m.sender === 'pm');
       if (lastPmMsg) {
         el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         el.scrollTop = el.scrollHeight;
@@ -2204,7 +2204,7 @@ function sendPmBubble() {
         // Also update sidebar chat
         const chatMsgs = document.getElementById('chatMsgs');
         chatMsgs.innerHTML = '';
-        data.messages.forEach(msg => {
+        messages.forEach(msg => {
           const msgSprite = msg.worker_id ? agents.find(x => x.id === msg.worker_id)?.sprite || 'blue' : (a?.sprite || 'blue');
           if (msg.sender === 'user') {
             chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
