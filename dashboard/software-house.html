@@ -567,10 +567,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
             <option>QA / Reviewer</option><option>DevOps</option><option>Business Analyst</option>
           </select></div>
         <div class="form-field"><label>Model</label>
-          <select id="hireModel">
-            <option>deepseek-v4-pro</option><option>minimax-m2.5</option>
-            <option>gemini-2.5-flash</option><option>claude-sonnet-4</option>
-          </select></div>
+          <select id="hireModel">${availableModels.length ? availableModels.map(m => `<option value="${m.id}">${m.name}${m.provider?' ['+m.provider+']':''}</option>`).join('') : `<option>opencode-go/minimax-m3</option>`}</select></div>
         <div class="form-field"><label>Pokój (organizacja)</label><select id="hireRoom"></select></div>
         <div class="form-field full"><label>Sprite</label>
           <div class="sprite-picker">
@@ -1077,6 +1074,11 @@ function saveLayoutToAPI() {
 
 function spritePath(s, f) { return `assets/pixel-agents/${s}/frames/${f}.png`; }
 function staticPath(s) { return `assets/pixel-agents/${s}/static.png`; }
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('pl-PL');
+}
 
 function visualState(a) {
   if (a.status === 'idle') return 'sleep';
@@ -1935,10 +1937,10 @@ function sendChat() {
       chatMsgs.innerHTML = '';
       messages.forEach(msg => {
         if (msg.sender === 'user') {
-          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         } else {
           const sprite = worker?.sprite || 'blue';
-          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2207,9 +2209,9 @@ function sendPmBubble() {
         messages.forEach(msg => {
           const msgSprite = msg.worker_id ? agents.find(x => x.id === msg.worker_id)?.sprite || 'blue' : (a?.sprite || 'blue');
           if (msg.sender === 'user') {
-            chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+            chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
           } else {
-            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(msgSprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(msgSprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
           }
         });
         chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2312,9 +2314,9 @@ async function loadChatHistory() {
         const worker = msg.worker_id ? agents.find(a => a.id === msg.worker_id) : null;
         const sprite = worker?.sprite || 'blue';
         if (msg.sender === 'user') {
-          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         } else {
-          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${new Date(msg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
