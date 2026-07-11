@@ -28,6 +28,16 @@ const BACKLOG_COLUMNS = new Set([
 ]);
 // ── SINGLETON ──────────────────────────────────────────────────
 let _db = null;
+export function resetDb() {
+    if (_db) {
+        try {
+            _db.close();
+        }
+        catch { /* ignore */ }
+    }
+    _db = null;
+    _initialized = false;
+}
 let _initialized = false;
 export function getDb(dataDir) {
     if (!_db) {
@@ -488,6 +498,7 @@ export function initDb(dataDir) {
     if (_initialized)
         return;
     const db = getDb(dataDir);
+    // (below is the rest of initDb)
     // 1. Create base v1 schema (all tables with original format)
     db.exec(SCHEMA_V1);
     // 2. Import from legacy JSON files FIRST (populates v1 tables)

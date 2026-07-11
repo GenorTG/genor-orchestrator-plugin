@@ -921,7 +921,9 @@ export async function handleLmStudioHealth(_req: IncomingMessage, res: ServerRes
 
 /**
  * POST /api/software-house/worker/start
- * Start a worker on a task.
+ * Start a worker on a task — runs the workers/engine.ts tool-call loop.
+ * Returns immediately with a jobId; the engine runs asynchronously.
+ * The engine updates task state and writes the report to the vault.
  */
 export async function handleWorkerStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await parseBody(req);
@@ -932,11 +934,29 @@ export async function handleWorkerStart(req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  updateWorker(workerId, { status: 'working' } as any);
-  updateBacklogTask(taskId, { worker_id: workerId, status: 'in-progress' });
+  // Mark as started (best-effort, engine will also do this)
+  updateWorker(workerId, { status: 'thinking' } as any);
+  updateBacklogTask(taskId, { worker_id: workerId, status: 'in-progress' } as any);
   addWorkerTaskHistory(workerId, taskId, 'started', JSON.stringify({ startedAt: new Date().toISOString() }));
 
-  json(res, { ok: true, workerId, taskId });
+  // Run the engine in the background. The HTTP response returns immediately;
+  // when the engine finishes, it updates task state and writes a worklog entry.
+  import("./workers/engine.js").then(({ executeWorkerTask }) => {
+    executeWorkerTask(workerId, taskId, { maxIterations: 20, maxTokens: 2048 })
+      .then((result) => {
+        // Engine already wrote worklog + updated task state.
+        // Log a final summary line for observability.
+        console.log(`[engine] worker=${workerId} task=${taskId} stopReason=${result.stopReason} ok=${result.ok} iters=${result.iterations} tools=${result.toolCallCount} files=${result.filesChanged.length}`);
+      })
+      .catch((err) => {
+        updateWorker(workerId, { status: 'error' } as any);
+        addWorkerTaskHistory(workerId, taskId, 'error', JSON.stringify({ message: String(err?.message || err), ts: new Date().toISOString() }));
+      });
+  }).catch((importErr) => {
+    addWorkerTaskHistory(workerId, taskId, 'error', JSON.stringify({ message: 'engine import failed: ' + (importErr?.message || importErr) }));
+  });
+
+  json(res, { ok: true, workerId, taskId, started: true });
 }
 
 /**

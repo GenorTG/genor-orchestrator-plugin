@@ -123,6 +123,14 @@ const BACKLOG_COLUMNS = new Set([
 // ── SINGLETON ──────────────────────────────────────────────────
 
 let _db: DatabaseSync | null = null;
+
+export function resetDb(): void {
+  if (_db) {
+    try { _db.close(); } catch { /* ignore */ }
+  }
+  _db = null;
+  _initialized = false;
+}
 let _initialized = false;
 
 export function getDb(dataDir?: string): DatabaseSync {
@@ -618,6 +626,8 @@ const MIGRATIONS: Migration[] = [
 export function initDb(dataDir?: string): void {
   if (_initialized) return;
   const db = getDb(dataDir);
+
+  // (below is the rest of initDb)
 
   // 1. Create base v1 schema (all tables with original format)
   db.exec(SCHEMA_V1);
