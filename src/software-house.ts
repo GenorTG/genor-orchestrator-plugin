@@ -435,6 +435,7 @@ export async function handleBacklogMoveV2(req: IncomingMessage, res: ServerRespo
           systemPrompt,
           userMessage: `You've been assigned this task: "${task.title}". ${task.description ? `Details: ${task.description}` : ""}\n\nAcknowledge the task, outline your approach, and start working. Keep it concise.`,
           maxTokens: 512,
+          preferredModel: worker.model || undefined,
         });
 
         addWorkerTaskHistory(
@@ -602,6 +603,7 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
         userMessage: userPrompt,
         history: recentMessages,
         maxTokens: 512,
+        preferredModel: pmWorker.model || undefined,
       });
 
       addPmChat(pmResponse, 'pm', proj);
@@ -800,6 +802,7 @@ export async function handleWorkerInvoke(req: IncomingMessage, res: ServerRespon
       systemPrompt,
       userMessage: userMsg,
       maxTokens: 1024,
+      preferredModel: worker?.model || undefined,
     });
 
     addWorkerTaskHistory(

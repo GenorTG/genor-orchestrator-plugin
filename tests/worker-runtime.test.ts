@@ -14,6 +14,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockFetch = vi.fn();
 global.fetch = mockFetch as any;
 
+// Helper: queue a LM Studio models response (callLLM -> pickAvailableModel)
+const MOCK_MODELS_RESPONSE = {
+  ok: true,
+  json: async () => ({ data: [{ id: "test-gemma" }] }),
+};
+const setupModelsMock = () => {
+  mockFetch.mockImplementation(async (url: any) => {
+    if (String(url).includes("/v1/models")) return MOCK_MODELS_RESPONSE;
+    throw new Error("Unexpected fetch URL: " + url);
+  });
+};
+
 // Need to mock db functions that worker-runtime imports
 vi.mock("../src/db.js", () => ({
   addVaultDoc: vi.fn(),
@@ -32,6 +44,7 @@ import {
   reportWorkerActivity,
   checkLmStudioHealth,
   saveJobReportAsVaultDoc,
+  pickAvailableModel,
 } from "../src/worker-runtime.js";
 
 import {
@@ -124,6 +137,9 @@ describe("callLLM", () => {
   });
 
   it("calls LM Studio and returns the response text", async () => {
+    // pickAvailableModel -> /v1/models
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
+    // callLLM -> /v1/chat/completions
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -137,13 +153,12 @@ describe("callLLM", () => {
     });
 
     expect(result).toBe("Hello, I am an AI worker!");
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
 
-    // Verify the request format
-    const callUrl = mockFetch.mock.calls[0][0];
-    expect(callUrl).toContain("localhost:1234/v1/chat/completions");
-
-    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    // Verify the chat completion request format
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    expect(chatCall[0]).toContain("localhost:1234/v1/chat/completions");
+    const callBody = JSON.parse(chatCall[1].body);
     expect(callBody.messages[0].role).toBe("system");
     expect(callBody.messages[0].content).toBe("You are a test worker.");
     expect(callBody.messages[1].role).toBe("user");
@@ -151,6 +166,7 @@ describe("callLLM", () => {
   });
 
   it("includes history messages when provided", async () => {
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -168,12 +184,14 @@ describe("callLLM", () => {
     });
 
     expect(result).toBe("Based on our conversation...");
-    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const chatCall = mockFetch.mock.calls.find((c: any) => String(c[0]).includes("chat/completions"))!;
+    const callBody = JSON.parse(chatCall[1].body);
     // Should have: system, user, assistant, user (4 messages total)
     expect(callBody.messages.length).toBe(4);
   });
 
   it("throws on HTTP error from LM Studio", async () => {
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -186,6 +204,7 @@ describe("callLLM", () => {
   });
 
   it("throws on empty response", async () => {
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ choices: [] }),
@@ -197,7 +216,8 @@ describe("callLLM", () => {
   });
 
   it("throws descriptive error when LM Studio is unreachable", async () => {
-    mockFetch.mockRejectedValueOnce(new TypeError("fetch failed"));
+    // Both pickAvailableModel and callLLM fail to reach LM Studio
+    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
 
     await expect(
       callLLM({ systemPrompt: "test", userMessage: "test" })
@@ -205,6 +225,7 @@ describe("callLLM", () => {
   });
 
   it("throws on request timeout", async () => {
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     const abortError = new DOMException("The operation was aborted", "AbortError");
     mockFetch.mockRejectedValueOnce(abortError);
 
@@ -251,6 +272,7 @@ describe("generateJobReport", () => {
   });
 
   it("generates a structured report via LLM", async () => {
+    mockFetch.mockResolvedValueOnce(MOCK_MODELS_RESPONSE);
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -365,5 +387,45 @@ describe("saveJobReportAsVaultDoc", () => {
     const tags = JSON.parse(callArgs[5]);
     expect(tags).toContain("report");
     expect(tags).toContain("completed");
+  });
+});
+
+describe("pickAvailableModel", () => {
+  it("returns the preferred model if it is loaded", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: [{ id: "gemma-x" }, { id: "qwen-y" }] }),
+    });
+    const model = await pickAvailableModel("gemma-x");
+    expect(model).toBe("gemma-x");
+  });
+
+  it("picks a chat model when preferred is not loaded", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: "text-embedding-foo" },
+          { id: "gemma-4-12b-agentic" },
+          { id: "qwen3.6-9b" },
+        ],
+      }),
+    });
+    const model = await pickAvailableModel("nonexistent-model");
+    expect(model).toBe("gemma-4-12b-agentic");
+  });
+
+  it("skips embedding models when picking a default", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: [{ id: "text-embedding-x" }] }),
+    });
+    const model = await pickAvailableModel("nope");
+    expect(model).toBe("text-embedding-x"); // last resort
+  });
+
+  it("throws when LM Studio is unreachable", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await expect(pickAvailableModel()).rejects.toThrow("LM Studio unreachable");
   });
 });

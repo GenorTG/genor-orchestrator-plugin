@@ -355,6 +355,7 @@ export async function handleBacklogMoveV2(req, res) {
                     systemPrompt,
                     userMessage: `You've been assigned this task: "${task.title}". ${task.description ? `Details: ${task.description}` : ""}\n\nAcknowledge the task, outline your approach, and start working. Keep it concise.`,
                     maxTokens: 512,
+                    preferredModel: worker.model || undefined,
                 });
                 addWorkerTaskHistory(wid, parseInt(id.replace(/[^0-9]/g, ""), 10) || null, "reported", JSON.stringify({ message: response, ts: new Date().toISOString() }));
                 updateWorker(wid, { status: "working" });
@@ -486,6 +487,7 @@ export async function handlePmChatPost(req, res) {
                 userMessage: userPrompt,
                 history: recentMessages,
                 maxTokens: 512,
+                preferredModel: pmWorker.model || undefined,
             });
             addPmChat(pmResponse, 'pm', proj);
             json(res, { ok: true });
@@ -656,6 +658,7 @@ export async function handleWorkerInvoke(req, res) {
             systemPrompt,
             userMessage: userMsg,
             maxTokens: 1024,
+            preferredModel: worker?.model || undefined,
         });
         addWorkerTaskHistory(workerId, taskId || null, taskId ? "reported" : "status_update", JSON.stringify({ message: response, ts: new Date().toISOString() }));
         updateWorker(workerId, { status: "working" });

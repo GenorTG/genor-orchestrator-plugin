@@ -7,6 +7,24 @@
 import { addVaultDoc, addWorkerTaskHistory, updateWorker, updateBacklogTask } from "./db.js";
 const LMSTUDIO_BASE = process.env.LMSTUDIO_BASE || "http://localhost:1234/v1";
 const DEFAULT_MODEL = process.env.WORKER_MODEL || "local-model";
+// ponytail: prefer non-embedding chat models; gemma/qwen prefixes are usually chat.
+const CHAT_MODEL_HINTS = ["gemma", "qwen", "llama", "mistral", "minimax", "deepseek", "command"];
+export async function pickAvailableModel(preferred) {
+    const health = await checkLmStudioHealth();
+    if (!health.reachable || !health.models?.length) {
+        throw new Error("LM Studio unreachable — cannot pick a model");
+    }
+    // Honor the preferred name if it's actually loaded
+    if (preferred && health.models.includes(preferred))
+        return preferred;
+    // Otherwise pick the first non-embedding chat model
+    const candidate = health.models.find((m) => {
+        if (m.includes("embed"))
+            return false;
+        return CHAT_MODEL_HINTS.some((hint) => m.toLowerCase().includes(hint));
+    });
+    return candidate || health.models[0];
+}
 // ── Role-based system prompts ──
 const ROLE_PROMPTS = {
     developer: "You are a software developer working in a software house. Write clean, maintainable code. " +
@@ -84,12 +102,20 @@ export async function callLLM(opts) {
     messages.push({ role: "user", content: opts.userMessage });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    // Resolve to a real model on LM Studio (preferred if loaded, else first chat model)
+    let model = DEFAULT_MODEL;
+    try {
+        model = await pickAvailableModel(opts.preferredModel);
+    }
+    catch (_) {
+        // If LM Studio is unreachable, callLLM will throw below on the chat/completions call
+    }
     try {
         const response = await fetch(`${LMSTUDIO_BASE}/chat/completions`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                model: DEFAULT_MODEL,
+                model,
                 messages,
                 max_tokens: opts.maxTokens ?? 1024,
                 temperature: 0.7,
