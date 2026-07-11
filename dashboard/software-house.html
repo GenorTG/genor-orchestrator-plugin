@@ -567,7 +567,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
             <option>QA / Reviewer</option><option>DevOps</option><option>Business Analyst</option>
           </select></div>
         <div class="form-field"><label>Model</label>
-          <select id="hireModel">${availableModels.length ? availableModels.map(m => `<option value="${m.id}">${m.name}${m.provider?' ['+m.provider+']':''}</option>`).join('') : `<option>opencode-go/minimax-m3</option>`}</select></div>
+          <select id="hireModel"></select></div>
         <div class="form-field"><label>Pokój (organizacja)</label><select id="hireRoom"></select></div>
         <div class="form-field full"><label>Sprite</label>
           <div class="sprite-picker">
@@ -1832,6 +1832,16 @@ function addRoom() {
 
 // HIRE
 function openHireModal(roomId) {
+  // Populate model selector dynamically
+  const modelSelect = document.getElementById('hireModel');
+  modelSelect.innerHTML = '';
+  if (availableModels.length) {
+    availableModels.forEach(m => {
+      modelSelect.innerHTML += `<option value="${m.id}">${m.name}${m.provider?' ['+m.provider+']':''}</option>`;
+    });
+  } else {
+    modelSelect.innerHTML = '<option value="opencode-go/minimax-m3">opencode-go/minimax-m3</option>';
+  }
   if (roomId) document.getElementById('hireRoom').value = roomId;
   document.getElementById('hireOverlay').classList.add('show');
 }
