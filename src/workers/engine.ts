@@ -36,6 +36,7 @@ import {
 } from "../db.js";
 import { getDataDir } from "../shared.js";
 import { buildRolePrompt } from "./prompts.js";
+import { createStallDetector, type StallDetector } from "./stall-detector.js";
 
 // ═══════════════════════════════════════════════════════════════
 //  TYPES
@@ -500,8 +501,23 @@ export async function executeWorkerTask(
   updateWorker(workerId, { status: "working" } as any);
   addWorkerTaskHistory(workerId, Number(taskId), "started", JSON.stringify({ startedAt, branch: branchName }));
 
+  // ── Stall detector: monitor OpenClaw session file for activity ──
+  const stallDetector = createStallDetector({
+    sessionKey: `agent:main:worker:${workerId}`,
+    stallTimeoutMs: 180_000, // 3 minutes of no activity = stall
+    onStall: ({ idleMs }) => {
+      stopReason = "error";
+      error = `Worker stalled — no activity for ${(idleMs / 1000).toFixed(0)}s`;
+    },
+  });
+  stallDetector.start();
+
   // ── Tool-call loop ──
   for (let i = 0; i < cfg.maxIterations; i++) {
+    // Check stall before each iteration
+    if (stallDetector.status().active === false && stopReason === "error") {
+      break; // stall detected by onStall callback
+    }
     if (cfg.abortSignal?.aborted) {
       stopReason = "aborted";
       error = "aborted by caller";
@@ -585,6 +601,7 @@ export async function executeWorkerTask(
           reportedSummary = args.summary || "";
         } catch { /* ignore */ }
       }
+      stallDetector.touch(); // reset stall timer after each tool call
     }
 
     if (reportedSummary !== null) {
@@ -593,6 +610,8 @@ export async function executeWorkerTask(
       break;
     }
   }
+
+  stallDetector.stop();
 
   if (stopReason !== "done" && stopReason !== "aborted" && stopReason !== "error") {
     stopReason = "max_iterations";
