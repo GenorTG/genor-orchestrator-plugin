@@ -128,6 +128,45 @@ class DataStore extends EventTarget {
   }
 
   // ═══════════════════════════════════════════════════
+  //  WORKER OPERATIONS (LLM-powered)
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * Invoke a worker via LLM with a specific task or message.
+   */
+  async invokeWorker(workerId, taskId, message) {
+    const data = await this.fetch('/software-house/worker/invoke', {
+      method: 'POST',
+      body: JSON.stringify({ workerId, taskId, message, project: this.currentProjectId })
+    });
+    return data;
+  }
+
+  /**
+   * Get a worker's complete task history.
+   */
+  async getWorkerHistory(workerId) {
+    const data = await this.fetch(`/software-house/worker/${workerId}/history?project=${this.currentProjectId}`);
+    return data;
+  }
+
+  /**
+   * Get the job report for a completed task.
+   */
+  async getTaskReport(taskId) {
+    const data = await this.fetch(`/software-house/task/${taskId}/report?project=${this.currentProjectId}`);
+    return data;
+  }
+
+  /**
+   * Check if LM Studio is reachable.
+   */
+  async checkLmStudioHealth() {
+    const data = await this.fetch(`/software-house/lmstudio/health?project=${this.currentProjectId}`);
+    return data;
+  }
+
+  // ═══════════════════════════════════════════════════
   //  MUTATIONS
   // ═══════════════════════════════════════════════════
 
@@ -163,6 +202,22 @@ class DataStore extends EventTarget {
     await this.loadBacklog();
   }
 
+  /**
+   * Move a task using the v2 (LLM-powered) endpoint.
+   * When moving to in_progress, the worker gets a thinking prompt.
+   * When moving to done, a job report is generated.
+   */
+  async moveTaskV2(taskId, phase, workerId) {
+    const body = { id: taskId, phase };
+    if (workerId !== undefined) body.worker_id = workerId;
+    const data = await this.fetch(`/software-house/backlog/move-v2?project=${this.currentProjectId}`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    await this.loadBacklog();
+    return data;
+  }
+
   async sendChat(message, workerId) {
     await this.fetch('/software-house/worker/message', {
       method: 'POST',
@@ -176,7 +231,6 @@ class DataStore extends EventTarget {
       method: 'POST',
       body: JSON.stringify(worker)
     });
-    // Reload full bootstrap to refresh all state
     await this.loadBootstrap(this.currentProjectId);
   }
 
@@ -229,6 +283,9 @@ class DataStore extends EventTarget {
   //  PM CHAT (send message)
   // ═══════════════════════════════════════════════════
 
+  /**
+   * Send a PM chat message. Uses the real LLM via the API endpoint.
+   */
   async sendPmChat(message, sender) {
     const data = await this.fetch('/software-house/pm/chat', {
       method: 'POST',

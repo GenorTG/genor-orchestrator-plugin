@@ -5,9 +5,9 @@
  * - Bootstrap: full project state
  * - Workers: CRUD operations
  * - Rooms: CRUD operations
- * - Backlog: task management
- * - PM Chat: persistent messaging
- * - Vault: document management
+ * - Backlog: task management with LLM-powered worker execution
+ * - PM Chat: persistent messaging with real LLM responses
+ * - Vault: document management including job reports
  */
 
 import { IncomingMessage, ServerResponse } from "node:http";
@@ -15,6 +15,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import * as store from "./store.js";
+import {
+  buildSystemPrompt,
+  callLLM,
+  generateJobReport,
+  reportWorkerActivity,
+  saveJobReportAsVaultDoc,
+  checkLmStudioHealth,
+} from "./worker-runtime.js";
 import {
   WorkerRow, RoomRow, VaultDocRow, PmChatRow, BacklogRow,
   setProjectConfig, getProjectConfig, updateProjectConfig, deleteProjectConfig, getAllProjectConfigs,
@@ -25,8 +33,9 @@ import {
   addBacklogTask, updateBacklogTask, deleteBacklogTask, getBacklogTask, listBacklogTasks, countBacklogByProject, deleteBacklogByProject,
   countSessions, deleteSessionsByProject, deleteStateEventsByProject,
   addWorkerTaskHistory, listWorkerTaskHistory, getWorkerCurrentTask, getWorkerLastActivity, getStalledTasksForWorker,
-  addWorkerMessage, deleteWorkerMessagesByWorker, deleteWorkerMessagesByProject,
-  deleteWorkerSessionsByProject, deleteWorkerTaskHistoryByProject,
+  addWorkerMessage, listWorkerMessages, deleteWorkerMessagesByWorker, deleteWorkerMessagesByProject,
+  deleteWorkerSessionsByWorker, deleteWorkerSessionsByProject,
+  deleteWorkerTaskHistoryByWorker, deleteWorkerTaskHistoryByProject,
   clearStateForProject
 } from "./db.js";
 import { getDataDir } from "./shared.js";
@@ -79,14 +88,12 @@ function getRepoStatus(location: string): any {
   if (!fs.existsSync(gitDir)) {
     return { hasRepo: false };
   }
-
   const branch = gitExec(location, ["rev-parse", "--abbrev-ref", "HEAD"]) || "unknown";
   const lastCommitRaw = gitExec(location, ["log", "--oneline", "-1"]);
   const lastCommit = lastCommitRaw || "";
   const remote = gitExec(location, ["remote", "get-url", "origin"]) || "";
   const statusOut = gitExec(location, ["status", "--porcelain"]) || "";
   const dirty = statusOut.length > 0;
-
   let ahead = 0;
   let behind = 0;
   if (remote) {
@@ -99,7 +106,6 @@ function getRepoStatus(location: string): any {
       }
     } catch { /* no upstream */ }
   }
-
   return { hasRepo: true, branch, dirty, lastCommit, remote, ahead, behind };
 }
 
@@ -129,7 +135,7 @@ export async function handleWorkersGet(req: IncomingMessage, res: ServerResponse
 
 /**
  * POST /api/software-house/workers/hire
- * Create a new worker.
+ * Create a new worker with system prompt and model.
  */
 export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await parseBody(req);
@@ -140,11 +146,22 @@ export async function handleWorkerHire(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  // Generate ID if not provided
   const id = providedId || `w${Date.now()}`;
-  addWorker(id, name, role || "", sprite || "blue", model || "", prompt || "", room || "", project || "genor-orchestrator-plugin", is_pm ? 1 : 0);
+  const proj = project || "genor-orchestrator-plugin";
 
-  json(res, { ok: true, worker: { id, name } });
+  // Build default system prompt from role if not provided
+  const workerRole = role || "developer";
+  const defaultPrompt = prompt || `You are a ${workerRole} working on the ${proj} project. Complete your tasks and report progress clearly.`;
+  
+  addWorker(id, name, workerRole, sprite || "blue", model || "", defaultPrompt, room || "", proj, is_pm ? 1 : 0);
+
+  // Record hire in task history
+  addWorkerTaskHistory(id, null, "hired", JSON.stringify({
+    name, role: workerRole, project: proj,
+    hiredAt: new Date().toISOString()
+  }));
+
+  json(res, { ok: true, worker: { id, name, role: workerRole } });
 }
 
 /**
@@ -179,7 +196,7 @@ export async function handleWorkerEdit(req: IncomingMessage, res: ServerResponse
 
 /**
  * DELETE /api/software-house/workers/:id
- * Fire a worker.
+ * Fire a worker — cleans up all associated data.
  */
 export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -190,7 +207,17 @@ export async function handleWorkerFire(req: IncomingMessage, res: ServerResponse
     return;
   }
 
+  // Record firing in history before deleting
+  addWorkerTaskHistory(id, null, "fired", JSON.stringify({
+    firedAt: new Date().toISOString()
+  }));
+
+  // Clean up associated data
+  deleteWorkerMessagesByWorker(id);
+  deleteWorkerSessionsByWorker(id);
+  deleteWorkerTaskHistoryByWorker(id);
   deleteWorker(id);
+
   json(res, { ok: true, id });
 }
 
@@ -340,7 +367,7 @@ export async function handleBacklogCreate(req: IncomingMessage, res: ServerRespo
 
 /**
  * POST /api/software-house/backlog/move
- * Move a task to a different phase.
+ * Move a task to a different phase (simple version — no LLM).
  */
 export async function handleBacklogMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await parseBody(req);
@@ -359,6 +386,145 @@ export async function handleBacklogMove(req: IncomingMessage, res: ServerRespons
   json(res, { ok: true, id });
 }
 
+/**
+ * POST /api/software-house/backlog/move-v2
+ * Move a task with LLM-powered worker activation.
+ * When moving to in_progress → triggers worker thinking/response.
+ * When moving to done → generates job report and stores in vault.
+ */
+export async function handleBacklogMoveV2(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await parseBody(req);
+  const { id, phase, worker_id } = body;
+
+  if (!id) {
+    json(res, { error: "task id required" }, 400);
+    return;
+  }
+
+  const task = getBacklogTask(id);
+  if (!task) {
+    json(res, { error: "task not found" }, 404);
+    return;
+  }
+
+  const proj = task.project;
+  const wid = worker_id || task.worker_id || "";
+
+  // Update basic fields
+  const updates: Record<string, any> = { status: phase || task.status };
+  if (worker_id !== undefined) updates.worker_id = worker_id;
+  updateBacklogTask(id, updates);
+
+  // ── LLM trigger: task moved to in_progress ──
+  if (phase === "in_progress" || phase === "in-progress") {
+    const worker = wid ? getWorker(wid) : undefined;
+    if (worker) {
+      updateWorker(wid, { status: "thinking" } as any);
+      reportWorkerActivity({
+        workerId: wid,
+        taskId: parseInt(id.replace(/[^0-9]/g, ""), 10) || undefined,
+        action: "started",
+        message: `Started working on task: ${task.title}`,
+        workerStatus: "thinking",
+      });
+
+      // Try to get LLM initial response (non-blocking for HTTP response)
+      try {
+        const systemPrompt = buildSystemPrompt(worker, proj, task.title, task.description);
+        const response = await callLLM({
+          systemPrompt,
+          userMessage: `You've been assigned this task: "${task.title}". ${task.description ? `Details: ${task.description}` : ""}\n\nAcknowledge the task, outline your approach, and start working. Keep it concise.`,
+          maxTokens: 512,
+        });
+
+        addWorkerTaskHistory(
+          wid,
+          parseInt(id.replace(/[^0-9]/g, ""), 10) || null,
+          "reported",
+          JSON.stringify({ message: response, ts: new Date().toISOString() }),
+        );
+
+        updateWorker(wid, { status: "working" } as any);
+      } catch {
+        // LLM unreachable — worker stays in "thinking" but operation succeeds
+        updateWorker(wid, { status: "working" } as any);
+      }
+    }
+  }
+
+  // ── LLM trigger: task moved to done ──
+  if (phase === "done") {
+    const worker = wid ? getWorker(wid) : undefined;
+    if (worker) {
+      // Gather work history for this task
+      const history = listWorkerTaskHistory(wid, 100);
+      const numericTaskId = parseInt(id.replace(/[^0-9]/g, ""), 10);
+      const taskHistory = history.filter((h: any) => 
+        h.task_id === numericTaskId || String(h.task_id) === id
+      );
+      const workLog = taskHistory.map((h: any) => {
+        try {
+          const d = JSON.parse(h.details || "{}");
+          return `[${h.action}] ${d.message || d.ts || ""}`;
+        } catch {
+          return `[${h.action}] ${h.details || ""}`;
+        }
+      });
+
+      // Get worker messages about this task
+      const workerMsgs = listWorkerMessages(wid);
+      const taskMsgs = workerMsgs.filter((m: any) => 
+        m.task_id === numericTaskId || String(m.task_id) === id
+      );
+      for (const msg of taskMsgs) {
+        workLog.push(`[message from ${msg.from_worker}]: ${msg.content}`);
+      }
+
+      reportWorkerActivity({
+        workerId: wid,
+        taskId: numericTaskId || undefined,
+        action: "completed",
+        message: `Task "${task.title}" marked as done. Generating report.`,
+        workerStatus: "sleep",
+      });
+
+      // Generate job report (fire-and-forget)
+      generateJobReport({
+        workerName: worker.name,
+        workerRole: worker.role,
+        taskTitle: task.title,
+        taskDescription: task.description || "",
+        workLog,
+      }).then(report => {
+        saveJobReportAsVaultDoc(proj, id, task.title, report);
+        addWorkerTaskHistory(
+          wid,
+          numericTaskId || null,
+          "reported",
+          JSON.stringify({ message: "Job report generated: " + report.slice(0, 200), ts: new Date().toISOString() }),
+        );
+      }).catch(() => {
+        // Fallback: text report without LLM
+        const fallbackReport = [
+          `# Task Report: ${task.title}`,
+          ``,
+          `## Summary`,
+          `Task completed by ${worker.name}.`,
+          ``,
+          `## What Was Done`,
+          ...workLog.map(line => `- ${line}`),
+          ``,
+          `## Outcome`,
+          `Task was completed successfully.`,
+        ].join("\n");
+        saveJobReportAsVaultDoc(proj, id, task.title, fallbackReport);
+      });
+    }
+  }
+
+  json(res, { ok: true, id });
+}
+
 // ── PM CHAT ──────────────────────────────────────────────────
 
 /**
@@ -373,7 +539,8 @@ export async function handlePmChatGet(req: IncomingMessage, res: ServerResponse)
 
 /**
  * POST /api/software-house/pm/chat
- * Send a message. Generates a PM response based on keywords.
+ * Send a message. Uses real LLM via worker runtime if available,
+ * falls back to keyword-based response if LM Studio is unreachable.
  */
 export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await parseBody(req);
@@ -389,67 +556,117 @@ export async function handlePmChatPost(req: IncomingMessage, res: ServerResponse
   // Store user message
   addPmChat(message, sender || "user", proj);
 
-  // Generate PM response based on keywords
-  const lower = message.toLowerCase();
-  let pmResponse = '';
-
   // Get project state for context
   const workers = listWorkers(proj) as any[];
   const tasks = listBacklogTasks(proj) as any[];
-  const rooms = listRooms(proj) as any[];
 
-  const workingCount = workers.filter(w => w.status === 'working').length;
-  const sleepCount = workers.filter(w => w.status === 'idle' || w.status === 'sleep').length;
-  const errorCount = workers.filter(w => w.status === 'error').length;
-  const activeTasks = tasks.filter(t => t.status !== 'done').length;
+  // Find a PM worker
+  const pmWorker = workers.find(w => w.is_pm === 1) || workers[0];
 
-  if (lower.includes('status') || lower.includes('raport')) {
-    pmResponse = `📊 <b>Status projektu ${proj}</b><br>` +
-      `• ${workers.length} workerów (${workingCount} pracuje, ${sleepCount} śpi, ${errorCount} błędów)<br>` +
-      `• ${activeTasks} aktywnych tasków<br>` +
-      workers.map(w => `• ${w.name}: ${w.status}${w.task ? ' — ' + w.task : ''}`).join('<br>');
-  } else if (lower.includes('plan') || lower.includes('sprint')) {
-    const backlog = tasks.filter(t => t.status === 'backlog').length;
-    const inProgress = tasks.filter(t => t.status === 'in-progress').length;
-    const review = tasks.filter(t => t.status === 'review').length;
-    pmResponse = `📋 <b>Plan sprintu</b><br>` +
-      `• Backlog: ${backlog} tasków<br>` +
-      `• W toku: ${inProgress}<br>` +
-      `• Review: ${review}<br>` +
-      `• Zalecam priorytetyzację blokujących tasków.`;
-  } else if (lower.includes('zatrud') || lower.includes('hire') || lower.includes('nowy')) {
-    pmResponse = `👋 Otwieram formularz zatrudnienia. Kliknij <b>+ Zatrudnij</b> przy pokoju.`;
-  } else if (lower.includes('błąd') || lower.includes('error') || lower.includes('problem')) {
-    const errorWorkers = workers.filter(w => w.status === 'error');
-    if (errorWorkers.length) {
-      pmResponse = `🚧 <b>Blokery (${errorWorkers.length})</b><br>` +
-        errorWorkers.map(w => `• ${w.name}: ${w.task || 'błąd agenta'}`).join('<br>') +
-        '<br>Przywróć workery lub przydziel nowe zadania.';
-    } else {
-      pmResponse = '✅ Brak błędów — zespół działa płynnie.';
+  let pmResponse: string | null = null;
+
+  // Try real LLM first
+  if (pmWorker) {
+    try {
+      const activeTasks = tasks.filter(t => t.status !== 'done');
+      const stateSummary = [
+        `Project: ${proj}`,
+        `Workers: ${workers.length} (${workers.filter(w => w.status === 'working').length} working, ${workers.filter(w => ['sleep','idle'].includes(w.status)).length} idle)`,
+        `Active tasks: ${activeTasks.length}`,
+      ].join('\n');
+
+      const systemPrompt = buildSystemPrompt(
+        { name: pmWorker.name, role: pmWorker.role, prompt: pmWorker.prompt },
+        proj,
+      );
+
+      // Get recent chat history
+      const chatHistory = store.listPmChat(proj);
+      const recentMessages = chatHistory.slice(-10).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: m.message,
+      }));
+
+      const userPrompt = [
+        `Current state:\n${stateSummary}`,
+        ``,
+        `User message: ${message}`,
+        ``,
+        `Respond as a project manager. Be helpful and concise. Use emojis sparingly.`,
+        `Reference workers, tasks, and project state naturally.`,
+        `If you cannot answer something, be honest.`,
+      ].join('\n');
+
+      pmResponse = await callLLM({
+        systemPrompt,
+        userMessage: userPrompt,
+        history: recentMessages,
+        maxTokens: 512,
+      });
+
+      addPmChat(pmResponse, 'pm', proj);
+      json(res, { ok: true });
+      return;
+    } catch {
+      // LLM failed — fall through to keyword response
+      pmResponse = null;
     }
-  } else if (lower.includes('task') || lower.includes('zadani')) {
-    const active = tasks.filter(t => t.status !== 'done');
-    pmResponse = `📋 <b>Zadania (${active.length})</b><br>` +
-      active.slice(0, 8).map(t => `• ${t.priority} ${t.title} (${t.status})`).join('<br>') +
-      (active.length > 8 ? '<br>…' : '');
-  } else if (lower.includes('help') || lower.includes('pomoc')) {
-    pmResponse = `💡 Mogę pomóc z:<br>` +
-      `• <b>status</b> — raport zespołu<br>` +
-      `• <b>plan</b> — plan sprintu<br>` +
-      `• <b>zatrudnij</b> — formularz hiringu<br>` +
-      `• <b>błąd</b> — lista blokerów<br>` +
-      `• <b>taski</b> — lista zadań`;
-  } else {
-    pmResponse = `Rozumiem. Mogę pokazać <b>status</b>, stworzyć <b>plan</b>, sprawdzić <b>błędy</b> albo <b>zatrudnić</b> kogoś.`;
   }
 
-  // Store PM response
-  if (pmResponse) {
-    addPmChat(pmResponse, 'pm', proj);
-  }
+  // Fallback: keyword-based response
+  if (!pmResponse) {
+    const lower = message.toLowerCase();
+    const workingCount = workers.filter(w => w.status === 'working').length;
+    const sleepCount = workers.filter(w => ['sleep','idle'].includes(w.status)).length;
+    const errorCount = workers.filter(w => w.status === 'error').length;
+    const activeTasks = tasks.filter(t => t.status !== 'done').length;
 
-  json(res, { ok: true });
+    if (lower.includes('status') || lower.includes('raport')) {
+      pmResponse = `📊 <b>Status projektu ${proj}</b><br>` +
+        `• ${workers.length} workerów (${workingCount} pracuje, ${sleepCount} śpi, ${errorCount} błędów)<br>` +
+        `• ${activeTasks} aktywnych tasków<br>` +
+        workers.map(w => `• ${w.name}: ${w.status}${w.task ? ' — ' + w.task : ''}`).join('<br>');
+    } else if (lower.includes('plan') || lower.includes('sprint')) {
+      const backlog = tasks.filter(t => t.status === 'backlog').length;
+      const inProgress = tasks.filter(t => t.status === 'in-progress').length;
+      const review = tasks.filter(t => t.status === 'review').length;
+      pmResponse = `📋 <b>Plan sprintu</b><br>` +
+        `• Backlog: ${backlog} tasków<br>` +
+        `• W toku: ${inProgress}<br>` +
+        `• Review: ${review}<br>` +
+        `• Zalecam priorytetyzację blokujących tasków.`;
+    } else if (lower.includes('zatrud') || lower.includes('hire') || lower.includes('nowy')) {
+      pmResponse = `👋 Otwieram formularz zatrudnienia. Kliknij <b>+ Zatrudnij</b> przy pokoju.`;
+    } else if (lower.includes('błąd') || lower.includes('error') || lower.includes('problem')) {
+      const errorWorkers = workers.filter(w => w.status === 'error');
+      if (errorWorkers.length) {
+        pmResponse = `🚧 <b>Blokery (${errorWorkers.length})</b><br>` +
+          errorWorkers.map(w => `• ${w.name}: ${w.task || 'błąd agenta'}`).join('<br>') +
+          '<br>Przywróć workery lub przydziel nowe zadania.';
+      } else {
+        pmResponse = '✅ Brak błędów — zespół działa płynnie.';
+      }
+    } else if (lower.includes('task') || lower.includes('zadani')) {
+      const active = tasks.filter(t => t.status !== 'done');
+      pmResponse = `📋 <b>Zadania (${active.length})</b><br>` +
+        active.slice(0, 8).map(t => `• ${t.priority} ${t.title} (${t.status})`).join('<br>') +
+        (active.length > 8 ? '<br>…' : '');
+    } else if (lower.includes('help') || lower.includes('pomoc')) {
+      pmResponse = `💡 Mogę pomóc z:<br>` +
+        `• <b>status</b> — raport zespołu<br>` +
+        `• <b>plan</b> — plan sprintu<br>` +
+        `• <b>zatrudnij</b> — formularz hiringu<br>` +
+        `• <b>błąd</b> — lista blokerów<br>` +
+        `• <b>taski</b> — lista zadań`;
+    } else {
+      pmResponse = `Rozumiem. Mogę pokazać <b>status</b>, stworzyć <b>plan</b>, sprawdzić <b>błędy</b> albo <b>zatrudnić</b> kogoś.`;
+    }
+
+    if (pmResponse) {
+      addPmChat(pmResponse, 'pm', proj);
+    }
+    json(res, { ok: true, fallback: true });
+  }
 }
 
 // ── VAULT ────────────────────────────────────────────────────
@@ -538,6 +755,153 @@ export async function handleVaultInject(req: IncomingMessage, res: ServerRespons
 // ── WORKER OPERATIONS ────────────────────────────────────────
 
 /**
+ * POST /api/software-house/worker/invoke
+ * Manually invoke a worker on a task using the LLM.
+ */
+export async function handleWorkerInvoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await parseBody(req);
+  const { workerId, taskId, message } = body;
+
+  if (!workerId) {
+    json(res, { error: "workerId required" }, 400);
+    return;
+  }
+
+  const worker = getWorker(workerId);
+  if (!worker) {
+    json(res, { error: "worker not found" }, 404);
+    return;
+  }
+
+  let taskTitle = "";
+  let taskDescription = "";
+  let proj = worker.project;
+
+  if (taskId) {
+    const task = getBacklogTask(taskId.toString());
+    if (task) {
+      taskTitle = task.title;
+      taskDescription = task.description || "";
+      proj = task.project;
+    }
+  }
+
+  try {
+    updateWorker(workerId, { status: "thinking" } as any);
+
+    const systemPrompt = buildSystemPrompt(worker, proj, taskTitle, taskDescription);
+    const userMsg = message
+      ? message
+      : taskId
+        ? `Process this task: "${taskTitle}". ${taskDescription ? `Details: ${taskDescription}` : ""}`
+        : "What are you working on? Give a status update.";
+
+    const response = await callLLM({
+      systemPrompt,
+      userMessage: userMsg,
+      maxTokens: 1024,
+    });
+
+    addWorkerTaskHistory(
+      workerId,
+      taskId || null,
+      taskId ? "reported" : "status_update",
+      JSON.stringify({ message: response, ts: new Date().toISOString() }),
+    );
+
+    updateWorker(workerId, { status: "working" } as any);
+
+    json(res, { ok: true, workerId, taskId, response });
+  } catch (err: any) {
+    updateWorker(workerId, { status: "error" } as any);
+    addWorkerTaskHistory(
+      workerId,
+      taskId || null,
+      "error",
+      JSON.stringify({ message: err.message, ts: new Date().toISOString() }),
+    );
+    json(res, { error: err.message }, 500);
+  }
+}
+
+/**
+ * GET /api/software-house/worker/:id/history
+ * Returns the worker's full task history.
+ */
+export async function handleWorkerHistory(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const parts = url.pathname.split("/");
+  const workerId = parts[parts.length - 2]; // /api/software-house/worker/:id/history
+
+  if (!workerId) {
+    json(res, { error: "worker id required" }, 400);
+    return;
+  }
+
+  const history = listWorkerTaskHistory(workerId, 50);
+  const worker = getWorker(workerId);
+
+  json(res, {
+    ok: true,
+    worker: worker ? { id: worker.id, name: worker.name, role: worker.role, status: worker.status } : null,
+    history: history.map((h: any) => ({
+      id: h.id,
+      action: h.action,
+      taskId: h.task_id,
+      details: (() => {
+        try { return JSON.parse(h.details || "{}"); } catch { return { message: h.details }; }
+      })(),
+      createdAt: h.created_at,
+    })),
+  });
+}
+
+/**
+ * GET /api/software-house/task/:id/report
+ * Returns the job report for a completed task.
+ */
+export async function handleTaskReport(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const parts = url.pathname.split("/");
+  const taskId = parts[parts.length - 2]; // /api/software-house/task/:id/report
+
+  if (!taskId) {
+    json(res, { error: "task id required" }, 400);
+    return;
+  }
+
+  const project = getProject(req) || "genor-orchestrator-plugin";
+  const reportPath = `reports/task-${taskId}-report.md`;
+  const doc = getVaultDoc(reportPath, project);
+
+  if (doc) {
+    json(res, { ok: true, report: doc.content, path: reportPath, title: doc.title });
+    return;
+  }
+
+  // Fallback search
+  const allDocs = listVaultDocs(project);
+  const match = allDocs.find((d: any) => d.path.includes(`task-${taskId}`));
+  if (match) {
+    json(res, { ok: true, report: match.content, path: match.path, title: match.title });
+    return;
+  }
+
+  json(res, { error: "report not found for this task" }, 404);
+}
+
+/**
+ * GET /api/software-house/lmstudio/health
+ * Check if LM Studio is reachable.
+ */
+export async function handleLmStudioHealth(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const health = await checkLmStudioHealth();
+  json(res, { ok: true, ...health });
+}
+
+// ── EXISTING ENDPOINTS ───────────────────────────────────────
+
+/**
  * POST /api/software-house/worker/start
  * Start a worker on a task.
  */
@@ -550,13 +914,8 @@ export async function handleWorkerStart(req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  // Update worker status
   updateWorker(workerId, { status: 'working' } as any);
-  
-  // Update task
   updateBacklogTask(taskId, { worker_id: workerId, status: 'in-progress' });
-
-  // Log to history
   addWorkerTaskHistory(workerId, taskId, 'started', JSON.stringify({ startedAt: new Date().toISOString() }));
 
   json(res, { ok: true, workerId, taskId });
@@ -599,12 +958,8 @@ export async function handleWorkerHealth(req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  // Check for stalled tasks
   const stalledTasks = getStalledTasksForWorker(workerId);
-
-  // Check last activity
   const lastHistory = getWorkerLastActivity(workerId);
-
   let minutesSinceActive = null;
   if (lastHistory?.details) {
     try {
@@ -638,10 +993,7 @@ export async function handleWorkerRecover(req: IncomingMessage, res: ServerRespo
     return;
   }
 
-  // Reset worker status
   updateWorker(workerId, { status: 'idle' } as any);
-
-  // Requeue stalled tasks
   const stalled = getStalledTasksForWorker(workerId);
   for (const task of stalled) {
     updateBacklogTask(task.id, { worker_id: null as any, status: 'backlog' });
@@ -649,6 +1001,8 @@ export async function handleWorkerRecover(req: IncomingMessage, res: ServerRespo
 
   json(res, { ok: true, tasksRequeued: stalled.length });
 }
+
+// ── MODELS ───────────────────────────────────────────────────
 
 /**
  * GET /api/software-house/models
@@ -666,6 +1020,8 @@ export async function handleModels(req: IncomingMessage, res: ServerResponse): P
     json(res, { error: "Failed to load models" }, 500);
   }
 }
+
+// ── PROJECT MANAGEMENT ───────────────────────────────────────
 
 /**
  * POST /api/software-house/projects/create
@@ -685,10 +1041,8 @@ export async function handleCreateProject(req: IncomingMessage, res: ServerRespo
     const dataDir = getDataDir();
     const location = path.join(dataDir, "projects", name);
 
-    // Create directory / clone repo
     let cloned = false;
     if (repoUrl) {
-      // Remove existing dir if present (e.g. from a previous failed attempt)
       if (fs.existsSync(location)) {
         fs.rmSync(location, { recursive: true, force: true });
       }
@@ -704,12 +1058,10 @@ export async function handleCreateProject(req: IncomingMessage, res: ServerRespo
       });
     }
 
-    // Store project config
     const config: Record<string, any> = { location };
     if (repoUrl) config.repo_url = repoUrl;
     setProjectConfig(name, config);
 
-    // Forward to orchestrator API (skip when cloned — we already set up everything)
     if (!cloned) {
       const host = req.headers.host || "localhost:18789";
       const proto = "http";
@@ -748,7 +1100,6 @@ export async function handleCloneProject(req: IncomingMessage, res: ServerRespon
     const existing = getProjectConfig(project) as any;
     const location = existing?.location || path.join(dataDir, "projects", project);
 
-    // Remove existing content before cloning
     if (fs.existsSync(location)) {
       fs.rmSync(location, { recursive: true, force: true });
     }
@@ -758,7 +1109,6 @@ export async function handleCloneProject(req: IncomingMessage, res: ServerRespon
       encoding: "utf-8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"],
     });
 
-    // Update project config
     setProjectConfig(project, { location, repo_url });
 
     json(res, { ok: true, project, location });
@@ -821,20 +1171,17 @@ export async function handleRepoPush(req: IncomingMessage, res: ServerResponse):
     const pc = getProjectConfig(projectName) as any;
     const location = pc?.location;
     if (!location || !fs.existsSync(path.join(location, ".git"))) {
-      json(res, { error: "No git repository at project location" }, 400);
+      json(res, { error: "No git repository" }, 400);
       return;
     }
 
     let committed = false;
     let pushed = false;
 
-    // Stage all
     execSync(`git add -A`, { cwd: location, encoding: "utf-8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] });
 
-    // Check if there's something to commit
     const statusOut = execSync(`git status --porcelain`, { cwd: location, encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
     if (statusOut) {
-      // Use temp file for commit message to avoid shell escaping issues
       const msgFile = path.join(location, ".git", "_commit_msg.txt");
       fs.writeFileSync(msgFile, message, "utf-8");
       execSync(`git commit -F "${msgFile}"`, {
@@ -844,7 +1191,6 @@ export async function handleRepoPush(req: IncomingMessage, res: ServerResponse):
       committed = true;
     }
 
-    // Push
     const remote = gitExec(location, ["remote", "get-url", "origin"]);
     if (remote) {
       execSync(`git push`, { cwd: location, encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
@@ -875,22 +1221,19 @@ export async function handleRepoPull(req: IncomingMessage, res: ServerResponse):
     const pc = getProjectConfig(projectName) as any;
     const location = pc?.location;
     if (!location || !fs.existsSync(path.join(location, ".git"))) {
-      json(res, { error: "No git repository at project location" }, 400);
+      json(res, { error: "No git repository" }, 400);
       return;
     }
 
-    // Capture HEAD before pull
     let filesChanged = 0;
     let pullOutput = "";
     try {
       const beforeHead = gitExec(location, ["rev-parse", "HEAD"]);
       pullOutput = execSync(`git pull`, { cwd: location, encoding: "utf-8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-      // Count files changed by comparing tree after pull
       if (beforeHead) {
         const changed = gitExec(location, ["diff", "--name-only", `${beforeHead}...HEAD`]);
         filesChanged = changed ? changed.split("\n").filter(Boolean).length : 0;
       }
-      // Fallback: count from pull output message
       if (!filesChanged) {
         const match = pullOutput.match(/(\d+) files? changed/);
         if (match) filesChanged = parseInt(match[1], 10);
@@ -918,7 +1261,7 @@ export async function handleProjectList(_req: IncomingMessage, res: ServerRespon
 
 /**
  * DELETE /api/software-house/projects/:name
- * Delete a project. Query param: ?deleteFiles=true to also remove directory.
+ * Delete a project.
  */
 export async function handleProjectDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -935,12 +1278,9 @@ export async function handleProjectDelete(req: IncomingMessage, res: ServerRespo
     const pc = getProjectConfig(projectName) as any;
     const location = pc?.location || path.join(getDataDir(), "projects", projectName);
 
-    // Remove associated data (order matters for FK constraints)
-    // 1. Delete child tables that reference workers/backlog first
     deleteWorkerTaskHistoryByProject(projectName);
     deleteWorkerMessagesByProject(projectName);
     deleteWorkerSessionsByProject(projectName);
-    // 2. Now delete the main tables
     deleteBacklogByProject(projectName);
     deleteWorkersByProject(projectName);
     const rooms = listRooms(projectName);
@@ -949,12 +1289,9 @@ export async function handleProjectDelete(req: IncomingMessage, res: ServerRespo
     clearPmChat(projectName);
     deleteVaultDocsByProject(projectName);
     deleteStateEventsByProject(projectName);
-    // 3. Finally delete the project config itself
     deleteProjectConfig(projectName);
-    // 4. Clear stale global state if it referenced this project
     clearStateForProject(projectName);
 
-    // Remove files if requested
     let filesDeleted = false;
     if (deleteFiles && fs.existsSync(location)) {
       fs.rmSync(location, { recursive: true, force: true });
@@ -977,7 +1314,6 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const pathname = url.pathname;
 
-  // Only handle /api/software-house/* routes (with or without /orchestrator prefix)
   const normalizedPathname = pathname.replace(/^\/orchestrator/, "");
   if (!normalizedPathname.startsWith("/api/software-house/")) {
     return false;
@@ -986,117 +1322,130 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
   const method = req.method || "GET";
 
   try {
-    // Bootstrap
+    // ── Bootstrap ──
     if (normalizedPathname === "/api/software-house/bootstrap" && method === "GET") {
       await handleBootstrap(req, res);
       return true;
     }
 
-    // Models
+    // ── Models ──
     if (normalizedPathname === "/api/software-house/models" && method === "GET") {
       await handleModels(req, res);
       return true;
     }
 
-    // Project management
+    // ── LM Studio health ──
+    if (normalizedPathname === "/api/software-house/lmstudio/health" && method === "GET") {
+      await handleLmStudioHealth(req, res);
+      return true;
+    }
+
+    // ── Project management ──
     if (normalizedPathname === "/api/software-house/projects/create" && method === "POST") {
       await handleCreateProject(req, res);
       return true;
     }
-
-    // Repo / Git endpoints
     if (normalizedPathname === "/api/software-house/projects/clone" && method === "POST") {
       await handleCloneProject(req, res);
       return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo$/)) {
-      if (method === "GET") {
-        await handleRepoStatus(req, res);
-        return true;
-      }
+      if (method === "GET") { await handleRepoStatus(req, res); return true; }
     }
     if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo\/push$/) && method === "POST") {
-      await handleRepoPush(req, res);
-      return true;
+      await handleRepoPush(req, res); return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+\/repo\/pull$/) && method === "POST") {
-      await handleRepoPull(req, res);
-      return true;
+      await handleRepoPull(req, res); return true;
     }
 
-    // Workers
+    // ── Workers ──
     if (normalizedPathname === "/api/software-house/workers" && method === "GET") {
-      await handleWorkersGet(req, res);
-      return true;
+      await handleWorkersGet(req, res); return true;
     }
     if (normalizedPathname === "/api/software-house/workers/hire" && method === "POST") {
-      await handleWorkerHire(req, res);
-      return true;
+      await handleWorkerHire(req, res); return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "PATCH") {
-      await handleWorkerEdit(req, res);
-      return true;
+      await handleWorkerEdit(req, res); return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/workers\/[^/]+$/) && method === "DELETE") {
-      await handleWorkerFire(req, res);
-      return true;
+      await handleWorkerFire(req, res); return true;
     }
 
-    // Rooms
+    // ── Worker operations ──
+    if (normalizedPathname === "/api/software-house/worker/invoke" && method === "POST") {
+      await handleWorkerInvoke(req, res); return true;
+    }
+    if (normalizedPathname.match(/^\/api\/software-house\/worker\/[^/]+\/history$/) && method === "GET") {
+      await handleWorkerHistory(req, res); return true;
+    }
+    if (normalizedPathname === "/api/software-house/worker/start" && method === "POST") {
+      await handleWorkerStart(req, res); return true;
+    }
+    if (normalizedPathname === "/api/software-house/worker/message" && method === "POST") {
+      await handleWorkerMessage(req, res); return true;
+    }
+    if (normalizedPathname.match(/^\/api\/software-house\/worker\/health\/[^/]+$/) && method === "GET") {
+      await handleWorkerHealth(req, res); return true;
+    }
+    if (normalizedPathname === "/api/software-house/worker/recover" && method === "POST") {
+      await handleWorkerRecover(req, res); return true;
+    }
+
+    // ── Rooms ──
     if (normalizedPathname === "/api/software-house/rooms" && method === "GET") {
-      await handleRoomsGet(req, res);
-      return true;
+      await handleRoomsGet(req, res); return true;
     }
     if (normalizedPathname === "/api/software-house/rooms" && method === "POST") {
-      await handleRoomAdd(req, res);
-      return true;
+      await handleRoomAdd(req, res); return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "PATCH") {
-      await handleRoomEdit(req, res);
-      return true;
+      await handleRoomEdit(req, res); return true;
     }
     if (normalizedPathname.match(/^\/api\/software-house\/rooms\/[^/]+$/) && method === "DELETE") {
-      await handleRoomDelete(req, res);
-      return true;
+      await handleRoomDelete(req, res); return true;
     }
     if (normalizedPathname === "/api/software-house/layout/save" && method === "POST") {
-      await handleLayoutSave(req, res);
-      return true;
+      await handleLayoutSave(req, res); return true;
     }
 
-    // Backlog
+    // ── Backlog ──
     if (normalizedPathname === "/api/software-house/backlog" && method === "POST") {
-      await handleBacklogCreate(req, res);
-      return true;
+      await handleBacklogCreate(req, res); return true;
     }
     if (normalizedPathname === "/api/software-house/backlog" && method === "GET") {
-      await handleBacklogGet(req, res);
-      return true;
+      await handleBacklogGet(req, res); return true;
     }
-    // Backlog assign
     if (normalizedPathname === "/api/software-house/backlog/assign" && method === "POST") {
       const body = await parseBody(req);
       const { taskId, workerId } = body;
-      
       if (!taskId || !workerId) {
         json(res, { error: "taskId and workerId required" }, 400);
         return true;
       }
-      
       updateBacklogTask(taskId, { worker_id: workerId });
-      updateWorker(workerId, { status: 'working' } as any);
-      addWorkerTaskHistory(workerId, taskId, 'assigned', JSON.stringify({ assignedAt: new Date().toISOString() }));
-
+      updateWorker(workerId, { status: "thinking" } as any);
+      addWorkerTaskHistory(workerId, taskId, "assigned", JSON.stringify({ assignedAt: new Date().toISOString() }));
       json(res, { ok: true, taskId, workerId });
       return true;
     }
-    // Backlog move (kanban drag)
     if (normalizedPathname === "/api/software-house/backlog/move" && method === "POST") {
       await handleBacklogMove(req, res);
       return true;
     }
+    if (normalizedPathname === "/api/software-house/backlog/move-v2" && method === "POST") {
+      await handleBacklogMoveV2(req, res);
+      return true;
+    }
 
-    // PM Chat
+    // ── Task report ──
+    if (normalizedPathname.match(/^\/api\/software-house\/task\/[^/]+\/report$/) && method === "GET") {
+      await handleTaskReport(req, res);
+      return true;
+    }
+
+    // ── PM Chat ──
     if (normalizedPathname === "/api/software-house/pm/chat" && method === "GET") {
       await handlePmChatGet(req, res);
       return true;
@@ -1106,7 +1455,7 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
       return true;
     }
 
-    // Vault
+    // ── Vault ──
     if (normalizedPathname === "/api/software-house/vault/tree" && method === "GET") {
       await handleVaultTree(req, res);
       return true;
@@ -1124,36 +1473,16 @@ export async function handleSoftwareHouseRoute(req: IncomingMessage, res: Server
       return true;
     }
 
-    // Worker operations
-    if (normalizedPathname === "/api/software-house/worker/start" && method === "POST") {
-      await handleWorkerStart(req, res);
-      return true;
-    }
-    if (normalizedPathname === "/api/software-house/worker/message" && method === "POST") {
-      await handleWorkerMessage(req, res);
-      return true;
-    }
-    if (normalizedPathname.match(/^\/api\/software-house\/worker\/health\/[^/]+$/) && method === "GET") {
-      await handleWorkerHealth(req, res);
-      return true;
-    }
-    if (normalizedPathname === "/api/software-house/worker/recover" && method === "POST") {
-      await handleWorkerRecover(req, res);
-      return true;
-    }
-
-    // Project list
+    // ── Project list/delete ──
     if (normalizedPathname === "/api/software-house/projects/list" && method === "GET") {
       await handleProjectList(req, res);
       return true;
     }
-    // Project delete
     if (normalizedPathname.match(/^\/api\/software-house\/projects\/[^/]+$/) && method === "DELETE") {
       await handleProjectDelete(req, res);
       return true;
     }
 
-    // Unknown Software House route
     json(res, { error: "not found" }, 404);
     return true;
   } catch (e: any) {
