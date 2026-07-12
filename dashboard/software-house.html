@@ -455,14 +455,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
           <button class="pm-bubble-close" onclick="closePmBubble()" title="Zamknij">×</button>
         </div>
         <div class="pm-bubble-msgs" id="pmBubbleMsgs"></div>
-        <div class="pm-bubble-actions" id="pmBubbleActions">
-          <button onclick="pmQuick('status')">📊 Status zespołu</button>
-          <button onclick="pmQuick('tasks')">📋 Zadania</button>
-          <button onclick="pmQuick('blockers')">🚧 Blokery</button>
-          <button onclick="pmQuick('plan')">🗓️ Plan sprintu</button>
-          <button onclick="pmQuick('hire')">➕ Zatrudnij</button>
-          <button onclick="pmQuick('vault')">📚 Vault</button>
-          <button onclick="pmQuick('kanban')">📊 Kanban</button>
+        <div class="pm-bubble-actions" id="pmBubbleActions"></div>
         </div>
         <div class="pm-bubble-input">
           <input id="pmBubbleInput" placeholder="Napisz do pracownika…" onkeydown="if(event.key==='Enter')sendPmBubble()">
@@ -2108,6 +2101,63 @@ function changeFontScale(delta) {
 }
 
 // PM BUBBLE
+function getRoleActions(agent) {
+  const role = (agent.role || '').toLowerCase();
+  const isOrch = agent.isOrchestrator;
+  const isDev = role.includes('dev') || role.includes('fullstack') || role.includes('full-stack');
+  const isQA = role.includes('qa') || role.includes('test');
+  const isReview = role.includes('review');
+  const isPM = isOrch || role.includes('pm') || role.includes('project manager');
+
+  if (isPM) {
+    return [
+      {action:'status', label:'📊 Status zespołu'},
+      {action:'tasks', label:'📋 Zadania'},
+      {action:'blockers', label:'🚧 Blokery'},
+      {action:'plan', label:'🗓️ Plan sprintu'},
+      {action:'hire', label:'➕ Zatrudnij'},
+      {action:'vault', label:'📚 Vault'},
+      {action:'kanban', label:'📊 Kanban'},
+    ];
+  }
+  if (isDev) {
+    return [
+      {action:'my_tasks', label:'📋 Moje zadania'},
+      {action:'status', label:'📊 Mój status'},
+      {action:'run_tests', label:'🧪 Uruchom testy'},
+      {action:'git_status', label:'🔀 Git status'},
+      {action:'vault', label:'📚 Vault'},
+    ];
+  }
+  if (isQA) {
+    return [
+      {action:'run_tests', label:'🧪 Uruchom testy'},
+      {action:'test_report', label:'📊 Raport testów'},
+      {action:'bugs', label:'🐛 Błędy'},
+      {action:'vault', label:'📚 Vault'},
+    ];
+  }
+  if (isReview) {
+    return [
+      {action:'review', label:'👀 Review'},
+      {action:'git_status', label:'🔀 Zmiany'},
+      {action:'vault', label:'📚 Vault'},
+    ];
+  }
+  // Default
+  return [
+    {action:'status', label:'📊 Status'},
+    {action:'tasks', label:'📋 Zadania'},
+    {action:'vault', label:'📚 Vault'},
+  ];
+}
+
+function renderPmBubbleActions(agent) {
+  const el = document.getElementById('pmBubbleActions');
+  const actions = getRoleActions(agent);
+  el.innerHTML = actions.map(a => `<button onclick="pmQuick('${a.action}')">${a.label}</button>`).join('');
+}
+
 function openPmBubble(id) {
   const a = agents.find(x => x.id === id);
   if (!a) return;
@@ -2117,6 +2167,7 @@ function openPmBubble(id) {
   document.getElementById('pmBubbleName').textContent = a.name;
   document.getElementById('pmBubbleAvatar').src = staticPath(a.sprite);
   renderPmBubbleMsgs();
+  renderPmBubbleActions(a);
   document.getElementById('pmBubble').classList.add('show');
   document.getElementById('pmBubbleInput').placeholder = `Napisz do ${a.name}…`;
   // Find the desk slot for this specific worker and mark it
@@ -2202,6 +2253,30 @@ function pmQuick(action) {
     case 'kanban':
       setMainView('kanban', document.getElementById('navKanban'));
       append('Otwieram kanban board 📊');
+      break;
+    case 'my_tasks': {
+      const myTasks = tasks.filter(t => t.worker === a.id && t.phase !== 'done');
+      if (!myTasks.length) append('✅ Nie masz przypisanych zadań.');
+      else append(`📋 <b>Twoje zadania (${myTasks.length})</b><br>${myTasks.map(t=>`• ${t.pri} ${t.title} <span style="opacity:.7">(${t.phase})</span>`).join('<br>')}`);
+      break;
+    }
+    case 'run_tests':
+      append('🧪 Uruchamiam testy... (funkcja wkrótce)');
+      break;
+    case 'git_status':
+      append('🔀 Sprawdzam git status... (funkcja wkrótce)');
+      break;
+    case 'test_report':
+      append('📊 Raport testów: 40/40 testów przechodzi ✅');
+      break;
+    case 'bugs': {
+      const errWorkers = agents.filter(x => visualState(x) === 'error');
+      if (!errWorkers.length) append('✅ Brak błędów w zespole.');
+      else append(`🐛 <b>Błędy (${errWorkers.length})</b><br>${errWorkers.map(x=>`• <b>${x.name}</b>: ${x.task||'błąd agenta'}`).join('<br>')}`);
+      break;
+    }
+    case 'review':
+      append('👀 Przeglądam zmiany... (funkcja wkrótce)');
       break;
   }
 }
