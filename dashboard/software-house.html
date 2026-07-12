@@ -41,8 +41,8 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .btn{font-size:11px;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text);transition:150ms}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
 .btn.primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
-.btn.hire{border-color:var(--green);color:var(--green)}
-.btn.hire:hover{background:var(--green);color:#000}
+.btn.hire{border-color:var(--accent);color:var(--accent)}
+.btn.hire:hover{background:var(--accent);color:#000}
 .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
@@ -63,12 +63,12 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .stat-card{background:var(--bg-floor);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
 .stat-card.wide{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;text-align:left;padding:10px 12px}
 .stat-card .num{font-size:20px;font-weight:800;color:var(--text-bright);line-height:1}
-.stat-card .lbl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.3px;margin-top:3px}
+.stat-card .lbl{font-size:9px;color:#a0a0a0;text-transform:uppercase;letter-spacing:.3px;margin-top:3px}
 .stat-card.working .num{color:var(--orange)}
 .stat-card.sleep .num{color:var(--text-dim)}
 .stat-card.error .num{color:var(--red)}
 .proj-actions{padding:12px 14px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--border)}
-.btn-hire-big{width:100%;padding:11px 14px;border:none;border-radius:var(--radius);background:var(--green);color:#000;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 16px rgba(63,185,80,.25)}
+.btn-hire-big{width:100%;padding:11px 14px;border:none;border-radius:var(--radius);background:var(--accent);color:#000;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 16px rgba(94,156,255,.25)}
 .btn-hire-big:hover{filter:brightness(1.08)}
 .btn-view{width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-desk);color:var(--text);font-size:11px;font-weight:600}
 .btn-view.active{border-color:var(--accent);color:var(--accent);background:rgba(94,156,255,.08)}
@@ -100,14 +100,14 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 /* DETAIL PANEL — wysuwa się z lewej obok proj-panel */
 .detail-panel{width:0;min-width:0;overflow:hidden;background:var(--bg-panel);border-right:1px solid transparent;display:flex;flex-direction:column;flex-shrink:0;transition:width .22s ease,border-color .22s}
 .detail-panel.open{width:var(--detail-panel-w);border-right-color:var(--border)}
-.detail-head{padding:14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.detail-head{padding:14px;border-bottom:1px solid var(--border);flex-shrink:0;overflow:hidden}
 .detail-head-top{display:flex;gap:10px;align-items:flex-start}
 .detail-head img.preview{width:64px;height:64px;image-rendering:pixelated;border-radius:8px;background:var(--bg-floor);border:1px solid var(--border);flex-shrink:0}
 .detail-head h2{font-size:15px;color:var(--text-bright);line-height:1.25}
 .detail-head p{font-size:10px;color:var(--text-dim);margin-top:4px}
 .detail-close{margin-left:auto;background:none;border:none;color:var(--text-dim);font-size:20px;line-height:1;padding:2px 4px}
 .detail-close:hover{color:var(--text-bright)}
-.detail-body{flex:1;overflow-y:auto;padding:14px}
+.detail-body{flex:1;overflow-y:auto;padding:14px;word-break:break-word;overflow-wrap:break-word}
 .detail-foot{padding:12px 14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0}
 .detail-foot .btn{flex:1;min-width:calc(50% - 4px);justify-content:center}
 .detail-panel .form-grid{grid-template-columns:1fr}
@@ -137,8 +137,8 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .room-tabs{display:flex;gap:6px;flex-wrap:wrap}
 .room-tab{padding:4px 10px;border-radius:12px;border:1px solid var(--border);background:transparent;color:var(--text-dim);font-size:10px;font-weight:600}
 .room-tab.active,.room-tab:hover{border-color:var(--accent);color:var(--accent);background:rgba(94,156,255,.08)}
-.state-legend{margin-left:auto;display:flex;gap:10px;font-size:9px;color:var(--text-dim)}
-.state-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.state-legend{margin-left:auto;display:flex;gap:12px;font-size:9px;color:#a0a0a0}
+.state-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
 
 .office{flex:1;position:relative;overflow:hidden;cursor:grab;background:var(--bg-floor)}
 .office.dragging{cursor:grabbing}
@@ -229,7 +229,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
   .msg.user .avatar{order:2}
   .msg.bot{display:flex;align-items:flex-start;gap:8px}
 .msg .act{display:inline-block;margin:5px 5px 0 0;padding:3px 8px;border-radius:4px;font-size:10px;border:1px solid var(--accent);color:var(--accent);font-weight:600}
-.chat-input-wrap{padding:10px;border-top:1px solid var(--border);display:flex;gap:6px}
+.chat-input-wrap{padding:10px;border-top:1px solid var(--border);display:flex;gap:6px;align-items:center}
 .chat-input-wrap input{flex:1;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;color:var(--text);font-size:12px}
 .chat-input-wrap button{background:var(--accent);color:#000;border:none;border-radius:var(--radius);padding:8px 12px;font-weight:700;font-size:12px}
 
@@ -257,7 +257,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .form-field{display:flex;flex-direction:column;gap:4px}
 .form-field.full{grid-column:1/-1}
 .form-field label{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-dim);letter-spacing:.3px}
-.form-field input,.form-field select,.form-field textarea{background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:12px}
+.form-field input,.form-field select,.form-field textarea{background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:12px;word-break:break-word;overflow-wrap:break-word}
 .form-field textarea{min-height:70px;resize:vertical}
 .sprite-picker{display:flex;gap:10px}
 .sprite-opt{flex:1;border:2px solid var(--border);border-radius:8px;padding:8px;text-align:center;cursor:pointer;background:var(--bg-floor)}
@@ -292,7 +292,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 .pm-bubble-actions button:hover{border-color:var(--purple);color:var(--purple);background:rgba(167,139,250,.08)}
 .pm-bubble-msgs{flex:1;min-height:140px;max-height:260px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
 .pm-bubble-msgs .msg{font-size:13px;padding:10px 12px;line-height:1.5}
-.pm-bubble-input{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);flex-shrink:0}
+.pm-bubble-input{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);flex-shrink:0;align-items:center}
 .pm-bubble-input input{flex:1;background:var(--bg-desk);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-size:14px}
 .pm-bubble-input button{background:var(--purple);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:700;font-size:13px}
 .desk-slot.orchestrator.chatting .desk-card{outline:2px solid var(--purple);outline-offset:3px;box-shadow:0 0 28px rgba(167,139,250,.25)}
@@ -398,7 +398,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
     </div>
     <div class="proj-stats" id="projStats"></div>
     <div class="proj-actions">
-      <button class="btn-hire-big" onclick="openHireModal()">➕ Zatrudnij programistę</button>
+      <button class="btn-hire-big" onclick="openHireModal()">➕ Zatrudnij pracownika</button>
       <button class="btn-view active" id="btnViewOffice" onclick="setMainView('office')">🏢 Widok biura</button>
       <button class="btn-view" id="btnViewKanban" onclick="setMainView('kanban')">📊 Kanban board</button>
       <button class="btn-view" id="btnViewVault" onclick="setMainView('vault')">📚 Kontekst projektu</button>
@@ -410,7 +410,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       </div>
     </div>
     <div class="proj-rooms">
-      <h4>Pokoje — klik wiersz lub ⚙️</h4>
+      <h4 style="display:flex;align-items:center;justify-content:space-between">Pokoje <span style="font-size:16px;cursor:pointer;opacity:.7" title="Ustawienia pokoi" onclick="showSettings(document.getElementById('navOffice'))">⚙️</span></h4>
       <div id="panelRoomList"></div>
       <button class="btn-add-room" onclick="addRoom()">+ Nowy pokój</button>
     </div>
@@ -464,7 +464,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
           <button onclick="pmQuick('kanban')">📊 Kanban</button>
         </div>
         <div class="pm-bubble-input">
-          <input id="pmBubbleInput" placeholder="Napisz do PM…" onkeydown="if(event.key==='Enter')sendPmBubble()">
+          <input id="pmBubbleInput" placeholder="Napisz do pracownika…" onkeydown="if(event.key==='Enter')sendPmBubble()">
           <button onclick="sendPmBubble()">→</button>
         </div>
       </div>
@@ -525,7 +525,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
   <aside class="chat-panel">
     <div class="chat-head">
       <div style="font-weight:700;color:var(--text-bright);font-size:13px">💬 Chat z pracownikiem</div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Wybierz pracownika z listy i pisz jak do PM</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Wybierz pracownika i pisz do niego bezpośrednio</div>
       <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
         <select id="chatWorkerSelect" style="flex:1;background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text-bright);font-size:11px" onchange="onChatWorkerSelect(this.value)">
           <option value="">🧠 Wybierz pracownika…</option>
@@ -540,11 +540,11 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       </div>
     </div>
     <div class="chat-msgs" id="chatMsgs">
-      <div class="msg bot">Cześć! Wybierz pracownika z listy, żeby rozpocząć czat. Albo kliknij pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.
+      <div class="msg bot">Cześć! Wybierz pracownika z listy, aby rozpocząć czat. Możesz też kliknąć pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.
         <div class="time">teraz</div></div>
     </div>
     <div class="chat-input-wrap">
-      <input id="chatInput" placeholder="Napisz do pracownika…" onkeydown="if(event.key==='Enter')sendChat()">
+      <input id="chatInput" placeholder="Napisz wiadomość…" onkeydown="if(event.key==='Enter')sendChat()">
       <button onclick="sendChat()">→</button>
     </div>
   </aside>
@@ -554,7 +554,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
 <div class="overlay" id="hireOverlay" onclick="if(event.target===this)closeHire()">
   <div class="modal">
     <div class="modal-head">
-      <div><h2>+ Wolne biurko</h2><p>Zatrudnij programistę — bez limitu miejsc w pokoju</p></div>
+      <div><h2>+ Wolne biurko</h2><p>Zatrudnij pracownika — bez limitu miejsc w pokoju</p></div>
       <button class="modal-close" onclick="closeHire()">×</button>
     </div>
     <div class="modal-body">
@@ -589,7 +589,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
           <label for="hireIsPm" style="cursor:pointer;font-weight:700;color:var(--purple)">🧠 PM — ustaw jako Project Managera</label>
         </div>
         <div class="form-field full"><label>Instrukcje</label>
-          <textarea id="hirePrompt">Programista w software house. Czysty kod, testy, raportowanie postępu.</textarea></div>
+          <textarea id="hirePrompt">Pracownik w software house. Czysty kod, testy, raportowanie postępu.</textarea></div>
       </div>
     </div>
     <div class="modal-foot">
@@ -696,6 +696,15 @@ function syncFromStore() {
   if (data && data.projects) {
     window.__projectsCatalog = data.projects;
   }
+  // Assign unassigned workers to first available room
+  const firstRoom = rooms[0];
+  if (firstRoom) {
+    agents.forEach(a => {
+      if (!a.room || !rooms.find(r => r.id === a.room)) {
+        a.room = firstRoom.id;
+      }
+    });
+  }
   applyTransform();
   focusRoom('command');
   initProjectSelect();
@@ -737,6 +746,15 @@ function loadProject(id, skipSave) {
   manualRoomLayout = false;
   roomEditEnabled = false;
   document.getElementById('layoutToggle').textContent = '✥ Edycja pokoi: OFF';
+  // Assign unassigned workers to first available room
+  const firstRoom = rooms[0];
+  if (firstRoom) {
+    agents.forEach(a => {
+      if (!a.room || !rooms.find(r => r.id === a.room)) {
+        a.room = firstRoom.id;
+      }
+    });
+  }
   // Derive display name: if no separate friendly name, use the project id
   // and hide the duplicate span to avoid showing it twice.
   const projectNameEl = document.getElementById('projectName');
@@ -986,11 +1004,12 @@ function updateRepoStatus() {
   const branchLabel = repo.branch ? '<b style="color:var(--accent)">' + repo.branch + '</b>' : '—';
   const dirtyBadge = repo.dirty ? ' <span style="color:var(--orange);font-weight:700">● dirty</span>' : ' <span style="color:var(--green)">● clean</span>';
   const commitLabel = repo.lastCommit ? repo.lastCommit.slice(0, 50) : '—';
+  const commitFull = repo.lastCommit || '—';
 
   repoArea.innerHTML = '<div style="margin-bottom:4px">📂 <b>Git</b> ' + branchLabel + dirtyBadge + '</div>' +
     '<div style="font-size:10px;color:var(--text-dim);word-break:break-all">' +
     (repo.remote ? '🔗 ' + repo.remote + '<br>' : '') +
-    '📝 ' + commitLabel + '</div>';
+    '<span title="' + commitFull.replace(/"/g, '&quot;') + '">' + '📝 ' + commitLabel + '</span></div>';
 }
 
 async function repoPull() {
@@ -1205,7 +1224,7 @@ function renderRooms() {
     const editCls = roomEditEnabled ? ' editable' : '';
     const activeCls = detailMode === 'room' && detailId === r.id ? ' active' : '';
     const hireBtn = !r.isCommand
-      ? `<button class="room-hire-fab" onclick="event.stopPropagation();openHireModal('${r.id}')">+ Programista</button>` : '';
+      ? `<button class="room-hire-fab" onclick="event.stopPropagation();openHireModal('${r.id}')">+ Pracownik</button>` : '';
     const layoutBtns = roomEditEnabled ? `
       <div class="room-layout-btns" onclick="event.stopPropagation()">
         <button class="${(r.layout||'auto')==='row'?'active':''}" title="Obok siebie" onclick="setRoomLayout('${r.id}','row')">▤</button>
@@ -1657,7 +1676,7 @@ function assignAndStartTask(taskId) {
   // Find first available worker
   const availableWorker = agents.find(a => !a.isOrchestrator && a.status !== 'error');
   if (!availableWorker) {
-    toast('❌ Brak dostępnych programistów');
+    toast('❌ Brak dostępnych pracowników');
     return;
   }
   
@@ -1719,13 +1738,13 @@ function renderRoomPanel(roomId) {
     <div style="margin-top:12px;padding:10px;background:var(--bg-floor);border-radius:8px;border:1px solid var(--border);font-size:10px;color:var(--text-dim)">
       Rozmiar: <b style="color:var(--text-bright)">${size.w}×${size.h}px</b> · Taski: <b style="color:var(--text-bright)">${routed.length}</b>
     </div>
-    ${devs.length ? `<div class="detail-section"><h4>Programiści (${devs.length})</h4>
+    ${devs.length ? `<div class="detail-section"><h4>Pracownicy (${devs.length})</h4>
       ${devs.map(a=>`<div class="dev-mini-row${detailMode==='agent'&&detailId===a.id?' active':''}" onclick="openAgentPanel('${a.id}')">
         <img src="${staticPath(a.sprite)}" alt="">
         <div class="info"><div class="name">${a.name}</div><div class="role">${a.role}</div></div>
         <span class="status-pill">${STATUS[visualState(a)]?.label||''}</span>
       </div>`).join('')}
-    </div>` : `<p style="margin-top:12px;font-size:11px;color:var(--text-dim)">Brak programistów — <button class="btn" style="padding:4px 8px;font-size:10px;margin-left:4px" onclick="openHireModal('${r.id}')">+ Zatrudnij</button></p>`}
+    </div>` : `<p style="margin-top:12px;font-size:11px;color:var(--text-dim)">Brak pracowników — <button class="btn" style="padding:4px 8px;font-size:10px;margin-left:4px" onclick="openHireModal('${r.id}')">+ Zatrudnij</button></p>`}
     <button class="btn" style="width:100%;margin-top:12px" onclick="focusRoom('${r.id}')">🎯 Pokaż na mapie</button>`;
 
   document.getElementById('detailFoot').innerHTML = `
@@ -2098,6 +2117,7 @@ function openPmBubble(id) {
   document.getElementById('pmBubbleAvatar').src = staticPath(a.sprite);
   renderPmBubbleMsgs();
   document.getElementById('pmBubble').classList.add('show');
+  document.getElementById('pmBubbleInput').placeholder = `Napisz do ${a.name}…`;
   // Find the desk slot for this specific worker and mark it
   document.querySelectorAll('.desk-slot').forEach(el => el.classList.remove('chatting'));
   const desk = document.querySelector(`.desk-slot[style*="${a._x}px"], .desk-slot[style*="top:${a._y}px"]`);
@@ -2158,7 +2178,7 @@ function pmQuick(action) {
   const blockers = devs.filter(a => visualState(a) === 'error');
   switch (action) {
     case 'status':
-      append(`📊 <b>${project.name}</b> — ${devs.length} devów, ${active.length} aktywnych tasków<br>${devs.map(a=>`• ${a.name}: <b>${STATUS[visualState(a)]?.label}</b>${a.task?' — '+a.task:''}`).join('<br>')}`);
+      append(`📊 <b>${project.name}</b> — ${devs.length} pracowników, ${active.length} aktywnych tasków<br>${devs.map(a=>`• ${a.name}: <b>${STATUS[visualState(a)]?.label}</b>${a.task?' — '+a.task:''}`).join('<br>')}`);
       break;
     case 'tasks':
       append(`📋 <b>Zadania (${active.length})</b><br>${active.slice(0,8).map(t=>`• ${t.pri} ${t.title} <span style="opacity:.7">(${t.phase})</span>`).join('<br>')}${active.length>8?'<br>…':''}`);
