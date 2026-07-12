@@ -228,6 +228,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
   .msg.user{display:flex;align-items:flex-start;gap:8px;flex-direction:row-reverse}
   .msg.user .avatar{order:2}
   .msg.bot{display:flex;align-items:flex-start;gap:8px}
+  .msg-text{flex:1;min-width:0;overflow-wrap:anywhere}
 .msg .act{display:inline-block;margin:5px 5px 0 0;padding:3px 8px;border-radius:4px;font-size:10px;border:1px solid var(--accent);color:var(--accent);font-weight:600}
 .chat-input-wrap{padding:10px;border-top:1px solid var(--border);display:flex;gap:6px;align-items:center}
 .chat-input-wrap input{flex:1;background:var(--bg-desk);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;color:var(--text);font-size:12px}
@@ -540,7 +541,7 @@ button,input,select,textarea{font-family:inherit;cursor:pointer}
       </div>
     </div>
     <div class="chat-msgs" id="chatMsgs">
-      <div class="msg bot">Cześć! Wybierz pracownika z listy, aby rozpocząć czat. Możesz też kliknąć pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.
+      <div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt=""><span class="msg-text">Cześć! Wybierz pracownika z listy, aby rozpocząć czat. Możesz też kliknąć pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.</span>
         <div class="time">teraz</div></div>
     </div>
     <div class="chat-input-wrap">
@@ -1920,13 +1921,13 @@ function onChatWorkerSelect(workerId) {
   const a = agents.find(x => x.id === workerId);
   if (!a) return;
   const chatMsgs = document.getElementById('chatMsgs');
-  chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt="">Rozpoczęto czat z <b>${a.name}</b> (${a.role}).<div class="time">teraz</div></div>`;
+  chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt=""><span class="msg-text">Rozpoczęto czat z <b>${a.name}</b> (${a.role}).</span><div class="time">teraz</div></div>`;
   chatMsgs.scrollTop = chatMsgs.scrollHeight;
 }
 function addBotMsg(html, worker) {
   const el = document.getElementById('chatMsgs');
   const sprite = worker?.sprite || 'blue';
-  el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${html}<div class="time">teraz</div></div>`;
+  el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt=""><span class="msg-text">${html}</span><div class="time">teraz</div></div>`;
   el.scrollTop = el.scrollHeight;
 }
 function orchSay(key) {
@@ -1969,7 +1970,7 @@ function sendChat() {
           chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         } else {
           const sprite = worker?.sprite || 'blue';
-          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt=""><span class="msg-text">${msg.message}</span><div class="time">${formatTime(msg.created_at)}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2162,14 +2163,14 @@ function renderPmBubbleMsgs() {
   const el = document.getElementById('pmBubbleMsgs');
   const roleLabel = a.isOrchestrator ? 'Project Managerem' : 'asystentem';
   const welcome = `Cześć! Jestem <b>${a.name}</b>, ${roleLabel} projektu <b>${project.name}</b>. Mogę zaplanować sprint, sprawdzić status zespołu albo zatrudnić kogoś.`;
-  el.innerHTML = `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt="">${welcome}<div class="time">teraz</div></div>`;
+  el.innerHTML = `<div class="msg bot"><img class="avatar" src="${staticPath(a.sprite)}" alt=""><span class="msg-text">${welcome}</span><div class="time">teraz</div></div>`;
 }
 function pmQuick(action) {
   const a = agents.find(x => x.id === selectedAgent);
   const el = document.getElementById('pmBubbleMsgs');
   const sprite = a?.sprite || 'blue';
   const append = html => {
-    el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${html}<div class="time">teraz</div></div>`;
+    el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt=""><span class="msg-text">${html}</span><div class="time">teraz</div></div>`;
     el.scrollTop = el.scrollHeight;
     positionPmBubble();
   };
@@ -2230,7 +2231,7 @@ function sendPmBubble() {
       // Get the last PM response
       const lastPmMsg = [...messages].reverse().find(m => m.sender === 'pm');
       if (lastPmMsg) {
-        el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${lastPmMsg.message}<div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
+        el.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt=""><span class="msg-text">${lastPmMsg.message}</span><div class="time">${new Date(lastPmMsg.created_at).toLocaleTimeString('pl-PL')}</div></div>`;
         el.scrollTop = el.scrollHeight;
         positionPmBubble();
         // Also update sidebar chat
@@ -2241,7 +2242,7 @@ function sendPmBubble() {
           if (msg.sender === 'user') {
             chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
           } else {
-            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(msgSprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
+            chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(msgSprite)}" alt=""><span class="msg-text">${msg.message}</span><div class="time">${formatTime(msg.created_at)}</div></div>`;
           }
         });
         chatMsgs.scrollTop = chatMsgs.scrollHeight;
@@ -2346,7 +2347,7 @@ async function loadChatHistory() {
         if (msg.sender === 'user') {
           chatMsgs.innerHTML += `<div class="msg user">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
         } else {
-          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt="">${msg.message}<div class="time">${formatTime(msg.created_at)}</div></div>`;
+          chatMsgs.innerHTML += `<div class="msg bot"><img class="avatar" src="${staticPath(sprite)}" alt=""><span class="msg-text">${msg.message}</span><div class="time">${formatTime(msg.created_at)}</div></div>`;
         }
       });
       chatMsgs.scrollTop = chatMsgs.scrollHeight;
