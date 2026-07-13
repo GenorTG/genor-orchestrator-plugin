@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Genor Orchestrator — Software House</title>
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/kanban.css">
+<link rel="stylesheet" href="css/chat.css">
+<link rel="stylesheet" href="css/vault.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">🏢 Genor <em>Orchestrator</em></div>
+  <div class="project-pill">
+    <span>📁 Projekt:</span>
+    <span class="proj-name" id="projectName">GenorBoard v2</span>
+    <span class="proj-id" id="projectId">genor-orchestrator-plugin</span>
+  </div>
+  <span class="badge">LIVE</span>
+  <div class="sep"></div>
+  <div class="hdr-right">
+    <div class="font-ctrl" title="Rozmiar czcionki">
+      <button onclick="changeFontScale(-1)" aria-label="Mniejsza czcionka">A−</button>
+      <span id="fontScaleLabel">100%</span>
+      <button onclick="changeFontScale(1)" aria-label="Większa czcionka">A+</button>
+    </div>
+    <div class="pulse"></div><span style="font-size:11px;color:var(--green)">Online</span>
+    <button class="btn" style="font-size:11px" onclick="location.href='/orchestrator/projects.html'">📁 Projects</button>
+    <button class="btn" style="font-size:11px" onclick="location.href='/orchestrator/'">🏠 Dashboard</button>
+    <button class="btn primary" onclick="orchPlan()">📋 Plan</button>
+  </div>
+</header>
+
+<div class="status-bar">
+  <span class="status-pill">ACTIVE</span>
+  <span><strong>Software House</strong> — aktywny dashboard</span>
+</div>
+
+<div class="shell">
+  <nav class="sidebar">
+    <button class="nav-btn active" id="navOffice" onclick="setMainView('office',this)">🏢</button>
+    <button class="nav-btn" id="navKanban" onclick="setMainView('kanban',this)">📊</button>
+    <button class="nav-btn" id="navVault" onclick="setMainView('vault',this)">📚</button>
+    <button class="nav-btn" onclick="showSettings(this)">⚙️</button>
+    <div class="sidebar-spacer"></div>
+    <button class="nav-btn" onclick="orchSay('help')">❓</button>
+  </nav>
+
+  <aside class="proj-panel" id="projPanel">
+    <div class="proj-panel-head">
+      <label>Projekt</label>
+      <select class="proj-select" id="projectSelect" onchange="switchProject(this.value)"></select>
+      <div class="proj-id-line" id="panelProjectId"></div>
+    </div>
+    <div class="proj-stats" id="projStats"></div>
+    <div class="proj-actions">
+      <button class="btn-hire-big" onclick="openHireModal()">➕ Zatrudnij pracownika</button>
+      <button class="btn-view active" id="btnViewOffice" onclick="setMainView('office')">🏢 Widok biura</button>
+      <button class="btn-view" id="btnViewKanban" onclick="setMainView('kanban')">📊 Kanban board</button>
+      <button class="btn-view" id="btnViewVault" onclick="setMainView('vault')">📚 Kontekst projektu</button>
+      <div id="repoStatusArea" style="display:none;padding:8px;background:var(--bg-floor);border-radius:8px;border:1px solid var(--border);font-size:11px"></div>
+      <div id="repoActions" style="display:none;gap:6px;margin-top:4px">
+        <button class="btn" style="flex:1" onclick="repoPull()" title="Pobierz zmiany z repozytorium">⬇ Pull</button>
+        <button class="btn" style="flex:1" onclick="repoPush()" title="Wyślij zmiany do repozytorium">⬆ Push</button>
+        <button class="btn" style="flex:0 0 auto" onclick="refreshRepoStatus()" title="Odśwież status">🔄</button>
+      </div>
+    </div>
+    <div class="proj-rooms">
+      <h4 style="display:flex;align-items:center;justify-content:space-between">Pokoje <span style="font-size:16px;cursor:pointer;opacity:.7" title="Ustawienia pokoi" onclick="showSettings(document.getElementById('navOffice'))">⚙️</span></h4>
+      <div id="panelRoomList"></div>
+      <button class="btn-add-room" onclick="addRoom()">+ Nowy pokój</button>
+    </div>
+  </aside>
+
+  <aside class="detail-panel" id="detailPanel">
+    <div class="detail-head" id="detailHead"></div>
+    <div class="detail-body" id="detailBody"></div>
+    <div class="detail-foot" id="detailFoot"></div>
+  </aside>
+
+  <div class="office-wrap" id="officeView">
+    <div class="office-toolbar">
+      <button class="zoom-btn" onclick="zoomOffice(-.1)">−</button>
+      <span id="zoomLabel">100%</span>
+      <button class="zoom-btn" onclick="zoomOffice(.1)">+</button>
+      <button class="btn" style="padding:4px 8px;font-size:10px" onclick="resetView()">Reset</button>
+      <span style="font-size:9px;color:var(--text-dim);opacity:.7">Scroll = zoom</span>
+      <button class="btn" id="layoutToggle" style="padding:4px 10px;font-size:10px;border-color:var(--purple);color:var(--purple)" onclick="toggleRoomEdit()">✥ Edycja pokoi: OFF</button>
+      <div class="room-tabs" id="roomTabs"></div>
+      <div class="state-legend">
+        <span><i style="background:var(--orange)"></i>Working</span>
+        <span><i style="background:var(--text-dim)"></i>Sleep</span>
+        <span><i style="background:var(--purple)"></i>Thinking</span>
+        <span><i style="background:var(--red)"></i>Error</span>
+      </div>
+    </div>
+    <div class="office" id="office">
+      <div class="office-canvas" id="officeCanvas">
+        <div class="office-grid" id="officeGrid"></div>
+        <div id="rooms"></div>
+        <div id="desks"></div>
+      </div>
+      <div class="pm-bubble" id="pmBubble">
+        <div class="pm-bubble-head">
+          <img id="pmBubbleAvatar" src="assets/pixel-agents/blue/static.png" alt="">
+          <div>
+            <h3 id="pmBubbleName">Project Manager</h3>
+            <p>🧠 Orchestrator · online</p>
+          </div>
+          <button class="pm-bubble-close" onclick="closePmBubble()" title="Zamknij">×</button>
+        </div>
+        <div class="pm-bubble-msgs" id="pmBubbleMsgs"></div>
+        <div class="pm-bubble-actions" id="pmBubbleActions"></div>
+        </div>
+        <div class="pm-bubble-input">
+          <input id="pmBubbleInput" placeholder="Napisz do pracownika…" onkeydown="if(event.key==='Enter')sendPmBubble()">
+          <button onclick="sendPmBubble()">→</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kanban-full" id="kanbanFullView">
+    <div class="kanban-full-head">
+      <h2>📊 Kanban — <span id="kanbanProjectName"></span></h2>
+      <span style="font-size:11px;color:var(--text-dim)" id="kanbanTaskCount"></span>
+      <button class="btn" style="margin-left:auto" onclick="setMainView('office')">← Wróć do biura</button>
+    </div>
+    <div class="kanban-full-board" id="kanbanFullBoard"></div>
+  </div>
+
+  <div class="vault-view" id="vaultView">
+    <aside class="vault-sidebar">
+      <div class="vault-sidebar-head">
+        <h3>📚 Kontekst projektu</h3>
+        <p id="vaultProjectLabel">GenorBoard v2</p>
+      </div>
+      <div class="vault-tree" id="vaultTree"></div>
+    </aside>
+    <div class="vault-main">
+      <div class="vault-main-head">
+        <div>
+          <h2 id="vaultDocTitle">STATE.md</h2>
+          <div class="path" id="vaultDocPath">/STATE.md</div>
+        </div>
+        <div class="vault-actions">
+          <button class="btn" style="font-size:11px" onclick="saveLayoutToAPI()">🔄 Sync</button>
+          <button class="btn" style="font-size:11px" onclick="setMainView('office')">← Biuro</button>
+        </div>
+      </div>
+      <div class="vault-content" id="vaultContent"></div>
+    </div>
+    <aside class="vault-meta" id="vaultMeta"></aside>
+  </div>
+
+  <div class="settings-view" id="settingsView">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <h2 style="color:var(--text-bright)">⚙️ Ustawienia</h2>
+      <button class="btn" style="margin-left:auto" onclick="setMainView('office',document.getElementById('navOffice'))">← Wróć do biura</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:20px">Konfiguracja projektu, domyślne modele, pokoje.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:640px">
+      <div style="padding:14px;background:var(--bg-panel);border:1px solid var(--border);border-radius:10px">
+        <strong style="font-size:11px;color:var(--text-bright)">Edycja pokoi</strong>
+        <p style="font-size:11px;color:var(--text-dim);margin-top:6px">Włącz <b>Edycja pokoi</b> na mapie — przeciągaj pokoje, rozciągaj rogi/boki, ustaw układ agentów (rząd / kolumna / auto).</p>
+      </div>
+      <div style="padding:14px;background:var(--bg-panel);border:1px solid var(--border);border-radius:10px">
+        <strong style="font-size:11px;color:var(--text-bright)">Kanban</strong>
+        <p style="font-size:11px;color:var(--text-dim);margin-top:6px">Pełny board w lewym panelu → <button class="btn" style="padding:3px 8px;font-size:10px;margin-top:4px" onclick="setMainView('kanban',document.getElementById('navKanban'))">📊 Kanban board</button></p>
+      </div>
+    </div>
+  </div>
+
+  <aside class="chat-panel">
+    <div class="chat-head">
+      <div style="font-weight:700;color:var(--text-bright);font-size:13px">💬 Chat z pracownikiem</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Wybierz pracownika i pisz do niego bezpośrednio</div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+        <select id="chatWorkerSelect" style="flex:1;background:var(--bg-floor);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text-bright);font-size:11px" onchange="onChatWorkerSelect(this.value)">
+          <option value="">🧠 Wybierz pracownika…</option>
+        </select>
+      </div>
+      <div class="quick-chips">
+        <button class="chip" onclick="orchSay('status')">Status</button>
+        <button class="chip" onclick="orchSay('plan')">Plan</button>
+        <button class="chip" onclick="openHireModal()">Zatrudnij</button>
+        <button class="chip" onclick="setMainView('kanban',document.getElementById('navKanban'))">Kanban</button>
+        <button class="chip" onclick="setMainView('vault',document.getElementById('navVault'))">Vault</button>
+      </div>
+    </div>
+    <div class="chat-msgs" id="chatMsgs">
+      <div class="msg bot"><img class="avatar" src="assets/pixel-agents/blue/static.png" alt=""><span class="msg-text">Cześć! Wybierz pracownika z listy, aby rozpocząć czat. Możesz też kliknąć pracownika na mapie — otworzy się dymek czatu. Vault z dokumentacją → 📚 w sidebarze.</span>
+        <div class="time">teraz</div></div>
+    </div>
+    <div class="chat-input-wrap">
+      <input id="chatInput" placeholder="Napisz wiadomość…" onkeydown="if(event.key==='Enter')sendChat()">
+      <button onclick="sendChat()">→</button>
+    </div>
+  </aside>
+</div>
+
+<!-- HIRE MODAL -->
+<div class="overlay" id="hireOverlay" onclick="if(event.target===this)closeHire()">
+  <div class="modal">
+    <div class="modal-head">
+      <div><h2>+ Wolne biurko</h2><p>Zatrudnij pracownika — bez limitu miejsc w pokoju</p></div>
+      <button class="modal-close" onclick="closeHire()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-field"><label>Imię</label><input id="hireName" value="Nowy Agent"></div>
+        <div class="form-field"><label>Rola</label>
+          <select id="hireRole">
+            <option>Backend Developer</option><option>Frontend Developer</option>
+            <option>Full-Stack Dev</option><option>UI/UX Designer</option>
+            <option>QA / Reviewer</option><option>DevOps</option><option>Business Analyst</option>
+          </select></div>
+        <div class="form-field"><label>Model</label>
+          <select id="hireModel"></select></div>
+        <div class="form-field"><label>Pokój (organizacja)</label><select id="hireRoom"></select></div>
+        <div class="form-field full"><label>Sprite</label>
+          <div class="sprite-picker">
+            <div class="sprite-opt picked" data-sprite="blue" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/blue/static.png" alt=""><span style="font-size:10px;color:var(--text-dim)">Niebieski</span>
+            </div>
+            <div class="sprite-opt" data-sprite="orange" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/orange/static.png" alt=""><span style="font-size:10px;color:var(--text-dim)">Pomarańczowy</span>
+            </div>
+            <div class="sprite-opt" data-sprite="violet" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/violet/static.png" alt=""><span style="font-size:10px;color:var(--text-dim)">Fioletowy</span>
+            </div>
+            <div class="sprite-opt" data-sprite="hacker" onclick="pickSprite(this)">
+              <img src="assets/pixel-agents/hacker/static.png" alt=""><span style="font-size:10px;color:var(--text-dim)">Hacker</span>
+            </div>
+          </div></div>
+        <div class="form-field" style="display:flex;flex-direction:row;align-items:center;gap:8px;grid-column:1/-1;padding:8px 0">
+          <input type="checkbox" id="hireIsPm" style="width:18px;height:18px;cursor:pointer">
+          <label for="hireIsPm" style="cursor:pointer;font-weight:700;color:var(--purple)">🧠 PM — ustaw jako Project Managera</label>
+        </div>
+        <div class="form-field full"><label>Instrukcje</label>
+          <textarea id="hirePrompt">Pracownik w software house. Czysty kod, testy, raportowanie postępu.</textarea></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeHire()">Anuluj</button>
+      <button class="btn primary" onclick="confirmHire()">Zatrudnij</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/orchestrator/store.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

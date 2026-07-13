@@ -1052,7 +1052,7 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
       if (method === "GET") {
         // Software House Dashboard
         if (pathname === "/software-house" || pathname === "/software-house/") {
-          sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "software-house.html"));
+          sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "index.html"));
           return true;
         }
         // store.js — centralized frontend data store
