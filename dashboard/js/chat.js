@@ -1,7 +1,12 @@
-// chat.js — addBotMsg, orchSay, sendChat, openWorkerMessageModal, closeWorkerMessageModal, sendWorkerMessage, checkWorkerHealth, orchPlan, loadChatHistory
+// chat.js — toggleChatPanel, addBotMsg, orchSay, sendChat, openWorkerMessageModal, closeWorkerMessageModal, sendWorkerMessage, checkWorkerHealth, orchPlan, loadChatHistory
 
 import { state, STATUS } from './state.js';
 import { staticPath, formatTime, visualState, toast } from './utils.js';
+
+export function toggleChatPanel() {
+  const panel = document.getElementById('chatPanel');
+  panel.classList.toggle('open');
+}
 
 function getSelectedChatWorker() {
   const sel = document.getElementById('chatWorkerSelect').value;

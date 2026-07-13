@@ -11,3 +11,7 @@ reports/
 
 # Build artifacts
 dist/
+
+# UI redesign backups
+dashboard/*.bak.*
+dashboard/**/*.bak.*

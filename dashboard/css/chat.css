@@ -1,7 +1,8 @@
 /* === chat.css — PM bubble, sidebar chat === */
 
-/* CHAT PANEL */
-.chat-panel{width:var(--chat-w);background:var(--bg-panel);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+/* CHAT PANEL — collapsed by default, slides in */
+.chat-panel{width:0;min-width:0;overflow:hidden;background:var(--bg-panel);border-left:1px solid transparent;display:flex;flex-direction:column;flex-shrink:0;transition:width .22s ease,border-color .22s}
+.chat-panel.open{width:var(--chat-w);border-left-color:var(--border)}
 .chat-head{padding:14px 16px;border-bottom:1px solid var(--border)}
 .quick-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .chip{font-size:12px;padding:5px 10px;border-radius:14px;border:1px solid var(--border);background:var(--bg-desk);color:var(--text-dim)}
