@@ -2,7 +2,7 @@
   "id": "genor-orchestrator-software-house",
   "name": "Genor's Orchestrator",
   "description": "Model routing, session logging, project management, dashboard, hooks, and context injection.",
-  "version": "1.1.0-alpha",
+  "version": "1.1.1",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -25,22 +25,6 @@
       "maintenanceIntervalMs": {
         "type": "number",
         "description": "Background maintenance interval in ms. (default: 1800000 = 30min)"
-      },
-      "llmEndpoint": {
-        "type": "string",
-        "description": "OpenAI-compatible chat completions URL. Auto-defaults to the local OpenClaw gateway (http://127.0.0.1:18789/v1/chat/completions). Point at any tool-capable endpoint (OpenClaw, LM Studio, vLLM, OpenRouter, etc.)."
-      },
-      "llmAuthToken": {
-        "type": "string",
-        "description": "Bearer token for the LLM endpoint. Auto-defaults to the local OpenClaw gateway token. Leave empty for unauthenticated endpoints."
-      },
-      "llmDefaultModel": {
-        "type": "string",
-        "description": "Model field sent in the request body. For OpenClaw, use an agent target like 'openclaw' or 'openclaw/main'. For raw providers, use the model id. (default: 'openclaw')"
-      },
-      "llmMessageChannel": {
-        "type": "string",
-        "description": "x-openclaw-message-channel header. (default: 'orchestrator-software-house')"
       }
     }
   },
