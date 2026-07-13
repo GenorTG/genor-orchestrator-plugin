@@ -2,13 +2,13 @@
 
 .kanban-full{flex:1;display:none;flex-direction:column;min-width:0;background:var(--bg-floor);overflow:hidden}
 .kanban-full.show{display:flex}
-.kanban-full-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--bg-panel)}
-.kanban-full-head h2{font-size:15px;color:var(--text-bright)}
-.kanban-full-board{flex:1;display:flex;gap:12px;padding:14px 18px;overflow-x:auto}
-.kanban-full-board .kanban-col{min-width:220px;max-height:100%;overflow-y:auto}
-.kanban-col{flex:1;min-width:180px;background:var(--bg-desk);border-radius:var(--radius);border:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:6px}
-.kanban-col h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
-.kanban-card{font-size:11px;padding:8px 10px;border-radius:6px;background:var(--bg-floor);border-left:3px solid var(--accent);cursor:pointer;line-height:1.4;transition:150ms}
+.kanban-full-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;background:var(--bg-panel)}
+.kanban-full-head h2{font-size:18px;color:var(--text-bright)}
+.kanban-full-board{flex:1;display:flex;gap:14px;padding:16px 20px;overflow-x:auto}
+.kanban-full-board .kanban-col{min-width:240px;max-height:100%;overflow-y:auto}
+.kanban-col{flex:1;min-width:200px;background:var(--bg-desk);border-radius:12px;border:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:8px}
+.kanban-col h4{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.kanban-card{font-size:13px;padding:10px 12px;border-radius:8px;background:var(--bg-floor);border-left:3px solid var(--accent);cursor:pointer;line-height:1.5;transition:150ms}
 .kanban-card:hover{background:var(--accent);color:#000;transform:translateX(2px)}
-.kanban-card .pri{font-weight:700;font-size:9px;opacity:.8}
-.kanban-card .who{font-size:9px;opacity:.7;margin-top:3px}
+.kanban-card .pri{font-weight:700;font-size:11px;opacity:.8}
+.kanban-card .who{font-size:11px;opacity:.7;margin-top:4px}

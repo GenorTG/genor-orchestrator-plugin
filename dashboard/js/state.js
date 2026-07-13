@@ -62,8 +62,8 @@ export const SPRITES = {
   hacker: { label:'Hacker', desc:'Linux tower, słuchawki, terminal' },
 };
 
-export const DESK_W = 264;
-export const DESK_H = 300;
+export const DESK_W = 280;
+export const DESK_H = 320;
 export const COL_GAP = 32;
 export const ROW_GAP = 36;
 export const COL_SPACING = DESK_W + COL_GAP;

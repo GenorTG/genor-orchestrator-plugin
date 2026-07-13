@@ -1060,6 +1060,14 @@ export function createDashboardHandler(api: OpenClawPluginApi) {
           sendFile(res, path.join(PLUGIN_ROOT, "dashboard", "store.js"));
           return true;
         }
+        // Modular CSS/JS files for dashboard
+        if (pathname.startsWith("/css/") || pathname.startsWith("/js/")) {
+          const modFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
+          if (fs.existsSync(modFile) && fs.statSync(modFile).isFile()) {
+            sendFile(res, modFile);
+            return true;
+          }
+        }
         // Static assets for dashboard pages (sprites, images)
         if (pathname.startsWith("/assets/") || pathname.startsWith("/data/")) {
           const assetFile = path.join(PLUGIN_ROOT, "dashboard", pathname.slice(1));
