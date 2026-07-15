@@ -8,6 +8,8 @@ export function updateRepoStatus() {
   const repoActions = document.getElementById('repoActions');
   const repo = state.project?.repo;
 
+  if (!repoArea || !repoActions) return; // elements removed in UI redesign
+
   if (!repo || !repo.hasRepo) {
     repoArea.style.display = 'none';
     repoActions.style.display = 'none';

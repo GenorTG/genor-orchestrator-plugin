@@ -81,7 +81,7 @@ window.toast = toast;
 function renderAll() {
   renderRooms();
   renderDesks();
-  renderKanbanFull();
+  if (state.project) renderKanbanFull();
   renderProjPanel();
   updateStats();
   if (state.mainView === 'vault') renderVault();
